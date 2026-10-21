@@ -1,0 +1,1211 @@
+{
+  "round": "R1",
+  "task": "HISO005-P2-NEXT-RECON-20261020B",
+  "spec": "spec0245-r1.md.txt",
+  "specSha256": "c4e6aa5cdf1082ddd3e3c0426b2896273046c8838eda64e87dcf6fa659b146ba",
+  "reviewer": "crítico novo não-fork (Claude Code), só leitura",
+  "observedAt": "2026-10-20T06:35:54.088704+00:00",
+  "verdict": "REVISE",
+  "summary": "O delta A é mínimo e, sob a regra global, não cria prova nem valor conhecido indevido, porque todo .tsx/.jsx carrega UNKNOWN_FORMAT incondicional e raízes sem eles não mudam. Os números da §1 conferem. Mas o argumento de soundness do §2 se apoia em duas premissas falsas no engine: objeto importado não é U, e o K0 não cobre export CJS reatribuído em corpo de função, com PROVEN K5/K7 indevido na v5 (F3). A rejeição de C também está mal fundamentada, e a conservação da §3.3 não é decidível como escrita.",
+  "reviewedEngines": {
+    "v5": "c724567f82eb4beeab37904ae194366e18c64fb88c73db7fb575f17b31e0130c",
+    "A (v5+tsx_parse_patch)": "71c72a5bc18aa5ee01bf4d8c820314bc33fb7d237813d91706ae029a9f10c755",
+    "C (A+jsx_eval_patch)": "b59200bf3ba312fdf3485fa78634dcac91ff81c430388fc88f3e2574636c92ac",
+    "B (v5+parse_stop_patch)": "5393783e6a950cfd3bf9f7856d6c8009161a7a1cdc286485fec8b3d813f7f205"
+  },
+  "required": [
+    {
+      "id": "R1-01",
+      "severity": "P1",
+      "section": "§2 (Por que recusar sem avaliar é sound) e §8",
+      "finding": "O argumento de soundness se apoia em duas premissas falsas no engine v5. (a) \"Objetos importados já são U\" é falso. block() liga o import a get(namespace, nome), e o importador recebe o objeto. checkExport só marca UNKNOWN_EXPORTED_MUTABLE_STATE no módulo exportador e não troca o valor por U (engine v5, linhas 1320–1335 e 1461–1473). (b) \"Toda função exportada é avaliada pelo K0\" é falso para CJS. module.exports = ..., executado dentro de corpo de função, reatribui module.cjs na hora da chamada (linhas 1527–1539). checkExport só olha o valor do fim do load (linhas 1723–1727). Assim, uma função que vira export depois de uma chamada pública nunca passa pelo K0. A lacuna já existe na v5 e não vem do delta, mas é exatamente a garantia que o §2 invoca. O engine v5 emite PROVEN, com K5 e K7, para uma origem import(x) que nunca foi avaliada (F3-K7-origin).",
+      "evidence": "F10: entry.ts lê o.p de objeto importado → VIOLATION em v5/A/C. F10b: o mesmo dentro do JSX → A UNKNOWN, C VIOLATION. F3: m.js = \"module.exports = function f() { module.exports = function g(x) { return import(x) } }\" → v5 e A dão PROVEN, 2 provas K5. Com a origem import(x) → K7 PROVEN. F4: um .tsx chama g('./products/p.js') no JSX; m.js fica sem tupla na A (e na v5).",
+      "requiredChange": "Trocar o argumento do §2 pelo que vale no código. (1) Todo .tsx/.jsx adquirido recebe UNKNOWN_FORMAT incondicional (linhas 1823–1836), e pela regra global nenhuma raiz que contenha um deles prova nada. (2) Raízes sem .tsx/.jsx parseiam igual à v5, porque a tabela só muda .tsx e .jsx. (3) Todo arquivo adquirido é carregado no corpo (linhas 1839–1845), então não avaliar JSX não pula a avaliação de nenhum módulo. (4) O engine não tem semântica de mutação, exceto a reatribuição de module.exports. Remover (a) e (b) como premissas. Registrar a lacuna do K0 de F3 como achado separado, fora do delta 0245, com tarefa e backlog próprios. Declarar no §2 e no §8 que a soundness da v6 vale sob a regra global, e que sob uma regra de prova por escopo (SPEC0246) ela depende de fechar essa lacuna antes."
+    },
+    {
+      "id": "R1-02",
+      "severity": "P2",
+      "section": "§1 (Por que A e não as outras: C)",
+      "finding": "\"C só acrescenta tuplas (+6) e não muda nenhuma decisão\" vale na raiz medida, mas não em geral. C transforma UNKNOWN em VIOLATION em vários casos: quando filho ou atributo JSX chama dependência com especificador de products/ (F1, F2), quando lê objeto importado (F10b) e quando muta export CJS lido por um irmão que não está a jusante (F5, n.js). O texto não diz por que C é rejeitada, nem qual é o custo de A.",
+      "evidence": "F1/F2/F10b: A UNKNOWN sem violação; C VIOLATION (m.js->products/p.js ou entry.tsx->products/p.js), inclusive no census. F5: C VIOLATION n.js->products/p.js; A UNKNOWN. Raiz real: C = A + 6 tuplas em apps/web/src/main.tsx, 0 violações.",
+      "requiredChange": "Qualificar como \"na raiz medida\". Dar o motivo real: C embute uma premissa sobre a transformação do JSX, a de que atributos e filhos são avaliados de forma eager e na ordem do fonte. Isso vale para o runtime clássico e o automático do React, mas não para compiladores que adiam expressões. A premissa contraria o \"sem premissa nova\". Declarar o custo de A: violações que só a avaliação do JSX exporia ficam UNKNOWN, nunca PROVEN sob a regra global. Fixar o comportamento esperado com um fixture em MT02/MT03 (F1 ou F10b: A dá UNKNOWN, sem violação)."
+    },
+    {
+      "id": "R1-03",
+      "severity": "P2",
+      "section": "§2 (1º item: \"O arquivo com JSX carrega a recusa\") e §4 (\"Todo elemento JSX\")",
+      "finding": "A recusa JSX só aparece quando a avaliação chega ao elemento. Na raiz medida, só 1 dos 29 .tsx (apps/web/src/main.tsx) tem UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement. Os outros têm JSX só em componentes recusados (parâmetro desestruturado ou async) ou em corpos não chamados, que nunca são avaliados. O que recusa todo .tsx é UNKNOWN_FORMAT.",
+      "evidence": "tsx-variants.json/real-v5tsxA: tsxByReasonAfter tem 1 JsxElement; recontagem: arquivos com recusa JSX = [apps/web/src/main.tsx]. F8b: .tsx com JSX só em componente desestruturado → só UNKNOWN_FORMAT, UNKNOWN_FUNCTION e UNKNOWN_EXPORT. F12: .tsx sem JSX → só UNKNOWN_FORMAT.",
+      "requiredChange": "Ancorar a recusa do arquivo em UNKNOWN_FORMAT. Publicar o denominador: 1 de 29 arquivos com recusa JSX. No §4, trocar \"todo elemento JSX\" por \"todo elemento JSX avaliado é recusado\". JSX em corpo não avaliado não gera tupla, e o arquivo segue recusado por UNKNOWN_FORMAT."
+    },
+    {
+      "id": "R1-04",
+      "severity": "P2",
+      "section": "§3.3 itens 1 e 3; §5 (\"tupla fora da §3.3\")",
+      "finding": "A conservação não é decidível como está escrita. (a) O fecho \"pelas arestas de resolução da v5\" ignora arestas que só a v6 vê. A AST recuperada da v5 engole um import() finito em filho JSX; a v6 adquire o alvo, que conta como \"fora\" e pararia a promoção, embora a v6 esteja corrigindo. O inverso também ocorre: a v5 cria arestas espúrias. (b) O §3.3.3 deixa tuplas a jusante \"sumir ou aparecer\" só com listagem, sem critério de aceite. Um sumiço a jusante é justamente o caso de risco: um UNKNOWN que vinha só de chamada feita pelo código do .tsx. A atribuição \"com o .tsx de origem\" não está definida quando 29 .tsx compartilham os mesmos 78 arquivos a jusante. (c) O conjunto afetado pela avaliação de um .tsx não é só o que fica a jusante (F5). O §3.3.1 pega isso como parada, o que está certo, mas o texto apresenta \"a jusante\" como se fosse o conjunto afetado.",
+      "evidence": "F9: v5 e B não adquirem dep.js; A adquire e acha VIOLATION dep.js->products/p.js. Raiz real: grafos iguais (1.341 arquivos, 2.729 arestas, 0 de um lado só; 0 arestas para .tsx). Os 78 a jusante são arquivos de node_modules de @tanstack/react-query e vitest (2 dependências diretas). 372 importadores desses 78 estão fora de .tsx e de jusante.",
+      "requiredChange": "Calcular o fecho sobre as arestas da v5 e da v6 juntas, e listar os arquivos adquiridos de um lado só (zero na raiz real). Neste BUILD, exigir zero sumiço fora dos .tsx, inclusive a jusante, e aceitar só aparições listadas. A alternativa é um critério fechado de sumiço permitido, com atribuição por tupla. Publicar os denominadores: 29 .tsx, 78 a jusante (2 diretos), 1.341 arquivos, 2.729 arestas."
+    },
+    {
+      "id": "R1-05",
+      "severity": "P2",
+      "section": "§3.3.4, §5 (violação perdida) e MT06",
+      "finding": "A regra \"violações da v5 contidas na v6\" está errada fora da raiz real. A v5 emite violação espúria a partir da AST recuperada. Na v6 ela some, corretamente, mas a regra escrita pararia a promoção ou seria dispensada em silêncio. O census também não é observável à parte no relatório final, que traz só a união do worker com o census.",
+      "evidence": "F13: texto JSX \"call import('./products/p.js') here\" → v5 e B VIOLATION entry.tsx->products/p.js; A e C não. Raiz real: 0 violações em v5 e em A. Como o final traz a união, o census também tem 0 nos dois. runSemanticBoundary, linhas 2295–2302 e 2356–2371.",
+      "requiredChange": "Declarar o denominador: 0 violações na raiz real, na passagem normal e no census. Nos fixtures, tratar como esperado o sumiço da classe \"violação da v5 cujo especificador está, na AST TSX, dentro de JsxText ou de outra região que não é código\", listando cada caso, e incluir F13 em MT02. Qualquer outra violação perdida para a promoção. Definir como o census é observado à parte: analyzeSemanticBoundary(input, {refusalCensus: true}) com chamador limpo, ou o stream de violações."
+    },
+    {
+      "id": "R1-06",
+      "severity": "P2",
+      "section": "§8 / pergunta T3 ao usuário",
+      "finding": "Faltam avisos que mudam a decisão do usuário. (i) A lacuna do K0 que já existe (R1-01): a SPEC0246 não pode assumir que toda função exportada passa pelo K0. (ii) O custo de A (R1-02): violações alcançáveis só pelo JSX ficam UNKNOWN. (iii) A recusa dos .tsx se apoia em UNKNOWN_FORMAT (R1-03); se uma SPEC futura relaxar FORMAT para .tsx (perfil de bundler), JSX em corpo não avaliado não terá tupla nenhuma. (iv) Arestas implícitas do JSX ficam invisíveis à aquisição: a factory do runtime e os pragmas @jsxImportSource/@jsx. Um pragma que aponta para products/ não é reportado em nenhuma variante (F14); o .tsx segue recusado por FORMAT, mas a violação não aparece. (v) O ganho é de clareza diagnóstica, −560 tuplas, com zero provas novas, e nenhum .tsx fica mais perto de PROVEN.",
+      "evidence": "F3, F3-K7-origin, F1, F10b, F8b, F14; recontagem da raiz real.",
+      "requiredChange": "Pôr esses cinco avisos no texto da pergunta T3 (§8 ou seção própria), com os fixtures como evidência. Deixar explícito que a aprovação da SPEC0245 não aprova nenhuma premissa de cobertura do K0 para a SPEC0246."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R1-07",
+      "severity": "P3",
+      "section": "§1",
+      "finding": "\"412 na recon anterior\": nesta medição há 430 UNKNOWN_BINDING nos .tsx (427 somem, 3 ficam). task.json pede \"705 tuplas\" e a medição dá 704. Melhor citar os números atuais e explicar a diferença.",
+      "suggestion": "Usar 430 e 704 e registrar a origem de 412 e 705."
+    },
+    {
+      "id": "R1-08",
+      "severity": "P3",
+      "section": "§2 T1 / §6",
+      "finding": "Para .jsx, T1 não muda o parse: no TS 6.0.3, JS e JSX usam LanguageVariant.JSX, e a v5 já parseia e recusa JSX em .js pelo mesmo fallback (F6). A camada léxica (check-product-boundary.mjs, createSourceFile sem scriptKind) já lê .tsx como TSX. A tabela proposta é igual ao default do TypeScript para todas as extensões de runtime.",
+      "suggestion": "Citar esse precedente como apoio ao \"sem premissa nova\" e dizer que .jsx é no-op."
+    },
+    {
+      "id": "R1-09",
+      "severity": "P3",
+      "section": "§3.1, §3.3.2, MT02",
+      "finding": "UNKNOWN_PARSE também pode aparecer na v6 em .tsx que era TS válido e é TSX inválido, como asserção <T>x (F7).",
+      "suggestion": "Pôr esse caso no §3.3.2 e no MT02."
+    },
+    {
+      "id": "R1-10",
+      "severity": "P3",
+      "section": "§1 (B) e MT03",
+      "finding": "O argumento mais forte contra B, e a favor do delta, é F9: v5 e B não adquirem um import() finito em filho JSX e perdem a violação do corpo do alvo. Além disso, B muda o comportamento de todo arquivo com diagnóstico de parse, não só dos .tsx, e o delta fica maior.",
+      "suggestion": "Pôr F9 no MT03 e esses dois motivos na rejeição de B."
+    },
+    {
+      "id": "R1-11",
+      "severity": "P3",
+      "section": "§5 e §6",
+      "finding": "O §5 restringe a migração literal ao literal de versão, e o §6 admite migrar asserção de UNKNOWN_PARSE em .tsx. Na base 16dd0ce6 nenhum teste afirma UNKNOWN_PARSE em .tsx. O único fixture TSX (b6-0240 MS04) afirma status UNKNOWN, que continua valendo por UNKNOWN_FORMAT.",
+      "suggestion": "Harmonizar os dois: dizer que não existe asserção assim, e que achar uma é parada."
+    },
+    {
+      "id": "R1-12",
+      "severity": "P3",
+      "section": "§1",
+      "finding": "As 77 tuplas \"de domínio e propagação\" incluem 1 UNKNOWN_AMBIGUOUS_RESOLUTION e 1 UNKNOWN_UNRESOLVED_EXPORT, que são de resolução. UNKNOWN_FORMAT (37) = 29 do próprio arquivo + 8 recusas de import .tsx→.tsx, com detalhe. A base v5tags é igual à final do BUILD0244 em diagnósticos e tuplas, mas o payload difere em compiledProvenance.referenceDigest (receita com escopo). O tempo do worker (~114 s de 300 s) não está no §1.",
+      "suggestion": "Precisar esses pontos e publicar o tempo junto com contextos e estados."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "RECOUNT-REAL-ROOT",
+      "description": "Recontagem independente dos relatórios selados (raiz 228e7918, receita com escopo).",
+      "results": {
+        "v5tags": {
+          "diagnostics": 12283,
+          "tuples": 11393,
+          "tsxFiles": 29,
+          "tsxTuples": 704,
+          "parseInTsx": 29,
+          "unknownBindingInTsx": 430,
+          "contexts": 229,
+          "states": 138560,
+          "equalsBuild0244FinalTuples": true,
+          "payloadDiffersFromBuild0244Only": "semanticBoundary.compiledProvenance.referenceDigest"
+        },
+        "A": {
+          "diagnostics": 11723,
+          "delta": -560,
+          "tsxTuplesAfter": 144,
+          "gone": {
+            "tsx": 561
+          },
+          "new": {
+            "tsx": 1
+          },
+          "parseInTsxAfter": 0,
+          "contexts": 229,
+          "states": 134899,
+          "workerElapsedMs": 114067,
+          "filesWithJsxRefusal": [
+            "apps/web/src/main.tsx"
+          ],
+          "normalEqualsStrict": true
+        },
+        "C": {
+          "diagnostics": 11729,
+          "delta": -554,
+          "tsxTuplesAfter": 150,
+          "new": {
+            "tsx": 6
+          }
+        },
+        "B": {
+          "diagnostics": 11676,
+          "delta": -607,
+          "tsxTuplesAfter": 97
+        },
+        "graph": {
+          "acquiredFilesV5": 1341,
+          "acquiredFilesA": 1341,
+          "edgesV5": 2729,
+          "edgesA": 2729,
+          "edgesOnlyInOneSide": 0,
+          "edgesIntoTsx": 0,
+          "downstreamFiles": 78,
+          "directDependenciesOfTsx": [
+            "node_modules/@tanstack/react-query/build/modern/index.js",
+            "node_modules/vitest/dist/index.js"
+          ],
+          "importersOfDownstreamOutsideTsxAndDownstream": 372
+        },
+        "violationsAllVariants": 0,
+        "proofsAllVariants": 0,
+        "validationAllVariants": true,
+        "verdict": "Os números da §1 conferem, salvo \"412 na recon anterior\" (nesta medição são 430) e \"igual à final do BUILD0244\", que vale para tuplas e diagnósticos, não para o payload inteiro."
+      }
+    },
+    {
+      "id": "F1-jsx-child-known-arg-call-into-dep",
+      "description": "Filho JSX chama função importada com especificador de products/.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "import { load } from './m.js';\nexport const el = <div>{load('./products/p.js')}</div>;\n",
+          "m.js": "export function load(s) { return import(s) }\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:NO_BODY",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "m.js->products/p.js"
+          ],
+          "censusViolations": [
+            "m.js->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F2-jsx-attr-known-arg-call-into-dep",
+      "description": "O mesmo, em atributo JSX.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "import { load } from './m.js';\nexport const el = <div title={load('./products/p.js')} />;\n",
+          "m.js": "export function load(s) { return import(s) }\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING:title",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_MISSING_INITIALIZER",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_PROPERTY",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "m.js->products/p.js"
+          ],
+          "censusViolations": [
+            "m.js->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "m.js:UNKNOWN_BINDING_VALUE:s",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "m.js:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_RESOLUTION"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F3-cjs-exports-reassigned-in-function-no-tsx",
+      "description": "Lacuna do K0 que já existe na v5: module.exports reatribuído dentro de corpo de função. g, com import(x), nunca é avaliado. A raiz sai PROVEN, sem nenhum .tsx.",
+      "fixture": {
+        "package": "{}",
+        "starts": [
+          "entry.js"
+        ],
+        "files": {
+          "entry.js": "const m = require('./m.js');\nmodule.exports = 1;\n",
+          "m.js": "module.exports = function f() { module.exports = function g(x) { return import(x) } }\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "PROVEN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 2,
+          "unknowns": []
+        },
+        "A": {
+          "status": "PROVEN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 2,
+          "unknowns": []
+        },
+        "C": {
+          "status": "PROVEN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 2,
+          "unknowns": []
+        },
+        "B": {
+          "status": "PROVEN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 2,
+          "unknowns": []
+        }
+      }
+    },
+    {
+      "id": "F3-K7-origin",
+      "description": "F3 com a origem léxica import(x) de m.js passada ao engine (runSemanticBoundary, chamador limpo).",
+      "results": {
+        "v5": {
+          "status": "PROVEN",
+          "proofs": [
+            "K5 entry.js",
+            "K5 m.js",
+            "K7 m.js CallExpression import(x)"
+          ],
+          "unknowns": [],
+          "validation": true
+        },
+        "A": {
+          "status": "PROVEN",
+          "proofs": [
+            "K5 entry.js",
+            "K5 m.js",
+            "K7 m.js CallExpression import(x)"
+          ],
+          "unknowns": [],
+          "validation": true
+        },
+        "note": "Não rodei o checker completo, que é proibido na raiz real. Não montei uma raiz sintética com referências. A camada léxica emite NON_LITERAL_MODULE_REFERENCE para import(x), e o engine fecha essa origem com K7."
+      }
+    },
+    {
+      "id": "F4-tsx-calls-reassigned-cjs-export",
+      "description": ".tsx (CJS) chama, no JSX, a função g exportada depois da reatribuição. Na A, m.js fica sem tupla.",
+      "fixture": {
+        "package": "{}",
+        "starts": [
+          "a.tsx"
+        ],
+        "files": {
+          "a.tsx": "require('./m.js');\nconst g = require('./m.js');\nmodule.exports = <div>{g('./products/p.js')}</div>;\n",
+          "m.js": "module.exports = function f() { module.exports = function g(x) { return import(x) } }\n",
+          "products/p.js": "module.exports = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_EXPORT",
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_FUNCTION:NO_BODY",
+            "a.tsx:UNKNOWN_OPERATOR",
+            "a.tsx:UNKNOWN_PARSE",
+            "a.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_EXPORT",
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "m.js->products/p.js"
+          ],
+          "censusViolations": [
+            "m.js->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_EXPORT",
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_PARSE"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F5-sibling-via-cjs-mutation",
+      "description": "O efeito do JSX avaliado (C) alcança n.js, que não fica a jusante do .tsx, por mutação de module.exports.",
+      "fixture": {
+        "package": "{}",
+        "starts": [
+          "a.tsx",
+          "n.js"
+        ],
+        "files": {
+          "a.tsx": "const set = require('./m.js');\nmodule.exports = <div>{set('./products/p.js')}</div>;\n",
+          "m.js": "module.exports = function set(v) { module.exports = v }\n",
+          "n.js": "const s = require('./m.js');\nmodule.exports = require(s);\n",
+          "products/p.js": "module.exports = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_EXPORT",
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_FUNCTION:NO_BODY",
+            "a.tsx:UNKNOWN_OPERATOR",
+            "a.tsx:UNKNOWN_PARSE",
+            "a.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral",
+            "m.js:UNKNOWN_BINDING_VALUE:v",
+            "n.js:UNKNOWN_BINDING_VALUE:s",
+            "n.js:UNKNOWN_EXPORT",
+            "n.js:UNKNOWN_RESOLUTION"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_EXPORT",
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_BINDING_VALUE:v",
+            "n.js:UNKNOWN_BINDING_VALUE:s",
+            "n.js:UNKNOWN_EXPORT",
+            "n.js:UNKNOWN_RESOLUTION"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "n.js->products/p.js"
+          ],
+          "censusViolations": [
+            "n.js->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_EXPORT",
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_BINDING_VALUE:v",
+            "n.js:UNKNOWN_EXPORT",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "a.tsx:UNKNOWN_FORMAT",
+            "a.tsx:UNKNOWN_PARSE",
+            "m.js:UNKNOWN_BINDING_VALUE:v",
+            "n.js:UNKNOWN_BINDING_VALUE:s",
+            "n.js:UNKNOWN_EXPORT",
+            "n.js:UNKNOWN_RESOLUTION"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F6-jsx-in-js-file-v5",
+      "description": "A v5 já parseia JSX em .js (ScriptKind.JS usa LanguageVariant.JSX) e o recusa pelo mesmo fallback.",
+      "fixture": {
+        "starts": [
+          "entry.js"
+        ],
+        "files": {
+          "entry.js": "export const el = <div/>;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.js:UNKNOWN_EXPORT",
+            "entry.js:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.js:UNKNOWN_EXPORT",
+            "entry.js:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.js:UNKNOWN_EXPORT",
+            "entry.js:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.js:UNKNOWN_EXPORT",
+            "entry.js:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F7-tsx-angle-assertion-and-generic-arrow",
+      "description": "Na v6, um .tsx válido como TS e inválido como TSX (<any>1) passa a dar UNKNOWN_PARSE.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const id = <T,>(x: T) => x;\nexport const y = <any>1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:x",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:x",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:x",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING_VALUE:x",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F8-jsx-only-in-components",
+      "description": "JSX dentro de componentes: só o componente sem parâmetro (checkExport) gera recusa JSX.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export function App() { return <div/> }\nexport const B = ({ a }) => <div>{a}</div>;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:PARAMETER_PATTERN",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:PARAMETER_PATTERN",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:PARAMETER_PATTERN",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F8b-jsx-only-in-refused-component",
+      "description": "Arquivo com JSX e sem recusa JSX: só UNKNOWN_FORMAT o recusa.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const B = ({ a }) => <div>{a}</div>;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:PARAMETER_PATTERN",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:PARAMETER_PATTERN"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:PARAMETER_PATTERN"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F9-jsx-dynamic-import-only-path-body-violation",
+      "description": "import('./dep.js') finito num filho JSX. v5 e B não adquirem dep.js; A adquire o arquivo e acha a violação do corpo dele.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const el = <div>{import('./dep.js')}</div>;\n",
+          "dep.js": "const o = { p: './products/p.js' };\nexport const q = import(o.p);\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_FUNCTION:NO_BODY",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "A": {
+          "status": "VIOLATION",
+          "violations": [
+            "dep.js->products/p.js"
+          ],
+          "censusViolations": [
+            "dep.js->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "dep.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "dep.js:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "dep.js->products/p.js"
+          ],
+          "censusViolations": [
+            "dep.js->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "dep.js:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "dep.js:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F10-imported-object-is-not-U-ts",
+      "description": "Objeto importado não é U: o importador lê o objeto e chega a products/.",
+      "fixture": {
+        "starts": [
+          "entry.ts"
+        ],
+        "files": {
+          "entry.ts": "import { o } from './m.js';\nexport const q = import(o.p);\n",
+          "m.js": "export const o = { p: './products/p.js' };\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "VIOLATION",
+          "violations": [
+            "entry.ts->products/p.js"
+          ],
+          "censusViolations": [
+            "entry.ts->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.ts:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.ts:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_EXPORTED_MUTABLE_STATE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "A": {
+          "status": "VIOLATION",
+          "violations": [
+            "entry.ts->products/p.js"
+          ],
+          "censusViolations": [
+            "entry.ts->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.ts:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.ts:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_EXPORTED_MUTABLE_STATE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "entry.ts->products/p.js"
+          ],
+          "censusViolations": [
+            "entry.ts->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.ts:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.ts:UNKNOWN_EXPORT",
+            "m.js:UNKNOWN_EXPORTED_MUTABLE_STATE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F10b-imported-object-inside-jsx",
+      "description": "O mesmo dentro do JSX: A dá UNKNOWN, C dá VIOLATION.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "import { o } from './m.js';\nexport const el = <div>{import(o.p)}</div>;\n",
+          "m.js": "export const o = { p: './products/p.js' };\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_PROPERTY",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral",
+            "m.js:UNKNOWN_EXPORTED_MUTABLE_STATE"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_EXPORTED_MUTABLE_STATE"
+          ]
+        },
+        "C": {
+          "status": "VIOLATION",
+          "violations": [
+            "entry.tsx->products/p.js"
+          ],
+          "censusViolations": [
+            "entry.tsx->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement",
+            "m.js:UNKNOWN_EXPORTED_MUTABLE_STATE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F11-fragment-detail",
+      "description": "Detalhe JsxFragment.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const el = <>{1}</>;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxFragment"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxFragment"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F12-tsx-only-top-level-types",
+      "description": ".tsx sem JSX: só UNKNOWN_FORMAT.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export type T = { a: number };\nexport const n: number = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F13-jsx-text-looks-like-import",
+      "description": "Texto JSX que parece import(): a v5 dá violação espúria pela AST recuperada; A e C a perdem, corretamente.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "export const el = <p>call import('./products/p.js') here</p>;\n",
+          "products/p.js": "export const p = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "VIOLATION",
+          "violations": [
+            "entry.tsx->products/p.js"
+          ],
+          "censusViolations": [
+            "entry.tsx->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_BINDING:call",
+            "entry.tsx:UNKNOWN_BINDING:here",
+            "entry.tsx:UNKNOWN_DYNAMIC_IMPORT_PROMISE",
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_OPERATOR",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxElement"
+          ]
+        },
+        "B": {
+          "status": "VIOLATION",
+          "violations": [
+            "entry.tsx->products/p.js"
+          ],
+          "censusViolations": [
+            "entry.tsx->products/p.js"
+          ],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "products/p.js:UNKNOWN_PRODUCT_TARGET:UNKNOWN_PRODUCT_TARGET:products/p.js"
+          ]
+        }
+      }
+    },
+    {
+      "id": "F14-jsx-import-source-pragma",
+      "description": "Pragma @jsxImportSource apontando para products/: nenhuma variante vê a dependência.",
+      "fixture": {
+        "files": {
+          "entry.tsx": "/** @jsxImportSource ./products/rt */\nexport const el = <p/>;\n",
+          "products/rt/jsx-runtime.js": "export const jsx = 1;\n"
+        }
+      },
+      "results": {
+        "v5": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:RegularExpressionLiteral"
+          ]
+        },
+        "A": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "C": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_EXPORT",
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_UNSUPPORTED_SYNTAX:JsxSelfClosingElement"
+          ]
+        },
+        "B": {
+          "status": "UNKNOWN",
+          "violations": [],
+          "censusViolations": [],
+          "proofs": 0,
+          "unknowns": [
+            "entry.tsx:UNKNOWN_FORMAT",
+            "entry.tsx:UNKNOWN_PARSE"
+          ]
+        }
+      }
+    }
+  ],
+  "commands": [
+    "sha256sum spec0245-r1.md.txt (confere c4e6aa5c…)",
+    "leitura integral de tools-v5/scripts/boundary-semantic-engine.mjs (c724567f…) e dos operadores tsx_parse_patch, jsx_eval_patch, parse_stop_patch, diag_patch, contexts_patch, tsx_compare, tsx_probe, measure, tools_copy",
+    "cópias privadas no scratchpad r0245/eng-{v5,A,C,B}: engine/resolution/identity da tools-v5 + patches reconstruídos (python3 -I -B operators/<patch>.py <copia>/scripts); node_modules por symlink só leitura para tools-v5/node_modules",
+    "r0245/bin/probe.py fixtures{1,2,3}.json → runSemanticBoundary + analyzeSemanticBoundary(refusalCensus) via node 22.23.2 pinado, env mínimo (PATH=<nodebin>:/usr/bin:/bin, LANG=C, TZ=UTC)",
+    "r0245/bin/k7.cjs (F3 com origem import(x)) com env -i e o mesmo node",
+    "r0245/bin/recount.py <EV> <EV-BUILD0244>: recontagem a partir dos real-*-report.json.gz, diag-*.json.gz e summaries selados",
+    "node: ts.createSourceFile com ScriptKind por extensão e default (TS 6.0.3), SyntaxKind[JsxFragment]",
+    "git grep 16dd0ce6 -- tests (UNKNOWN_PARSE, .tsx, literal de versão)",
+    "grep ScriptKind/createSourceFile em check-product-boundary.mjs e boundary-semantic-*.mjs"
+  ],
+  "scratch": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/r0245"
+}

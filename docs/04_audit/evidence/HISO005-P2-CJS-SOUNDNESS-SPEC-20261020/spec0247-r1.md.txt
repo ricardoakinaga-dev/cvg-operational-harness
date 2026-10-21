@@ -1,0 +1,226 @@
+# SPEC0247 — Valor exportado CJS no kernel B6: escritas delimitadas, junção e U
+
+**PROPOSTA T3, revisão r1. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-CJS-SOUNDNESS-SPEC-20261020`, com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0247`. Mesma frente HISO005/B6, sem reabrir 0234, 0236, 0237 e 0240–0245. Autoridade: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) (§5 regra 2, K5, K6 e K7), [SPEC0241](0241_b6_integral_body_installed_provenance.md) §3.5, [SPEC0244](0244_b6_esm_module_shape.md) e [SPEC0245](0245_b6_tsx_parse.md). Plano: [0391](../03_build/0391_hiso005_semantic_proof_execution.md). Origem: o [achado da recon](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/finding-k0-cjs-exports-gap.json) e a [decisão do usuário](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/user-decision-20261020.json) de adiar a SPEC0246 até fechar esta lacuna.
+
+Neste texto, v5 é o kernel da main remota `6c9fc651` (`semantic-kernel-v5-esm-module-shape`, engine `c724567f`). As âncoras de linha são de `scripts/boundary-semantic-engine.mjs` nessa versão. vN é o kernel com o delta desta SPEC (§3.7). Evidência: [pasta da unidade](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/task.json).
+
+## 1. CURRENT — problema e evidência
+
+### 1.1 Onde o kernel erra
+
+O valor de um módulo CJS é o que `require` devolve: `module.exports` no momento da leitura. A v5 o guarda em `modules.get(file).cjs` e erra em quatro pontos:
+
+1. **Toda escrita é substituição.** Linhas 1527–1541: em módulo `require`, a instrução `module.exports = e`, com `module` livre, faz `cjs = expression(e)`. O mesmo `block` avalia o topo, os ramos de `if` (1550–1557) e o corpo de função (`call`, 896–898). A posição da escrita não importa.
+2. **Ramo não decidido: o último vence.** Linhas 1562–1569: com condição que não é primitivo K1, os dois ramos rodam em sequência sobre o mesmo registro do módulo. Fica o valor do `else`. Sem `else`, o valor do `then` apaga o anterior. A K6 da SPEC0236 manda unir os ramos.
+3. **Escrita tardia sem verificação.** Linhas 1723–1728: `checkExport` roda uma vez, sobre o valor do fim do topo. Uma função exportada é chamada pelo próprio `checkExport` (1340–1351) ou por um importador. A escrita dentro dela troca `cjs` depois da verificação, e o cache (1641–1646) devolve o valor novo a quem carregar depois, sem `checkExport`.
+4. **Valor inicial falso.** Linha 1716: o valor inicial é `VOID`, isto é, `primitive(undefined)` (355). Em runtime, `module.exports` começa como o objeto `exports`, que é truthy. Sobre `VOID`, o `if` (1559), o `?:` (1127), o `!` (1139) e o `===` (1096–1101) escolhem o ramo errado.
+
+Nos quatro casos, o código que só o valor real alcança nunca é avaliado. Nenhuma tupla sai, e a regra global dá PROVEN, com K7 para as origens desse código. Isso contraria a SPEC0236: §5 regra 2 (reatribuição considerada antes de retirar diagnóstico), K5 (corpos alcançados analisados) e K6 (ramos unidos).
+
+### 1.2 Fixtures
+
+O [catálogo](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/fixtures.json) tem 46 fixtures. Cada um é uma raiz CJS (`package.json` igual a `{}`) com início `entry.js`. Rodaram na v5 e na variante da proposta ([resumo](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/fixture-summary.json)).
+
+| Grupo                              | Fixtures | v5          | variante da proposta              |
+| ---------------------------------- | -------: | ----------- | --------------------------------- |
+| A — PROVEN falso                   |       12 | 12 PROVEN   | 12 UNKNOWN                        |
+| B — UNKNOWN por raiz já existente  |       20 | 20 UNKNOWN  | 20 UNKNOWN, tuplas da v5 mantidas |
+| C — PROVEN correto                 |        7 | 7 PROVEN    | 7 PROVEN                          |
+| D — PROVEN correto perdido (custo) |        4 | 4 PROVEN    | 4 UNKNOWN                         |
+| V — violação                       |        3 | 3 VIOLATION | 1 VIOLATION e 2 UNKNOWN (§3.6.3)  |
+
+O grupo A tem três famílias:
+
+- **F3 (achado):** `module.exports = function f() { module.exports = function g(x) { return import(x) } }`. Também com arrow, declaração e função devolvida.
+- **S10 (achado):** `if ({}) module.exports = g` com `else module.exports = 1`. Também sem `else`, aninhado e com duas funções.
+- **INIT (novo):** módulo CJS sem escrita, lido por `m ? g : 1`, `!m`, `if (m)` e `m === undefined`.
+
+**A família INIT é achado novo.** Não estava no achado da recon e tem a mesma natureza: um valor CJS que não é o do runtime.
+
+### 1.3 Formas que a v5 já recusa com raiz
+
+As demais formas de alcançar o valor exportado já emitem raiz no ponto avaliado. Nenhuma dá PROVEN falso nos fixtures do grupo B. Mas o valor CJS não muda: fica a última escrita reconhecida, ou `VOID`.
+
+| Forma                                                                                                                                                                                    | Âncora v5     | Raiz quando avaliada                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------- |
+| `exports.x = …`, `exports = …`, `module.exports.x = …`, `module['exports'] = …`, `this.x = …`, `arguments[2].exports = …`, `require.cache[…].exports = …` e atribuição como subexpressão | 1080–1082     | `UNKNOWN_MUTATION`, sem avaliar os dois lados                                         |
+| leitura de `module` ou `exports`, inclusive `module.exports` lido antes de reescrito                                                                                                     | 961           | `UNKNOWN_BINDING` com o nome                                                          |
+| `Object.defineProperty(module, 'exports', …)`                                                                                                                                            | 790, 871, 961 | `UNKNOWN_PROPERTY` (só há os três intrínsecos K4), `UNKNOWN_CALL` e `UNKNOWN_BINDING` |
+| `eval`, `arguments` e `this` lidos no topo, membro de `require`                                                                                                                          | 961, 964, 790 | `UNKNOWN_BINDING`, `UNKNOWN_THIS` ou `UNKNOWN_PROPERTY`                               |
+| escrita em laço, `try`, `switch`, rótulo ou classe                                                                                                                                       | 1634–1635     | `UNKNOWN_UNSUPPORTED_SYNTAX`, corpo não avaliado                                      |
+| escrita em callback entregue a chamada opaca                                                                                                                                             | 871           | `UNKNOWN_CALL`, callback não avaliado                                                 |
+| `return` no topo, que deixa `module.exports` no valor anterior                                                                                                                           | 1568, 1720    | `UNKNOWN_PARTIAL_RETURN` ou `UNKNOWN_TOP_LEVEL_RETURN`                                |
+
+Em corpo de função, a raiz só sai quando a função é chamada. Por exemplo, `exports.y = …` dentro de função exportada sai porque `checkExport` a chama.
+
+### 1.4 Raiz real
+
+A medição usou a raiz avaliada `228e7918`, reconstituída por outra unidade e conferida aqui nos 1.410 sha256 do relatório selado do BUILD0244 ([conferência](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/eval-root-check-before.json)). As referências seguem a receita com escopo ([referências](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/references-scoped.json)).
+
+- A v5 reproduz 12.283 diagnósticos e 11.393 tuplas, com zero provas, zero violações, contextos 229/256 e 138.560 estados.
+- O corpo carrega 1.341 módulos: 1.277 em modo `import` e 64 em modo `require` ([despejo](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/real-conservation.json)).
+- Os 64 são 35 `.ts` e 29 `.tsx` de primeira parte, em pacotes sem `"type": "module"` (`apps/web`, `examples/phase4a`, `packages/adapters`, `packages/agent-evals` e `packages/chaos`). Nenhum tem escrita reconhecida, alça da §3.1 ou junção que mude o valor.
+- Nenhum arquivo instalado é carregado em modo `require`.
+- A variante da proposta dá payload igual ao da v5, fora a telemetria. A primeira versão dela, ainda sem a categoria `TOP_LEVEL_RETURN`, deu o mesmo nas passagens normal e strict ([comparações](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/real-conservation.json)).
+- Outra unidade reconstrói `dist/` nessa raiz. Uma execução strict que coincidiu com a reconstrução saiu com `UNKNOWN_INPUT_REVALIDATION` e foi descartada ([tentativa](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/real-m6t2-summary-rejected-attempt1.json)). As medições seguintes esperam a raiz parada e são repetidas se ela mudar.
+- A medição sobre a base v6 (v5 com a variante A da SPEC0245) está em andamento e entra na revisão seguinte.
+
+**A lacuna não aparece na raiz real.** Uma raiz limpa com o padrão receberia prova falsa.
+
+## 2. PROPOSED — delta
+
+O delta vale só para módulo CJS (modo `require`, 1689–1693). Módulo ESM não muda.
+
+- **C0 — alças do wrapper.** Antes do corpo, o kernel classifica pela sintaxe as alças do wrapper CommonJS e do topo (§3.1). Se houver alça não delimitada, ele emite a raiz `UNKNOWN_CJS_EXPORTS` no próprio módulo e todo importador recebe U.
+- **C1 — valor inicial.** O valor rastreado começa como o objeto `exports`, opaco, e não como `VOID`.
+- **C2 — junção.** Escrita delimitada substitui o valor, como hoje. Depois de um `if` não decidido, o valor é a união dos ramos.
+- **C3 — cobertura.** `checkExport` continua rodando sobre o valor rastreado, também quando a C0 dá U aos importadores.
+
+**Nenhuma premissa nova e nenhuma prova nova.** O delta só troca valores por U ou por uniões. Uma união é avaliada membro a membro ou recusada no ponto de uso. Um U dá raiz no ponto de leitura. Nenhum caso que a v5 não provava passa a PROVEN.
+
+**Por que é sound.** São cinco pontos:
+
+1. **Sem alça não delimitada,** as únicas mudanças de `module.exports` no próprio módulo são as escritas delimitadas. Elas rodam no fluxo de topo, que o kernel avalia na ordem do fonte: a sequência substitui, o ramo decidido por constante K1 escolhe um lado e o ramo não decidido une os dois. Antes do fim do topo, só um ciclo leria o valor, e ciclo é `UNKNOWN_CYCLE`. Depois do fim, nada no módulo o altera. Logo, o valor rastreado contém todo valor que outro módulo pode ler, e cada membro passa por `checkExport`.
+2. **Com alça não delimitada,** o kernel não delimita quando nem como o valor muda. Todo importador recebe U, e a raiz fica no próprio módulo. Pela regra global, nada é provado. Numa regra fechada por arestas, o módulo está no fecho de cada importador.
+3. **Objeto inicial opaco:** não decide `if`, `?:`, `!` nem comparação. Leitura de propriedade e chamada são recusadas. `checkExport` não emite tupla para ele, porque, sem alça, nada no módulo o altera.
+4. **A classificação ignora sombra:** um local chamado `module`, `exports`, `require` ou `eval` conta como alça. Isso só aumenta U.
+5. **Fora do delta, com raiz já existente:** a mutação do valor por outro módulo (`require('./m').x = …` dá `UNKNOWN_MUTATION` nesse módulo) e o registro de módulos do processo (`process.mainModule`, `require('module')`, que dão `UNKNOWN_BINDING` e `UNKNOWN_NATIVE_BUILTIN` em quem acessa). Pela regra global, nada é provado. Para uma regra por escopo, os dois são a premissa P-REINO da SPEC0246 e exigem argumento próprio.
+
+**Por que esta variante.** Quatro variantes diagnósticas rodaram em cópias privadas ([variantes](../04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/tools-variants.json)). As três primeiras rodaram nos 37 fixtures da primeira rodada; a proposta, nos 46.
+
+| Variante               | Regra                                                           | Grupo A | Custo nos fixtures                                                                                                                     | Raiz real                |
+| ---------------------- | --------------------------------------------------------------- | ------: | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| E-U (v6a)              | escrita avaliada em função dá raiz e U; junção; valor inicial U |   11/11 | módulo só de efeito colateral vira UNKNOWN; 7 fixtures do grupo B ganham `UNKNOWN_EXPORT`; INIT-CALL perde as tuplas da função escrita | +64 `UNKNOWN_EXPORT`     |
+| E-opaco (v6b)          | idem, com objeto inicial opaco                                  |   11/11 | INIT-CALL perde as tuplas da função escrita; escrita em código não avaliado e `exports.x` deixam valor errado, só com a raiz da forma  | sem diferença            |
+| S (v6s)                | C0 também esconde o valor do próprio `checkExport`              |   11/11 | some a cobertura das funções exportadas: tuplas da v5 somem em E-function, DP-function, RD-function e INIT-CALL                        | não medida               |
+| **T (v6t2, proposta)** | C0, C1, C2 e C3                                                 |   12/12 | os 4 do grupo D                                                                                                                        | sem diferença de payload |
+
+As variantes E mantêm PROVEN a função morta com escrita (P-dead-function), porque só olham o código avaliado. Em troca, deixam valor errado onde a escrita não é avaliada.
+
+A T é a única que cumpre as duas exigências: valor U quando a escrita não é delimitável, inclusive em código que o kernel não avalia, e nenhuma tupla da v5 perdida fora da classe da §3.6.3.
+
+## 3. Contrato
+
+### 3.1 Definições e classificação (C0)
+
+- **Módulo CJS:** módulo carregado em modo `require` (1689–1693).
+- **Escrita reconhecida:** instrução de expressão `module.exports = e`, com `module` identificador e `exports` nome de propriedade, a forma das linhas 1529–1537.
+- **Escrita delimitada:** escrita reconhecida cujos ancestrais, até o arquivo, são só blocos e `if`.
+- **Alça não delimitada:** toda ocorrência de uma categoria da tabela abaixo.
+
+| Categoria (detalhe da raiz) | Ocorrência                                                                                                  |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `FUNCTION_BODY_WRITE`       | escrita reconhecida dentro de corpo de função de qualquer tipo                                              |
+| `REFUSED_CONTEXT_WRITE`     | escrita reconhecida fora de função e fora do fluxo de blocos e `if` (laço, `try`, `switch`, rótulo, classe) |
+| `MODULE_REFERENCE`          | identificador `module` que não seja o de uma escrita reconhecida                                            |
+| `EXPORTS_REFERENCE`         | identificador `exports`                                                                                     |
+| `LOADER_REFERENCE`          | identificador `require` que não seja o chamado de `require(…)` nem o objeto de `require.resolve(…)` chamado |
+| `EVAL_REFERENCE`            | identificador `eval`                                                                                        |
+| `TOP_LEVEL_THIS`            | `this` fora de função que não seja arrow                                                                    |
+| `TOP_LEVEL_ARGUMENTS`       | identificador `arguments` fora de função que não seja arrow                                                 |
+| `TOP_LEVEL_RETURN`          | `return` fora de qualquer função                                                                            |
+
+Não conta o identificador em posição de nome de propriedade: nome de acesso `a.b`, chave de objeto, nome de método, propriedade e accessor de classe, membro de enum, chave de desestruturação e nome importado ou exportado de origem. Qualquer outra posição conta, inclusive declaração, parâmetro e sombra local.
+
+Efeito:
+
+1. A classificação roda ao carregar cada módulo CJS, antes do corpo, na passagem normal e no census.
+2. Cada categoria presente emite uma raiz `UNKNOWN_CJS_EXPORTS` no módulo, com a categoria como detalhe.
+3. Com ao menos uma categoria, o valor devolvido a todo importador é U, na primeira carga e no cache.
+4. O corpo é avaliado como hoje, e as escritas reconhecidas continuam atualizando o valor rastreado (C2, C3).
+
+### 3.2 C1 — valor inicial
+
+O valor rastreado começa como o objeto `exports` do módulo, opaco:
+
+- não é primitivo, então `if`, `?:`, `!`, `===`, `!==`, `+` e template não decidem sobre ele;
+- leitura de propriedade dá `UNKNOWN_PROPERTY`, chamada dá `UNKNOWN_CALL`, reflexão K4 dá `UNKNOWN_REFLECTION` e especificador de `import()` ou `require` dá `UNKNOWN_RESOLUTION`;
+- `checkExport` não emite tupla para ele (§2, ponto 3).
+
+### 3.3 C2 — sequência e junção
+
+1. Escrita reconhecida avaliada substitui o valor rastreado, como na v5.
+2. `if` com condição primitiva K1 avalia só o ramo escolhido, como na v5.
+3. `if` com condição não primitiva: o valor rastreado depois do `if` é a união dos valores no fim de cada ramo. Ramo ausente contribui o valor de antes do `if`. A união segue `maxUnionValues` (SPEC0242).
+4. Retorno parcial e retorno no topo seguem as recusas atuais.
+
+### 3.4 C3 — cobertura
+
+No fim do topo, `checkExport` roda sobre o valor rastreado, também quando a C0 dá U aos importadores. O corpo das funções exportadas segue avaliado como na v5.
+
+### 3.5 Formas existentes
+
+As raízes da §1.3 não mudam. A C0 acrescenta a elas a raiz `UNKNOWN_CJS_EXPORTS` e o valor U para os importadores, sempre que a forma usa uma alça da §3.1.
+
+### 3.6 Conservação
+
+A comparação é entre a base e vN nos mesmos inputs, limites e referências, sem estouro de prazo, ENOBUFS ou corte.
+
+1. **Raiz real:** o payload é igual ao da base, fora a telemetria. Qualquer diferença para a promoção e volta à revisão.
+2. **Tuplas:** toda tupla da base persiste, salvo as de uma cadeia de chamada cujo chamado, na base, era um valor CJS que vN torna U (C0) ou união (C2). No lugar delas aparece, no mesmo ponto de uso, a raiz do valor U ou da união (`UNKNOWN_CALL`, `UNKNOWN_PROPERTY` ou `UNKNOWN_BINDING_VALUE`). As tuplas novas são a raiz `UNKNOWN_CJS_EXPORTS`, a propagação de U e de união, e as tuplas dos valores que a junção leva ao `checkExport`.
+3. **Violações:** o multiset da base está contido no de vN, salvo violações da classe do item 2. Elas são listadas tupla a tupla. Nos fixtures, são duas: V-S10-last-branch e V-F3-late-require. A violação de especificador literal persiste, porque a aquisição a acha sem avaliar.
+4. **Provas:** nenhum PROVEN novo. Todo fixture dos grupos A, B, D e V fica sem prova.
+5. Normal igual a strict, validation true e zero provas na raiz real.
+6. **Denominadores:** módulos carregados por modo; módulos CJS com escrita, com cada categoria e com junção que mudou o valor; uso de contextos e estados contra os tetos.
+
+### 3.7 Versão
+
+A versão é a seguinte à da base, com o sufixo `cjs-export-value`: `semantic-kernel-v7-cjs-export-value` sobre a v6 da SPEC0245, ou `semantic-kernel-v6-cjs-export-value` sobre a v5. Limites (SPEC0242), receitas (SPEC0243), perfil de resolução e regra global de prova não mudam.
+
+## 4. O que permanece UNKNOWN
+
+- Módulo CJS com alça não delimitada: valor U para os importadores, inclusive escrita benigna em função, função morta com escrita, parâmetro chamado `module`, UMD e CJS compilado com `exports.x`.
+- Chamada de união: `UNKNOWN_CALL`, como hoje.
+- Mutação por outro módulo e registro de módulos do processo (P-REINO).
+- Tudo o mais que a v5 já recusa.
+
+A regra global continua, e B6 segue INCOMPLETE.
+
+## 5. Integração e recuperação
+
+- **Base:** a main com o BUILD0245, se promovido; senão, a v5. As âncoras deste texto são da v5 `c724567f`, e o BUILD as reposiciona.
+- **Fonte:** `scripts/boundary-semantic-engine.mjs` (C0 a C3 e versão).
+- **Teste novo:** `tests/b6-0247-cjs-export-value.test.js`, com os 46 fixtures do catálogo.
+- **Migração literal:** só o literal de versão, registrada antes da edição e com a primeira falha preservada.
+- **Medição real:** raiz `228e7918` reconstituída, com a conferência dos 1.410 sha256 repetida pelo BUILD e as referências da receita com escopo.
+- **Rollback:** a base.
+- **A promoção para diante de:**
+  - PROVEN em fixture dos grupos A, B, D ou V;
+  - tupla ou violação perdida fora da §3.6;
+  - diferença de payload na raiz real;
+  - validation false;
+  - estouro, ENOBUFS, corte ou erro de worker;
+  - obrigatório de revisão.
+
+## 6. Riscos
+
+- **Custo de precisão:** a C0 é sintática e conservadora. Escrita benigna em função, função morta e sombra local custam a prova do módulo (grupo D).
+- **Violação em fixture:** duas violações da base viram UNKNOWN (§3.6.3). Nenhuma vira PROVEN.
+- **Interação com a SPEC0245:** os 29 `.tsx` estão em modo `require`. Lidos como TSX, a classificação vê o AST real em vez do recuperado. Eles seguem recusados por `UNKNOWN_FORMAT`.
+- **Interação com a SPEC0246:** este delta é pré-requisito dela, não suficiente. P-REINO continua aberta.
+- **Contextos:** 229/256 antes e depois na raiz real.
+
+## 7. Aceites futuros — todos NOT_RUN
+
+| ID   | Critério                                                                                                                                                   |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MC01 | Primeira falha na base: os 12 fixtures do grupo A dão PROVEN.                                                                                              |
+| MC02 | vN: grupo A UNKNOWN, com `UNKNOWN_CJS_EXPORTS` no módulo escrito (F3) ou com as tuplas da função alcançada pela junção ou pelo objeto inicial (S10, INIT). |
+| MC03 | Grupo B: tuplas da base mantidas, mais `UNKNOWN_CJS_EXPORTS` com a categoria certa onde há alça; ESM sem mudança.                                          |
+| MC04 | Grupo C PROVEN; grupo D UNKNOWN com `UNKNOWN_CJS_EXPORTS`; nenhum PROVEN novo.                                                                             |
+| MC05 | Grupo V: violação literal mantida; as duas da §3.6.3 listadas tupla a tupla.                                                                               |
+| MC06 | Raiz real: payload igual ao da base fora a telemetria, normal igual a strict, validation true, zero provas, denominadores publicados.                      |
+| MC07 | Limites, perfil e receitas iguais; versão nova.                                                                                                            |
+| MC08 | Regressões B6 (0228–0245) preservadas; crítica fresca sem obrigatórios; 16 gates Node22; consumidor fresco.                                                |
+| MC09 | Promoção só do delta próprio; sem push, deploy ou produção.                                                                                                |
+
+## 8. Autoridade e avisos para a decisão
+
+C0 a C3 mudam o K5 (valor do módulo CJS) e o K6 (junção dos ramos) da SPEC0236. A mudança é de soundness: fecha provas falsas, sem premissa nova e sem prova nova. Ela altera o kernel de prova, e D-12/T3 exige revisão explícita da SPEC pelo usuário antes do BUILD. A decisão precisa levar em conta:
+
+1. **Ganho:** fecha 12 PROVEN falsos em fixture (F3, S10, INIT e variantes). Na raiz real, nenhuma tupla muda.
+2. **Custo:** 4 PROVEN corretos viram UNKNOWN, e 2 violações de fixture viram UNKNOWN.
+3. **INIT:** é achado novo, além de F3 e S10.
+4. **SPEC0246:** este delta é pré-requisito. Aprová-lo não aprova a premissa P-REINO.
+
+Esta preparação não autoriza código, produção, release, dados reais, push ou deploy.

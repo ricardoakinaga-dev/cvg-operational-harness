@@ -1,0 +1,156 @@
+# HOW final do DX100-G02 — perfis de fonte e distribuído
+
+Unidade `DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE`, T1 documental, 20/10/2026. Este texto
+resume o estado do cartão DX100-G02 depois dos dois perfis de observação do SDK. Os
+números vêm do [mapa v7](coverage-observed-v7.json) e da
+[revisão das lacunas v7](gaps-review-v7.json). O
+[mapa v6](../sdk-continuation-3-binding/coverage-observed-v6.json) e o
+[HOW v3](../sdk-continuation-3-binding/HOW-next-profile-v3.md) seguem intocados.
+
+Observação de cliente não é paridade: 0 recibos funcionais e 0 crédito de paridade. Os 509
+registros do catálogo seguem `NOT_RUN`.
+
+## Estado final do mapa
+
+- Os 44 contratos fonte estão `OBSERVED_CLIENT_PARTIAL`; nenhum segue
+  `OPEN_REQUIRED_FUTURE_PROFILE`.
+  - 33 vêm do perfil de referência, que é a fonte do SDK do pin contra peers sintéticos
+    (mapas v1 a v6).
+  - 11 passam a observados com o perfil distribuído keyless: PY19, PY20 e PK01 a PK09.
+  - O PY02 tem observações nos dois perfis.
+- Nenhum contrato cobre o requisito inteiro.
+- O perfil distribuído consumiu 16 casos `PASS_CLIENT_OBSERVATION`: 10 do DP-1, 1 da DP-1R
+  (o DP-PK07B) e 5 do DP-2.
+  - Os 45 braços mirados ficaram distinguidos, com 50 de 50 partes creditadas.
+  - O DP-PK07A (`INVALID_CAPTURE` por defeito de fixture) não foi consumido; o DP-PK07B o
+    substitui por decisão do Lead.
+- Todo resultado do perfil distribuído leva o pin 0.153.4 (Q1, pin separado da fonte) e
+  `NO_BUILD_LINK_DECLARED`: nada liga os artefatos publicados à fonte do pin nem ao CLI
+  compilado.
+- Ressalvas que valem para o crédito:
+  - o PY19.B02 vale só por `api.steps_exact`;
+  - a forma `REAL_CLI_KEYLESS` do DP-PY02P vem da declaração do caso;
+  - o PK07.B03 se apoia no stderr do passo 10 do DP-PK07B;
+  - `child.program_followed` é predicado de sanidade;
+  - o vocabulário D3 da C3-2 não é qualificado pelo DP-2.
+- Lacunas: as seis seguem `OPEN`.
+  - GAP-PROVENANCE (3/3) e GAP-PLATFORM-PACKAGING (12/12) mudam o rótulo de progresso
+    para observação parcial no perfil distribuído.
+  - As outras quatro não mudam.
+- Resíduos do plano distribuído (48): 14 resolvidos, 10 fechados sem observação
+  (inalcançáveis ou sem artefato no pin) e 24 abertos, dos quais 18 pedem decisão nova.
+- Resíduos do v6 com destino "perfil distribuído" (9):
+  - 3 resolvidos: R-PY02-2, R-TS01-3 e R-TS09-3. Os dois de TypeScript foram observados no
+    SDK publicado, não na fonte.
+  - 1 parcial: R-PY02-4. O lado do PY02.B07 (codex_bin explícito com codex-path instalado)
+    não foi mirado por caso.
+  - 5 abertos. O R-PY05-3 teve o destino corrigido para o CLI compilado do pin (versão
+    0.0.0), porque o binário publicado se declara 0.153.4.
+
+## O cartão G02 pode fechar?
+
+O aceite do cartão no
+[0386](../../../../../03_build/0386_backlog_paridade_codex.md) pede quatro coisas. Elas estão
+assim:
+
+| Aceite do cartão                   | Estado                                                                                                                                                                                              |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fonte e executável vinculados      | Referência: CLI compilado do pin 8d9f6466, ELF atestado ([aceite](../../g02-reference-acceptance.json)), e SDK da fonte. Distribuído: pin 0.153.4 por decisão explícita (Q1), sem vínculo de build. |
+| Cada requisito com oráculo e dono  | 44 contratos com oráculo (G01) e observação parcial; cada item aberto tem destino e quem decide em `remaining_open_by_contract` e `decisions_that_would_unlock` do v7.                              |
+| Desconhecidos persistem sem PASS   | 0 recibos; resíduos abertos e lacunas `OPEN` registrados.                                                                                                                                           |
+| Driver sem credenciais nem sessões | Todas as unidades foram keyless, sem rede, provider nem credencial.                                                                                                                                 |
+
+Leitura: o G02 pode fechar como habilitador. O cartão não incrementa o numerador. Para isso,
+o Lead precisa cumprir quatro condições, e nenhuma depende de decisão nova do usuário:
+
+1. Aceitar este BIND.
+2. Levar as pastas g02 à main pelo PR documental. Hoje elas não estão rastreadas, e os
+   commits das admissões só existem nas candidatas destacadas, sem ref.
+3. Dar destino às pendências do G02 que ficam fora do mapa SDK: os 11 edges de ID do wire
+   e os oráculos i64 `INCOMPLETE`
+   ([replan](../id-settlement-replan/REPORT.md)). A sugestão é passá-los ao DX100-A01, dono
+   do protocolo app-server.
+4. Lembrar que a dependência DX100-G01 segue `IN_PROGRESS` (54 eixos `OPEN`): fechar o G02
+   não fecha o G01.
+
+## O que fica para outros cartões
+
+- **DX100-D01** (SDK público e tipos de eventos, T3): GAP-PY-API e GAP-TS-LANGUAGE. Faltam
+  a qualificação com recibo e os ciclos de vida reais.
+- **DX100-A01** (envelopes app-server, T3): GAP-PY-RPC e GAP-GENERATED. Faltam a semântica
+  real do protocolo e os modelos gerados frente ao runtime. Pela sugestão acima, também os
+  11 edges de ID e os oráculos i64.
+- **DX100-Z02** (empacotamento por plataforma, T3 e T4): GAP-PROVENANCE e
+  GAP-PLATFORM-PACKAGING. Faltam assinatura e attestation, vínculo de build, outras
+  plataformas, instaladores e bootstrap.
+- **BUILD nativo** (SPEC0239 aprovada; cadeia 0029, 0030 e 0031 não autorizada): os 5
+  resíduos `OPEN_NATIVE` do v6.
+- **Recibos por requisito**: ficam com os cartões de qualificação. O G02 não emite recibo.
+
+## O que ainda cabe sem decisão nova do usuário
+
+Estes itens precisam só do Lead:
+
+- **Perfil distribuído, unidade posterior:**
+  - o lado do PY02.B07, com codex_bin explícito e codex-path instalado (R-PY02-4 do v6);
+  - permissão negada no stat (R-PK02-2);
+  - o marcador pnpm na raiz (R-PK05-3);
+  - o bundle e o typecheck do SDK TS publicado (R-PK09-3);
+  - a leitura com processo real (R-PY08-2) e a precedência dos overrides na CLI (R-TS05-2).
+    Esses dois só valem se houver caminho keyless; se não houver, vão para o T4.
+- **Perfil de referência com o CLI compilado do pin:** o ramo de runtime 0.0.0 do
+  CheckoutCapabilities (R-PY05-3).
+- **Continuação do perfil de fonte:**
+  - a cópia do os.environ do driver (V6-PY02-ENV);
+  - os modelos gerados restantes (R-PY18-1);
+  - o known_bad "pular o cleanup" do PY13 (R-PY13-4). O registro de threads por
+    `threading.local`, que é o pré-requisito, já está na pilha Python do DP-2.
+
+Sem caminho determinístico e sem plano ficam:
+
+- 6 resíduos do v6;
+- 2 do plano distribuído (R-PK02-3 e R-PK05-5);
+- o ramo kill com filho lento, que não se induz sem falha injetada (R-PY02-4 do plano
+  distribuído, igual ao R-PY02-3 do v6).
+
+## Decisões do usuário que ainda destravariam algo
+
+Cada item traz o ganho em resíduos, contratos e braços. Os braços contados são os que
+ainda têm um lado aberto nomeado pelo resíduo; vários deles já estão distinguidos nas
+outras condições. Os números vêm de `decisions_that_would_unlock` do v7.
+
+1. **Gate T4.** Abrir turn, login, modelo ou credencial reais num perfil autorizado.
+   - Ganho: 7 resíduos em 7 contratos (PK08, PY02, PY13, PY14, PY16, PY17 e PY19).
+   - Braços: PY02.B11, PY13.B13 e PY19.B05.
+2. **Plataformas.** Dar acesso a Windows, macOS e arm64, e adquirir os assets dessas
+   plataformas.
+   - Ganho: 6 itens em 6 contratos (PK01, PK03, PK07, PY02, PY19 e PY20). A chave PATH do
+     Windows aparece nos dois planos.
+   - Braços: PK03.B02, PK07.B03, PY02.B10, PY19.B04 e PY20.B04.
+3. **Rever a Q4.** Permitir uma testemunha privilegiada (ptrace ou fanotify) só dentro da
+   contenção.
+   - Ganho: 3 resíduos em 3 contratos (PK06, PK08 e TS12).
+   - Braços: PK06.B03 e PK08.B02, mais o término do filho pré-abortado do TS12.
+4. **Q5.** Autorizar outras versões de pydantic e de Node.
+   - Ganho: 2 resíduos em 2 contratos (PY18 e TS12), sem braço nomeado.
+5. **Aquisição nova com rede.** Trazer as entradas do bootstrap do PY20 e as assinaturas e
+   attestations do registro.
+   - Ganho: 3 resíduos em 2 contratos (PY20 e PK09).
+   - Braços: PY20.B04 e PK09.B03.
+6. **Identidade TLS de github.com no sandbox (T3).** Serve para o download do bootstrap e só
+   faz sentido depois da aquisição acima.
+   - Ganho: 1 resíduo no PY20 (PY20.B04).
+7. **Instaladores e build.** Autorizar pip, npm, pnpm, bun e o build do wheel numa unidade
+   própria.
+   - Ganho: 3 resíduos em 3 contratos (PK04, PK05 e PY20).
+   - Braços: PK04.B03 e PY20.B04.
+8. **BUILD nativo da SPEC0239.** Autorizar a cadeia 0029, 0030 e 0031.
+   - Ganho: 5 resíduos em 5 contratos (PY05, PY10, PY12, PY13 e PY14), sem braço nomeado.
+9. **Capacidade nova de harness.** Injeção de falha de fs e do lado Node numa unidade
+   própria. Quem decide é o Lead; o usuário só entra (T3) se a contenção mudar.
+   - Ganho: 11 resíduos em 6 contratos (PY13, PY18, TS03, TS10, TS11 e TS12).
+   - Braços: TS03.B03, TS03.B05, TS10.B01, TS10.B03, TS10.B05, TS10.B06, TS11.B05 e
+     TS12.B03.
+
+Nenhuma dessas decisões fecha uma lacuna sozinha. Uma lacuna só deixa `OPEN` com
+qualificação e recibo de todo o requisito dos donos.

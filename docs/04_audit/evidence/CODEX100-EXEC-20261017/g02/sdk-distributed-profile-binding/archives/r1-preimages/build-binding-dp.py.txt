@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE - construção do mapa v7 e da revisão das lacunas v7 (somente leitura das entradas).
+# Uso: python3 -I -B build-binding-dp.py.txt <repo_root>  -> escreve coverage-observed-v7.json e gaps-review-v7.json na pasta da unidade.
+# Entradas: v6 e lacunas v6 (BIND da continuação 3, não editados), plano e casos do perfil distribuído, cases-dp-1r.json, adjudicações,
+# case-results, acceptance.json, next-task.json e decisões do Lead das admissões DP-1, DP-1R e DP-2. Regra: só as partes distinguidas
+# (arm_discrimination congelado cujos predicados de julgamento passaram no acceptance de serviço) entram; o DP-PK07A (INVALID_CAPTURE)
+# não é consumido e o DP-PK07B o substitui por decisão do Lead; todo resultado leva NO_BUILD_LINK_DECLARED e o pin 0.153.4.
+import copy
+import hashlib
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+
+ROOT = sys.argv[1]
+G02 = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02")
+UNIT = os.path.join(G02, "sdk-distributed-profile-binding")
+V6D = "../sdk-continuation-3-binding"
+SPEC = "../sdk-distributed-profile-spec"
+ACQ = "../sdk-distributed-acquisition"
+ADM = {"DP-1": "../sdk-distributed-profile-dp1-admission", "DP-1R": "../sdk-distributed-profile-dp1r-admission",
+       "DP-2": "../sdk-distributed-profile-dp2-admission"}
+LEAD = {"DP-1": "lead-decision-dv1-dv4.json", "DP-1R": "lead-decision-dv-dp1r-01.json", "DP-2": "lead-decision-dv-dp2.json"}
+ADJ = {"DP-1": "adjudication-dp1.json", "DP-1R": "adjudication-dp1r.json", "DP-2": "adjudication-dp2.json"}
+TASK = "DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE"
+PIN = "0.153.4"
+BUILD_LINK = "NO_BUILD_LINK_DECLARED"
+ARM_RE = re.compile(r"\b(?:PY|TS|PK)\d{2}\.B\d{2}\b")
+
+
+def P(rel):
+    return os.path.normpath(os.path.join(UNIT, rel))
+
+
+def load(rel):
+    with open(P(rel), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(rel):
+    with open(P(rel), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def src(rel):
+    return {"path": rel, "sha256": sha(rel)}
+
+
+def arm_id(label):
+    return label.split(" ", 1)[0]
+
+
+v6 = load(V6D + "/coverage-observed-v6.json")
+gaps6 = load(V6D + "/gaps-review-v6.json")
+plan = load(SPEC + "/coverage-plan-dp.json")
+spec_cases = {}
+for rel in (SPEC + "/cases-dp-1.json", SPEC + "/cases-dp-2.json", ADM["DP-1R"] + "/cases-dp-1r.json"):
+    for c in load(rel)["cases"]:
+        spec_cases[c["id"]] = (rel, c)
+cres = {s: load(ADM[s] + "/case-results.json") for s in ADM}
+nxt = {s: load(ADM[s] + "/next-task.json") for s in ADM}
+lead = {s: load(ADM[s] + "/" + LEAD[s]) for s in ADM}
+adj = {s: load(ADM[s] + "/" + ADJ[s]) for s in ADM}
+fa1 = load(ADM["DP-1"] + "/freeze-addendum-dp1.json")
+d1r2 = load(ADM["DP-1"] + "/review-r2/executor-disposition.json")
+sub_of, rows_cr = {}, {}
+for s in ADM:
+    for r in cres[s]["rows"]:
+        rows_cr[r["case"]] = dict(r, dir=r.get("dir") or r.get("attempt_dir"))
+        sub_of[r["case"]] = s
+SUBSTITUTE = {"DP-PK07A": "DP-PK07B"}
+CONSUMED = sorted(c for c, r in rows_cr.items() if r["kind"] != "CONTROL" and r["outcome"] == "PASS_CLIENT_OBSERVATION")
+NOT_CONSUMED = sorted(c for c, r in rows_cr.items() if r["kind"] != "CONTROL" and r["outcome"] != "PASS_CLIENT_OBSERVATION")
+assert NOT_CONSUMED == ["DP-PK07A"] and len(CONSUMED) == 16, (NOT_CONSUMED, CONSUMED)
+acc_cache = {}
+
+
+def acceptance(case):
+    if case not in acc_cache:
+        rel = ADM[sub_of[case]] + "/" + rows_cr[case]["dir"] + "/acceptance.json"
+        acc_cache[case] = (rel, load(rel))
+    return acc_cache[case]
+
+
+# ---------------------------------------------------------------- records applied by the BIND
+rec1r = {x["id"]: x["text"] for x in nxt["DP-1R"]["record_for_bind"]}
+rec2 = {x["id"]: x["text"] for x in nxt["DP-2"]["record_for_bind"]}
+read1 = {x["finding"]: x for x in fa1["readings"]}
+dp1_r2f01 = [x for x in d1r2["items"] if x["id"] == "R2-F01"][0]
+PROFILE_Q = ("Perfil distribuído keyless: artefatos publicados do cache (A1-A5 e A7, metadado M7) conferidos por sha contra "
+             "acquisition-ledger.json, pin %s adotado como pin separado da fonte (Q1), linux-x64, contenção sem rede, provider nem "
+             "credencial (Q3). build_link %s: nada liga estes artefatos à fonte do pin nem ao CLI compilado do perfil de referência." % (PIN, BUILD_LINK))
+SHIM_Q = ("Ramos de outras plataformas julgados sob o shim de plataforma no Linux (decisões em JavaScript sobre process.platform e "
+          "process.arch); criação de processo, delimitador e path.win32 de um Windows ou macOS real não são reivindicados.")
+DP1_F07 = "DP1-ADM/R1-F07 (leitura registrada): " + read1["R1-F07"]["text"]
+DP1_F04 = "DP1-ADM/R1-F04 (leitura registrada): " + read1["R1-F04"]["text"]
+DP1_PK09B02 = ("DP1-ADM/R1-F05/R2-F04 (leitura registrada): " + read1["R1-F05/R2-F04"]["text"] + " Fonte: %s#%s." % (
+    read1["R1-F05/R2-F04"]["source"]["path"], read1["R1-F05/R2-F04"]["source"]["pointer"]))
+DP1_DV3 = ("DV3 do DP-1 aceito pelo Lead (%s): RuntimeMaxSec 90 em vez de 45; prazo de serviço, não postura de contenção." % LEAD["DP-1"])
+DP1R_PK07 = "DP1R/PK07: " + rec1r["DP1R/PK07"]
+DP1R_PLATFORM = "DP1R/PLATFORM: " + rec1r["DP1R/PLATFORM"]
+DP1R_CONTRARY = "DP1R/CONTRARY: " + rec1r["DP1R/CONTRARY"]
+DP1R_REPL = ("Caso novo DP-PK07B (DP-1R, errata de fixture EDP1R-01) no lugar do DP-PK07A, INVALID_CAPTURE por defeito de fixture da "
+             "especificação; decisão do Lead %s (pk07 = %s); não é retry." % (LEAD["DP-1"], lead["DP-1"]["pk07"]["decision"]))
+DP2_F04 = "DP2-ADM/R1-F04: " + rec2["DP2-ADM/R1-F04"]
+DP2_F05 = "DP2-ADM/R1-F05: " + rec2["DP2-ADM/R1-F05"]
+DP2_F09 = "DP2-ADM/R1-F09: " + rec2["DP2-ADM/R1-F09"]
+DP2_D3 = ("Nenhuma qualificação do vocabulário D3 da C3-2 vem do DP-2 (DP2-ADM/R1-F10 e %s): o vocabulário está no driver do DP-2 e "
+          "nenhum caso o exerce." % LEAD["DP-2"])
+SIGTERM_Q = "Forma CLIENT_TERMINATED_SIGTERM aceita pelo caso: o close do SDK terminou o adapter por SIGTERM."
+DECL_TERM_Q = "Forma PASS_DECLARED_TERMINATION aceita pelo caso (término declarado do filho sintético)."
+REALCLI_Q = ("Forma REAL_CLI_KEYLESS: o binário publicado rodou só dentro do serviço, keyless; vaga condicional liberada pelo DIAG do "
+             "binário real.")
+NO_SIGNAL_Q = ("Os três sinais foram repassados; a espera de 5 s do NO_SIGNAL nunca venceu nos casos (só o DIAG exercitou NO_SIGNAL, com "
+               "400 ms; DP1-ADM/R2-F03).")
+RECORDS = [
+    {"id": "DP1-ADM/R1-F04", "kind": "leitura registrada", "text": read1["R1-F04"]["text"],
+     "applied_in": ["rows[source_contract=PK06|PK08]/observations_dp/qualifications", "arms_observed_dp[contract=PK06|PK08]"]},
+    {"id": "DP1-ADM/R1-F05/R2-F04", "kind": "leitura registrada", "text": read1["R1-F05/R2-F04"]["text"], "source": read1["R1-F05/R2-F04"]["source"],
+     "applied_in": ["arms_observed_dp[arm_id=PK09.B02]", "rows[source_contract=PK09]/observations_dp[case=DP-PK09A]/qualifications"]},
+    {"id": "DP1-ADM/R1-F07", "kind": "leitura registrada", "text": read1["R1-F07"]["text"],
+     "applied_in": ["rows[*]/observations_dp[sub_lot=DP-1]/qualifications"]},
+    {"id": "DP1-ADM/R2-F01", "kind": "registro (RECORDED)", "text": dp1_r2f01["note"],
+     "applied_in": ["records_for_bind_applied (registro do processo de reparo do DP-1; nenhuma leitura de caso depende dele)"]},
+    {"id": "DP1-ADM/DV3 (Lead)", "kind": "desvio aceito", "text": lead["DP-1"]["deviations"]["DV3"]["note"],
+     "applied_in": ["rows[*]/observations_dp[sub_lot=DP-1]/qualifications"]},
+    {"id": "DP1R/PK07", "kind": "registro para o BIND", "text": rec1r["DP1R/PK07"],
+     "applied_in": ["arms_observed_dp[arm_id=PK07.B03]", "rows[source_contract=PK07]"]},
+    {"id": "DP1R/PLATFORM", "kind": "registro para o BIND", "text": rec1r["DP1R/PLATFORM"],
+     "applied_in": ["arms_observed_dp[arm_id=PK07.B01]", "rows[source_contract=PK07]"]},
+    {"id": "DP1R/CONTRARY", "kind": "registro para o BIND", "text": rec1r["DP1R/CONTRARY"],
+     "applied_in": ["arms_observed_dp[contract=PK07]", "binding_rule"]},
+    {"id": "DP1R/BUILD", "kind": "registro para o BIND", "text": rec1r["DP1R/BUILD"], "applied_in": ["binding_rule", "rows[*]/observations_dp/build_link"]},
+    {"id": "DP2-ADM/R1-F04", "kind": "registro para o BIND", "text": rec2["DP2-ADM/R1-F04"],
+     "applied_in": ["arms_observed_dp[arm_id=PY19.B02]/observed_by[case=DP-PY19A]/parts[0]/credited_by"]},
+    {"id": "DP2-ADM/R1-F05", "kind": "registro para o BIND", "text": rec2["DP2-ADM/R1-F05"],
+     "applied_in": ["rows[source_contract=PY02|PY19]/observations_dp[case=DP-PY02P]/qualifications", "arms_observed_dp[arm_id=PY02.B11|PY19.B05]"]},
+    {"id": "DP2-ADM/R1-F09", "kind": "registro para o BIND", "text": rec2["DP2-ADM/R1-F09"], "applied_in": ["arms_observed_dp[arm_id=PY20.B02]"]},
+    {"id": "DP2-ADM/R1-F10", "kind": "registro para o BIND", "text": rec2["DP2-ADM/R1-F10"], "applied_in": ["binding_rule", "d3_vocabulary"]},
+]
+
+
+def case_qualifications(case):
+    s = sub_of[case]
+    r = rows_cr[case]
+    _, acc = acceptance(case)
+    q = [PROFILE_Q]
+    if any(p["id"] == "shim.platform_scoped" for p in acc["predicates"]):
+        q.append(SHIM_Q)
+    if r["capture_form"] == "REAL_CLI_KEYLESS":
+        q.append(REALCLI_Q)
+    if r["capture_form"] == "CLIENT_TERMINATED_SIGTERM":
+        q.append(SIGTERM_Q)
+    if r["capture_form"] == "PASS_DECLARED_TERMINATION":
+        q.append(DECL_TERM_Q)
+    if s == "DP-1":
+        q += [DP1_F07, DP1_DV3]
+    if case in ("DP-PK06A", "DP-PK08A"):
+        q += [NO_SIGNAL_Q, DP1_F04]
+    if case == "DP-PK09A":
+        q.append(DP1_PK09B02)
+    if case == "DP-PK07B":
+        q += [DP1R_REPL, DP1R_PK07, DP1R_PLATFORM, DP1R_CONTRARY]
+    if case == "DP-PY19A":
+        q.append(DP2_F04)
+    if case == "DP-PY02P":
+        q.append(DP2_F05)
+    if case == "DP-PY20A":
+        q.append(DP2_F09)
+    return q
+
+
+# ---------------------------------------------------------------- parts (arm_discrimination entries) and credit
+CREDIT_RESTRICTION = {("DP-PY19A", "PY19.B02"): {
+    "credited_by": ["api.steps_exact"],
+    "not_relied_on": {"proc.spawn_count_exact": ("conta só processos de adapter e não observa o spawn de outro binário; process_scan.extra vazio "
+                                                 "é registro amostrado (20 ms), não predicado (DP2-ADM/R1-F04)")}}}
+parts_by_arm, labels_by_arm = {}, {}
+for case in CONSUMED:
+    rel, c = spec_cases[case]
+    _, acc = acceptance(case)
+    pred = {p["id"]: p for p in acc["predicates"]}
+    for lab in c["branches_targeted"]:
+        labels_by_arm.setdefault(arm_id(lab), [])
+        if lab not in labels_by_arm[arm_id(lab)]:
+            labels_by_arm[arm_id(lab)].append(lab)
+    for idx, a in enumerate(c["arm_discrimination"]):
+        jb = [{"predicate": p, "class": pred[p]["class"], "ok": pred[p]["ok"]} for p in a["judged_by"]]
+        part = {"case": case, "entry_index": idx, "contrary": a["contrary"], "observable_if_contrary": a["observable_if_contrary"], "steps": a["steps"],
+                "judged_by": jb, "judged_by_passed": all(x["ok"] for x in jb)}
+        rs = CREDIT_RESTRICTION.get((case, a["arm"]))
+        if rs:
+            part.update(rs)
+            part["credited"] = all(pred[p]["ok"] for p in rs["credited_by"])
+        else:
+            part["credited_by"] = list(a["judged_by"])
+            part["credited"] = part["judged_by_passed"]
+        parts_by_arm.setdefault(a["arm"], []).append(part)
+
+# ---------------------------------------------------------------- arms
+NEW_IDS = plan["new_arm_ids"]["arms"]
+V5MAP = plan["new_arm_ids"]["v5_arm_map"]
+conds = plan["conditions"]
+v6_open_rows = {r["source_contract"] for r in v6["rows"] if r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE"}
+ARM_NOTES = {
+    "PY19.B02": DP2_F04,
+    "PY02.B10": ("O plano liga o PY02.B10 aos lados 'sem prefixo de PATH' do PY02.B02 e do PY02.B07 do v5 (v5_arm_map). O DP-PY19B (sem "
+                 "codex-path, PATH igual) e o DP-PY19C (com codex-path, PATH prefixado) distinguem o lado do PY02.B02, em que o codex_bin "
+                 "não é dado; o lado do PY02.B07 (codex_bin explícito pula o prefixo mesmo com codex-path instalado) não foi mirado por caso "
+                 "(ver v6_distributed_destination_resolved[id=R-PY02-4])."),
+    "PY02.B11": DP2_F05,
+    "PY19.B05": DP2_F05 + " Versão derivada do userAgent do initialize (sem serverInfo), igual à do codex-package.json; nenhum vínculo de build.",
+    "PY20.B02": DP2_F09,
+    "PK07.B01": DP1R_PLATFORM,
+    "PK07.B03": DP1R_PK07 + " O layout com .exe do win32 aparece nos caminhos executados dos passos 7 e 8 (parte do PK07.B01); a ausência de "
+                            "checagem de existência só foi distinguida no layout linux do passo 10.",
+    "PK09.B02": DP1_PK09B02,
+}
+arms_dp = []
+for aid in sorted(parts_by_arm, key=lambda x: (x[:2] != "PY", x)):
+    parts = parts_by_arm[aid]
+    ct = aid[:4]
+    if aid in NEW_IDS:
+        state = "NEW_ARM_ID_DP"
+    elif ct in v6_open_rows:
+        state = "G01_ARM_OF_OPEN_ROW_V6"
+    else:
+        state = "G01_ARM_OF_OBSERVED_ROW_V6"
+    entry = {"arm_id": aid, "contract": ct, "labels": labels_by_arm.get(aid, []), "state_before": state, "pin": PIN, "build_link": BUILD_LINK,
+             "profile": "distributed_keyless"}
+    if aid in NEW_IDS:
+        entry["new_arm_text"] = NEW_IDS[aid]
+    if aid in V5MAP:
+        entry["v5_arm_map"] = V5MAP[aid]
+    by_case = {}
+    for p in parts:
+        rel, acc = acceptance(p["case"])
+        s = sub_of[p["case"]]
+        oc = by_case.setdefault(p["case"], {"case": p["case"], "sub_lot": s, "capture_form": rows_cr[p["case"]]["capture_form"],
+                                            "pin": PIN, "build_link": acc.get("build_link"),
+                                            "acceptance": {"path": rel, "sha256": sha(rel)},
+                                            "adjudication_pointer": "%s/%s" % (ADM[s], ADJ[s]), "parts": []})
+        oc["parts"].append({k: v for k, v in p.items() if k != "case"})
+    entry["observed_by"] = list(by_case.values())
+    entry["parts_total"] = len(parts)
+    entry["parts_credited"] = sum(p["credited"] for p in parts)
+    entry["status_dp"] = ("DISTINGUISHED" if entry["parts_credited"] == len(parts) else ("PARTIAL_CREDIT" if entry["parts_credited"] else "NO_PART_CREDITED"))
+    entry["conditions_plan"] = conds.get(aid, [])
+    entry["residuals_plan"] = [r["id"] for r in plan["residuals"] if aid in (r.get("arms") or [])]
+    entry["residual_conditions_open"] = [x for x in conds.get(aid, []) if "residual" in x]
+    if aid in ARM_NOTES:
+        entry["note"] = ARM_NOTES[aid]
+    q = []
+    for c in by_case:
+        q += [x for x in case_qualifications(c) if x not in q]
+    entry["qualifications"] = q
+    arms_dp.append(entry)
+arm_index = {a["arm_id"]: a for a in arms_dp}
+targeted = sorted({a for r in plan["rows"] for a in r["arms_targeted"]})
+assert sorted(arm_index) == targeted, (sorted(arm_index), targeted)
+
+# ---------------------------------------------------------------- conditions of the plan
+cond_rows = []
+for aid in sorted(conds):
+    for x in conds[aid]:
+        e = {"arm": aid, "condition": x["condition"]}
+        if "cases" in x:
+            used = [SUBSTITUTE.get(c, c) for c in x["cases"]]
+            e.update(cases_plan=x["cases"], cases_used=used, substituted={c: SUBSTITUTE[c] for c in x["cases"] if c in SUBSTITUTE},
+                     all_cases_consumed=all(c in CONSUMED for c in used),
+                     arm_status_dp=arm_index[aid]["status_dp"] if aid in arm_index else None)
+        else:
+            e["residual"] = x["residual"]
+        cond_rows.append(e)
+cond_summary = {"conditions": len(cond_rows), "with_cases": sum(1 for e in cond_rows if "cases_plan" in e),
+                "with_cases_all_consumed": sum(1 for e in cond_rows if e.get("all_cases_consumed")),
+                "with_substitution_dp_pk07b": sum(1 for e in cond_rows if e.get("substituted")),
+                "to_residual": sum(1 for e in cond_rows if "residual" in e),
+                "reading": ("Condição com casos conta como alcançada pelo plano quando todos os seus casos (com o DP-PK07B no lugar do DP-PK07A) "
+                            "foram consumidos e o braço ficou DISTINGUISHED; a ligação condição-passo é a do plano congelado, não é refeita aqui, "
+                            "salvo as notas de braço (PK07.B03 e PY02.B10).")}
+
+# ---------------------------------------------------------------- residuals of the plan, resolved
+Q4_UNLOCK = {"R-PK06-3", "R-PK08-4"}
+residuals = []
+for r in plan["residuals"]:
+    e = {"id": r["id"], "namespace": "coverage-plan-dp.json", "contract": r["contract"], "item": r["item"], "class_plan": r["class"]}
+    for f in ("reason", "destination", "cases", "arms"):
+        if r.get(f):
+            e[f if f != "destination" else "destination_plan"] = r[f]
+    e["arms_by_condition"] = sorted(a for a, xs in conds.items() for x in xs if x.get("residual") == r["id"])
+    k = r["class"]
+    if k == "IN_SPEC":
+        used = [SUBSTITUTE.get(c, c) for c in r["cases"]]
+        ps = [p for a in r["arms"] for p in parts_by_arm[a] if p["case"] in used]
+        ok = bool(ps) and all(p["credited"] for p in ps) and all(c in CONSUMED for c in used)
+        e.update(cases_used=used, parts=len(ps), resolution="RESOLVED_BY_DP" if ok else "OPEN_PART_NOT_CREDITED", needs_new_decision=False,
+                 destination=None, unlocked_by=None)
+        if used != r["cases"]:
+            e["substitution"] = DP1R_REPL
+    elif k in ("OUT_NOT_AVAILABLE",):
+        e.update(resolution="NOT_AVAILABLE_AT_PIN", needs_new_decision=False, unlocked_by=None,
+                 destination="nenhuma: o artefato não existe para o pin (A6 openai-codex 0.153.4 NOT_AVAILABLE na aquisição)")
+    elif k == "OUT_PLATFORM_LIMIT":
+        e.update(resolution="OPEN_PLATFORM_LIMIT", needs_new_decision=True, unlocked_by="D-PLATFORM",
+                 destination="perfil de plataforma: acesso a Windows, macOS ou arm64 e, quando preciso, aquisição dos assets dessas plataformas")
+    elif k == "OUT_T4_GATE":
+        e.update(resolution="OPEN_T4_GATE", needs_new_decision=True, unlocked_by="D-T4", destination="gate T4 separado (turn, login, modelo ou credencial)")
+    elif k == "OUT_INPUT_NOT_AVAILABLE":
+        e.update(resolution="OPEN_NEEDS_ACQUISITION", needs_new_decision=True, unlocked_by="D-ACQUISITION",
+                 destination="aquisição com rede de release_version.py e scripts/update_sdk_artifacts.py do repositório do pin (pergunta T4 contingente de t3-assessment.json)")
+    elif k == "OUT_T3_QUESTION":
+        e.update(resolution="OPEN_T3_QUESTION", needs_new_decision=True, unlocked_by="D-T3-TLS",
+                 destination="pergunta T3 contingente (identidade TLS de github.com no sandbox), só depois do R-PY20-2")
+    elif k == "OUT_INSTALLER":
+        e.update(resolution="OPEN_INSTALLER_NOT_AUTHORIZED", needs_new_decision=True, unlocked_by="D-INSTALLER",
+                 destination="unidade com instalador ou build autorizados" if r["id"] != "R-PK04-2" else "nunca nesta trilha (instalação global); só com decisão própria")
+    elif k == "OUT_LATER_UNIT":
+        e.update(resolution="OPEN_LATER_UNIT_NO_NEW_DECISION", needs_new_decision=False, unlocked_by=None,
+                 destination="unidade posterior do perfil distribuído, se o Lead quiser (sem decisão nova do usuário)")
+    elif k == "OUT_NEW_ACQUISITION":
+        e.update(resolution="OPEN_NEEDS_ACQUISITION", needs_new_decision=True, unlocked_by="D-ACQUISITION",
+                 destination="nova aquisição com rede (assinaturas e attestations do registro), fora da lista da Q2")
+    elif k == "OUT_NOT_INDUCIBLE":
+        e.update(resolution="OPEN_NOT_INDUCIBLE", needs_new_decision=False, unlocked_by=None,
+                 reevaluated_in_bind=("Reavaliado neste BIND, como o plano pede: no DP-PY02P o close do SDK terminou o binário publicado por "
+                                      "SIGTERM (popen returncode -15 no CALLS_DONE) e o DIAG-DP-REAL-CLI-APPSERVER registrou saída em menos de 2 s; "
+                                      "o ramo kill não foi alcançado e o binário não tem modo de demora sem injeção. O lado com falha injetada "
+                                      "(ignore_sigterm) já foi observado no 2B (2B-PY02K)."),
+                 destination="sem caminho no perfil distribuído; segue registrado como aberto, sem plano")
+    elif k == "OUT_UNREACHABLE":
+        e.update(resolution="UNREACHABLE_AT_PIN", needs_new_decision=False, unlocked_by=None, destination=None)
+    elif k == "OUT_NO_DETERMINISTIC_WITNESS":
+        if r["id"] in Q4_UNLOCK:
+            e.update(resolution="OPEN_NO_DETERMINISTIC_PATH", needs_new_decision=True, unlocked_by="D-Q4",
+                     destination="só com testemunha privilegiada do handler do wrapper (ptrace), negada na Q4; sem ela, só janela temporal")
+        else:
+            e.update(resolution="OPEN_NO_DETERMINISTIC_PATH", needs_new_decision=False, unlocked_by=None,
+                     destination="sem testemunha determinística nesta trilha (mudança de fs entre chamadas internas)")
+    else:
+        raise SystemExit("unexpected class %s" % k)
+    residuals.append(e)
+res_counts = {}
+for e in residuals:
+    res_counts[e["resolution"]] = res_counts.get(e["resolution"], 0) + 1
+
+# ---------------------------------------------------------------- v6 residuals destined to the distributed profile
+v6res = {e["id"]: e for e in v6["residuals_c3"]}
+V6_DEST = {
+    "R-PY02-2": {"resolution": "RESOLVED_BY_DP", "needs_new_decision": False, "unlocked_by": None,
+                 "by": ["PY19.B02", "PY19.B03", "PY19.B04", "PY02.B09", "PY02.B10", "PY02.B11"],
+                 "reading": ("Caminho empacotado observado: sem codex_bin o SDK exige codex_cli_bin (DP-PY19A), o pacote exige codex-package.json e "
+                             "bin/codex (DP-PY19B), argv sem --config sem overrides (DP-PY19B), prefixo de PATH só com codex-path (DP-PY19B e "
+                             "DP-PY19C) e o binário publicado resolvido pelo codex_cli_bin com --config e CheckoutCapabilities (DP-PY02P).")},
+    "R-PY02-3": {"resolution": "OPEN_NOT_INDUCIBLE", "needs_new_decision": False, "unlocked_by": None, "by": [],
+                 "same_as": "R-PY02-4 de coverage-plan-dp.json", "reading": "Ver residuals_dp[id=R-PY02-4]/reevaluated_in_bind."},
+    "R-PY02-4": {"resolution": "PARTIAL_BY_DP", "needs_new_decision": False, "unlocked_by": None, "by": ["PY02.B10"],
+                 "reading": ("Lado do PY02.B02 resolvido: com codex_cli_bin instalado e sem codex-path o PATH fica igual (DP-PY19B, passo 12) e, "
+                             "com codex-path, o diretório entra na frente (DP-PY19C). Lado do PY02.B07 aberto: o ramo em que o codex_bin explícito "
+                             "pula o prefixo mesmo com codex-path instalado não foi mirado por caso (o plano o ligou ao PY02.B10 pelo v5_arm_map)."),
+                 "remaining": "PY02.B07 com codex_bin explícito e codex_cli_bin com codex-path instalado",
+                 "destination": "unidade posterior do perfil distribuído (árvore sintética de codex_cli_bin com codex-path e codex_bin explícito; sem decisão nova)"},
+    "R-PY05-3": {"resolution": "OPEN_DESTINATION_CORRECTED", "needs_new_decision": False, "unlocked_by": None, "by": [],
+                 "reading": ("O ramo de runtime 0.0.0 (CheckoutCapabilities com generate-json-schema) não é alcançado pelo binário publicado, "
+                             "que se declara 0.153.4 (DP-PY02P). O destino 'perfil distribuído' do v6 é corrigido: o ramo pede o CLI compilado do "
+                             "pin (versão 0.0.0, perfil de referência) em contenção keyless."),
+                 "destination": "unidade posterior do perfil de referência com o CLI compilado do pin, keyless e contido (sem decisão nova do usuário)"},
+    "R-PY08-2": {"resolution": "OPEN_LATER_UNIT_NO_NEW_DECISION", "needs_new_decision": False, "unlocked_by": None, "by": [],
+                 "reading": ("O leitor do SDK leu a resposta do initialize do binário publicado no DP-PY02P (registro, não parte distinguida de braço "
+                             "do PY08); pedidos do servidor e notificações reais não foram observados."),
+                 "destination": ("unidade posterior do perfil distribuído, se o app-server publicado emitir pedidos ou notificações keyless; se "
+                                 "exigir thread ou turn, gate T4")},
+    "R-PY16-2": {"resolution": "OPEN_T4_GATE", "needs_new_decision": True, "unlocked_by": "D-T4", "by": [],
+                 "reading": "Juntar a um turn ativo exige turn real; o perfil distribuído é keyless (Q3), como o v6 previa na nota.",
+                 "destination": "gate T4 separado"},
+    "R-TS01-3": {"resolution": "RESOLVED_BY_DP_PUBLISHED_ARTIFACT", "needs_new_decision": False, "unlocked_by": None, "by": ["PK02.B01", "PK02.B02"],
+                 "reading": ("findCodexPath com sucesso a partir do @openai/codex instalado observado no SDK TypeScript publicado (A7 dist/index.js) "
+                             "no DP-PK02A e na árvore publicada no DP-PK02R; observação do artefato publicado %s, sem vínculo de build com a "
+                             "fonte do pin (%s)." % (PIN, BUILD_LINK))},
+    "R-TS05-2": {"resolution": "OPEN_LATER_UNIT_NO_NEW_DECISION", "needs_new_decision": False, "unlocked_by": None, "by": [],
+                 "reading": "Nenhum caso do perfil distribuído mirou a precedência efetiva dos overrides repetidos na CLI.",
+                 "destination": ("unidade posterior do perfil distribuído, se houver leitura keyless da configuração efetiva no binário publicado; "
+                                 "senão gate T4")},
+    "R-TS09-3": {"resolution": "RESOLVED_BY_DP_PUBLISHED_ARTIFACT", "needs_new_decision": False, "unlocked_by": None,
+                 "by": ["PK02.B02", "PK03.B01", "PK03.B03", "PK03.B04"],
+                 "reading": ("pathDirs vindos do resolvedor (codex-path) observados no DP-PK02A e prependidos ao PATH do filho pelo exec do SDK "
+                             "publicado no DP-PK03A; observação do artefato publicado %s, sem vínculo de build com a fonte do pin (%s)." % (PIN, BUILD_LINK))},
+}
+v6_dest = []
+for rid, e in v6res.items():
+    if e["resolution"] != "OPEN_DECIDED_DISTRIBUTED_PROFILE":
+        continue
+    d = V6_DEST[rid]
+    for a in d["by"]:
+        assert arm_index[a]["status_dp"] == "DISTINGUISHED", a
+    v6_dest.append({"id": rid, "namespace": "coverage-plan-c3.json (v6)", "contract": e["contract"], "item": e["item"],
+                    "v6_resolution": e["resolution"], "v6_destination": e["destination"], **d})
+assert sorted(x["id"] for x in v6_dest) == sorted(V6_DEST)
+
+# ---------------------------------------------------------------- decisions that would still unlock something
+DECISIONS = [
+    ("D-T4", "Abrir o gate T4 (turn, login, modelo ou credencial reais) num perfil autorizado.", "usuário"),
+    ("D-PLATFORM", "Dar acesso a Windows, macOS e arm64 (e adquirir os assets dessas plataformas) para um perfil de plataforma.", "usuário"),
+    ("D-Q4", "Rever a Q4 e permitir uma testemunha privilegiada (ptrace ou fanotify) só dentro da contenção.", "usuário"),
+    ("D-Q5", "Autorizar outras versões de pydantic e de Node (Q5).", "usuário"),
+    ("D-ACQUISITION", "Autorizar uma aquisição nova com rede (entradas do bootstrap do PY20 e assinaturas e attestations do registro).", "usuário"),
+    ("D-T3-TLS", "Aceitar identidade TLS de github.com no sandbox para o download do bootstrap, depois da aquisição acima.", "usuário (T3)"),
+    ("D-INSTALLER", "Autorizar instaladores e build (pip, npm, pnpm, bun e o build do wheel) numa unidade própria.", "usuário"),
+    ("D-NATIVE", "Autorizar o BUILD nativo da SPEC0239 (cadeia 0029, 0030 e 0031).", "usuário"),
+    ("D-NEWCAP", "Autorizar capacidade nova de harness (injeção de falha de fs e do lado Node) numa unidade própria.", "Lead; T3 do usuário se mudar a postura de contenção"),
+]
+V6_UNLOCK = {"OPEN_T4_GATE": "D-T4", "OPEN_PLATFORM_LIMIT": "D-PLATFORM", "OPEN_DENIED_BY_USER": "D-Q4", "OPEN_NOT_AUTHORIZED": "D-Q5",
+             "OPEN_NATIVE": "D-NATIVE", "OPEN_NEW_CAPABILITY": "D-NEWCAP"}
+
+
+def named_arms(e):
+    out = set(e.get("arms") or []) | set(e.get("arms_by_condition") or [])
+    out |= set(ARM_RE.findall(e.get("item", "")))
+    for m in re.findall(r"\bB\d{2}\b", e.get("item", "")):
+        out.add("%s.%s" % (e["contract"], m))
+    return sorted(out)
+
+
+unlock = []
+for did, text, who in DECISIONS:
+    rs = [("v6:" + e["id"], e) for e in v6["residuals_c3"] if V6_UNLOCK.get(e["resolution"]) == did and e["id"] not in V6_DEST]
+    rs += [("v6:" + x["id"], dict(v6res[x["id"]], arms=x.get("by"))) for x in v6_dest if x["unlocked_by"] == did]
+    rs += [("dp:" + e["id"], e) for e in residuals if e.get("unlocked_by") == did]
+    unlock.append({"id": did, "sentence": text, "who": who, "residuals": [i for i, _ in rs],
+                   "contracts": sorted({e["contract"] for _, e in rs}), "arms_named": sorted({a for _, e in rs for a in named_arms(e)}),
+                   "residuals_without_named_arm": [i for i, e in rs if not named_arms(e)]})
+same_item = [{"v6": "R-PY02-5", "dp": "R-PY02-2", "item": "chave PATH no Windows"}]
+for u in unlock:
+    dup = sum(1 for x in same_item if "v6:" + x["v6"] in u["residuals"] and "dp:" + x["dp"] in u["residuals"])
+    u["distinct_items"] = len(u["residuals"]) - dup
+    u["arms_named_reading"] = ("braços cujo lado ainda aberto o resíduo nomeia (por id no item ou pela condição do plano); o braço pode já estar "
+                               "DISTINGUISHED em outras condições")
+    u["gain"] = "%d resíduos (%d itens distintos) em %d contratos; %d braços com lado aberto nomeado" % (
+        len(u["residuals"]), u["distinct_items"], len(u["contracts"]), len(u["arms_named"]))
+
+# ---------------------------------------------------------------- rows
+plan_rows = {r["source_contract"]: r for r in plan["rows"]}
+rows, status_changes, remaining = [], [], {}
+for r6 in v6["rows"]:
+    ct = r6["source_contract"]
+    pr = plan_rows.get(ct)
+    row = {"source_contract": ct, "gaps": r6["gaps"], "status_v6": r6["status"],
+           "v6_pointer": "%s/coverage-observed-v6.json#/rows[source_contract=%s]" % (V6D, ct)}
+    if pr is None:
+        row.update(plan_dp_row=None, cases_dp=[], status=r6["status"], status_changed=False,
+                   status_rule_applied="fora das linhas do plano do perfil distribuído; status do v6 mantido",
+                   arms_observed_dp=[], observations_dp=[])
+    else:
+        used = [SUBSTITUTE.get(c, c) for c in pr["cases"]]
+        obs = []
+        for case in used:
+            rel_c, c = spec_cases[case]
+            cr = rows_cr[case]
+            rel, acc = acceptance(case)
+            obs.append({"case": case, "sub_lot": sub_of[case], "slot": c["slot"], "role": c["role"], "kind": c["kind"],
+                        "replaces": "DP-PK07A" if case == "DP-PK07B" else None,
+                        "final_reading": acc["outcome"], "attribution": "CLIENT", "composition_rule": cr["composition_rule"],
+                        "capture_form": cr["capture_form"], "failed_predicates": cr["failed_predicates"], "known_bad": c["known_bad"],
+                        "arms": sorted({a["arm"] for a in c["arm_discrimination"] if a["arm"][:4] == ct}),
+                        "pin": PIN, "build_link": acc.get("build_link"), "profile": "distributed_keyless",
+                        "acceptance_service": {"path": rel, "sha256": sha(rel)}, "adjudication_pointer": "%s/%s" % (ADM[sub_of[case]], ADJ[sub_of[case]]),
+                        "qualifications": case_qualifications(case)})
+        all_ok = all(c in CONSUMED for c in used)
+        new_status = pr["status_if_all_cases_pass"] if all_ok else r6["status"]
+        changed = new_status != r6["status"]
+        row.update(plan_dp_row="%s/coverage-plan-dp.json#/rows[source_contract=%s]" % (SPEC, ct), cases_plan=pr["cases"], cases_dp=used,
+                   status=new_status, status_changed=changed,
+                   status_rule_applied=("status_if_all_cases_pass de coverage-plan-dp.json: todos os casos usados consumidos (PASS_CLIENT_OBSERVATION "
+                                        "com atribuição de cliente)" + ("; DP-PK07B no lugar do DP-PK07A por decisão do Lead" if used != pr["cases"] else "")
+                                        + ("" if changed else "; linha já OBSERVED_CLIENT_PARTIAL só acrescenta observações")),
+                   arms_targeted_plan=pr["arms_targeted"], arms_observed_dp=sorted(a for a in arm_index if a[:4] == ct),
+                   observations_dp=obs, pin=PIN, build_link=BUILD_LINK)
+        if changed:
+            status_changes.append({"source_contract": ct, "from": r6["status"], "to": new_status, "cases": used})
+    rres = [e for e in residuals if e["contract"] == ct]
+    v6rem = r6.get("remaining_after_c3") or {}
+    rem = {"v6_remaining_after_c3": "%s/coverage-observed-v6.json#/remaining_open_by_contract/%s" % (V6D, ct),
+           "plan_dp_residuals": [e["id"] for e in rres],
+           "resolved_by_dp": [e["id"] for e in rres if e["resolution"] == "RESOLVED_BY_DP"],
+           "still_open_dp": [{"id": e["id"], "item": e["item"], "resolution": e["resolution"], "needs_new_decision": e["needs_new_decision"],
+                              "unlocked_by": e["unlocked_by"], "destination": e["destination"]} for e in rres if e["resolution"].startswith("OPEN")],
+           "closed_without_observation_dp": [{"id": e["id"], "item": e["item"], "resolution": e["resolution"]} for e in rres
+                                             if e["resolution"] in ("UNREACHABLE_AT_PIN", "NOT_AVAILABLE_AT_PIN")],
+           "v6_distributed_destination": [{"id": x["id"], "resolution": x["resolution"], "destination": x.get("destination")} for x in v6_dest
+                                          if x["contract"] == ct],
+           "v6_still_open_other": [x for x in (v6rem.get("still_open") or []) if x["id"] not in V6_DEST],
+           "v6_outside_plan_open": v6rem.get("outside_plan_open") or []}
+    remaining[ct] = rem
+    row.update(remaining_after_dp=rem, carried_from_v6=copy.deepcopy(r6), whole_requirement_covered=False, functional_receipt=None, parity_credit=0)
+    rows.append(row)
+
+counts = {"OBSERVED_CLIENT_PARTIAL": sum(1 for r in rows if r["status"] == "OBSERVED_CLIENT_PARTIAL"),
+          "OPEN_REQUIRED_FUTURE_PROFILE": sum(1 for r in rows if r["status"] == "OPEN_REQUIRED_FUTURE_PROFILE")}
+parts_all = [p for a in arms_dp for oc in a["observed_by"] for p in oc["parts"]]
+cited = sorted({oc["acceptance"]["path"] for a in arms_dp for oc in a["observed_by"]})
+acq = load(ACQ + "/acquisition-ledger.json")
+v7 = {
+    "kind": "SDK_COVERAGE_OBSERVED_BINDING", "task": TASK, "version": 7,
+    "meaning": ("Versão 7 do mapa observado, ao lado do v6 (%s/coverage-observed-v6.json, não editado). Liga as 16 observações do perfil "
+                "distribuído keyless (10 do DP-1, 1 do DP-1R e 5 do DP-2) aos 44 contratos fonte, limitadas às partes distinguidas da tabela "
+                "arm_discrimination congelada em cases-dp-1.json, cases-dp-1r.json e cases-dp-2.json. OBSERVED_CLIENT_PARTIAL passa a cobrir "
+                "dois perfis, sempre identificados em cada observação: o de referência (fonte do SDK do pin contra peers sintéticos; v1 a v6) e "
+                "o distribuído keyless (artefatos publicados %s do cache, linux-x64, contenção sem rede). Não é qualificação, recibo funcional "
+                "nem paridade." % (V6D, PIN)),
+    "binding_rule": [
+        "Só os 16 casos PASS_CLIENT_OBSERVATION das admissões DP-1, DP-1R e DP-2 são consumidos; os CONTROL DP1-CTRL01, DP1R-CTRL01 e "
+        "DP2-CTRL01 só abriram o gate.",
+        "O DP-PK07A (INVALID_CAPTURE, defeito de fixture da especificação adjudicado em adjudication-dp1.json) não é consumido; o DP-PK07B "
+        "da DP-1R (caso novo com a errata EDP1R-01, não retry) o substitui por decisão do Lead (lead-decision-dv1-dv4.json#/pk07).",
+        "Parte = uma entrada de arm_discrimination do caso (braço, contrary, observable_if_contrary, passos, judged_by). Uma parte é "
+        "creditada quando os predicados em que o crédito se apoia (credited_by) passaram no acceptance.json de serviço; em geral "
+        "credited_by = judged_by. Exceção: no DP-PY19A o PY19.B02 é creditado só por api.steps_exact (DP2-ADM/R1-F04).",
+        "Todo resultado deste mapa leva build_link %s e o pin %s (Q1: pin separado da fonte); nenhum vínculo de build com a fonte do pin "
+        "nem com o CLI compilado do perfil de referência é afirmado." % (BUILD_LINK, PIN),
+        "Formas de captura: REAL_CLI_KEYLESS (DP-REAL01, DP-PY02P), PASS_DECLARED_TERMINATION (DP-PK06A, DP-PK08A), "
+        "CLIENT_TERMINATED_SIGTERM (DP-PY19B, DP-PY19C) e ARTIFACT_CHECK (DP-PK09A, DP-PY20A) só onde o caso as declara; a forma "
+        "REAL_CLI_KEYLESS do DP-PY02P vem da declaração do caso e a observação do binário publicado se apoia em realcli.* (DP2-ADM/R1-F05).",
+        "child.program_followed é predicado de sanidade: contrários que deixam de executar um filho esperado dariam INVALID_CAPTURE, não "
+        "MISMATCH, e não ocorreram (DP1R/CONTRARY); o PK07.B03 se apoia também no stderr do passo 10 do DP-PK07B (DP1R/PK07).",
+        DP2_D3,
+        "status_if_all_cases_pass de coverage-plan-dp.json: linha com todos os casos usados consumidos passa a OBSERVED_CLIENT_PARTIAL; "
+        "linha já observada só acrescenta observações.",
+        "Cada linha leva a linha do v6 sem mudança em carried_from_v6.",
+        "Nenhuma linha cobre o requisito inteiro; 0 recibos funcionais; 0 crédito de paridade.",
+    ],
+    "status_vocabulary": {
+        "OBSERVED_CLIENT_PARTIAL": ("Contrato com pelo menos uma observação parcial de cliente consumida, no perfil de referência (v1 a v6) ou no "
+                                    "perfil distribuído keyless (v7), cada observação com o seu perfil, pin e build_link; só os braços "
+                                    "distinguidos pela tabela de discriminação contam. Parte do contrato e todo o requisito seguem abertos."),
+        "OPEN_REQUIRED_FUTURE_PROFILE": "Contrato sem observação em perfil nenhum; nenhuma linha no v7.",
+    },
+    "status_vocabulary_v6": v6["status_vocabulary"],
+    "profiles": {
+        "reference_source": "fonte do SDK do pin contra peers sintéticos; Linux x86-64, CPython 3.12.3, pydantic 2.13.4, Node v24.20.0; v1 a v6",
+        "distributed_keyless": {"pin": PIN, "build_link": BUILD_LINK, "platform": "linux-x64",
+                                "artifacts": {a["id"]: {"result": a["result"], "sha256": (a.get("observed") or {}).get("sha256")} for a in acq["artifacts"]},
+                                "acquisition_ledger": src(ACQ + "/acquisition-ledger.json"),
+                                "user_decision": "Q1 pin separado 0.153.4; Q2 só a lista do Codex; Q3 keyless; Q4 negada; Q5 não autorizada"},
+    },
+    "sources": {
+        "coverage_observed_v6": src(V6D + "/coverage-observed-v6.json"), "gaps_review_v6": src(V6D + "/gaps-review-v6.json"),
+        "how_v3": src(V6D + "/HOW-next-profile-v3.md"), "coverage_plan_dp": src(SPEC + "/coverage-plan-dp.json"),
+        "cases_dp_1": src(SPEC + "/cases-dp-1.json"), "cases_dp_2": src(SPEC + "/cases-dp-2.json"),
+        "cases_dp_1r": src(ADM["DP-1R"] + "/cases-dp-1r.json"), "erratum_dp_1r": src(ADM["DP-1R"] + "/erratum-dp1r.json"),
+        "user_decision_q1_q4": src("../sdk-batch-2b2-binding/user-decision-distributed-profile-20261019.json"),
+        "lead_confirmation": src(SPEC + "/lead-confirmation-20261019.json"),
+        **{"%s_%s" % (k, s.lower().replace("-", "_")): src(ADM[s] + "/" + f) for s in ADM for k, f in (
+            ("adjudication", ADJ[s]), ("case_results", "case-results.json"), ("next_task", "next-task.json"), ("lead_decision", LEAD[s]),
+            ("unit_manifest", "unit-manifest.json"), ("commit_receipt", "commit-receipt.json"), ("state", "state.json"))},
+        "freeze_addendum_dp_1": src(ADM["DP-1"] + "/freeze-addendum-dp1.json"),
+        "disposition_dp_1_r2": src(ADM["DP-1"] + "/review-r2/executor-disposition.json"),
+        "input_verification": src("input-verification.json"),
+    },
+    "source_contract_count": len(rows), "counts_v6": v6["counts"], "counts": counts, "status_changes": status_changes,
+    "bound_cases_dp": {s: sorted(c for c in CONSUMED if sub_of[c] == s) for s in ADM},
+    "not_consumed": [{"case": "DP-PK07A", "outcome": "INVALID_CAPTURE", "attribution": adj["DP-1"]["items"][0]["attribution"],
+                      "replaced_by": "DP-PK07B", "lead_decision": "%s/%s#/pk07" % (ADM["DP-1"], LEAD["DP-1"])}],
+    "control_slots": [{"case": r["case"], "sub_lot": sub_of[r["case"]], "final_reading": "MISMATCH (CONTROL)", "counts_as_sdk_observation": False}
+                      for r in rows_cr.values() if r["kind"] == "CONTROL"],
+    "conditional_slots": {"DP-REAL01": "LIBERADA pelo DIAG-DP-REAL-CLI (DP-1); consumido", "DP-PY02P": "RUN pelo DIAG-DP-REAL-CLI-APPSERVER (DP-2); consumido"},
+    "lead_decisions": {s: {"path": "%s/%s" % (ADM[s], LEAD[s]), "sha256": sha(ADM[s] + "/" + LEAD[s])} for s in ADM},
+    "records_for_bind_applied": RECORDS,
+    "d3_vocabulary": {"qualified_by_dp": False, "reading": DP2_D3},
+    "arm_discrimination_consumed": {"parts_total": len(parts_all), "parts_credited": sum(p["credited"] for p in parts_all),
+                                    "parts_not_credited": sum(not p["credited"] for p in parts_all),
+                                    "parts_with_failed_judged_by": sum(not p["judged_by_passed"] for p in parts_all),
+                                    "parts_with_credit_restriction": [{"case": c, "arm": a, **v} for (c, a), v in CREDIT_RESTRICTION.items()]},
+    "arms_dp_counts": {"arms": len(arms_dp), "by_status": {s: sum(1 for a in arms_dp if a["status_dp"] == s) for s in ("DISTINGUISHED", "PARTIAL_CREDIT", "NO_PART_CREDITED")},
+                       "by_state_before": {s: sum(1 for a in arms_dp if a["state_before"] == s) for s in sorted({a["state_before"] for a in arms_dp})},
+                       "by_contract": {ct: sum(1 for a in arms_dp if a["contract"] == ct) for ct in sorted({a["contract"] for a in arms_dp})}},
+    "arms_observed_dp": arms_dp,
+    "new_arm_ids_dp": NEW_IDS, "v5_arm_map": V5MAP,
+    "conditions_check": {"summary": cond_summary, "rows": cond_rows},
+    "residuals_dp": residuals,
+    "residual_counts_dp": {"total": len(residuals), "by_resolution": res_counts,
+                           "needs_new_decision": sum(1 for e in residuals if e["needs_new_decision"])},
+    "v6_distributed_destination_resolved": v6_dest,
+    "v6_open_items_unchanged": {"outside_plan": v6["open_items_outside_plan"],
+                                "note": "os demais resíduos do v6 não destinados ao perfil distribuído seguem como no v6 (residuals_c3)"},
+    "decisions_that_would_unlock": unlock, "same_item_two_namespaces": same_item,
+    "remaining_open_by_contract": remaining,
+    "projection_check": {"source": SPEC + "/coverage-plan-dp.json#/projection_if_all_pass", "projected": plan["projection_if_all_pass"]["counts"],
+                         "observed_v7": counts, "rows_becoming_observed_projected": plan["projection_if_all_pass"]["rows_becoming_observed"],
+                         "rows_becoming_observed": [x["source_contract"] for x in status_changes],
+                         "confirmed": counts == plan["projection_if_all_pass"]["counts"]
+                         and sorted(plan["projection_if_all_pass"]["rows_becoming_observed"]) == sorted(x["source_contract"] for x in status_changes),
+                         "note": "a projeção contava com o DP-PK07A; o PK07 é observado pelo DP-PK07B"},
+    "cited_acceptance_references": len(cited), "cited_acceptance_documents": cited,
+    "rows": rows,
+    "six_gaps": "OPEN (ver gaps-review-v7.json)",
+    "all_509_catalog_records": "Inalterados NOT_RUN/null; nenhum recibo emitido.",
+    "functional_receipts": 0, "parity_credit": 0, "built_at": datetime.now(timezone.utc).isoformat(),
+}
+
+# ---------------------------------------------------------------- gaps v7
+DP_CT = set(plan_rows)
+GAP_DP = {
+    "GAP-PROVENANCE": {
+        "progress_after": "PRECISE_SOURCE_CONTRACT_BOUNDARIES_AND_ORACLES_MAPPED+CLIENT_OBSERVED_PARTIAL_DISTRIBUTED_PROFILE",
+        "progress_justification": ("Rótulo de progresso muda: o PY19 e o PY20 foram observados no perfil distribuído. O DP-PY20A conferiu o "
+                                   "digest do asset linux-x64 com o da release (M7), a tag não pura do wheel, a identidade do payload entre wheel "
+                                   "e asset membro a membro e a listagem dos seis nomes; o DP-PY02P viu o binário publicado se declarar 0.153.4 "
+                                   "pelo initialize; o DP-PY19A/B viu as exigências do codex_cli_bin. Proveniência continua sem prova: digest de "
+                                   "release não é assinatura nem attestation (R-PK09-2 fora da Q2), o SDK Python 0.153.4 não existe publicado "
+                                   "(A6, R-PY19-4/5) e nada liga os artefatos à fonte do pin (%s)." % BUILD_LINK),
+        "remaining_boundaries_after": [
+            "Assinatura, attestation e cadeia de build dos artefatos publicados (só digests de release conferidos; R-PK09-2 exige aquisição nova)",
+            "Vínculo de build entre o pin 0.153.4 publicado, a fonte do pin e o CLI compilado (NO_BUILD_LINK_DECLARED; SDK Python publicado inexistente, A6)",
+            "Bootstrap do runtime não executado (R-PY20-2 a R-PY20-5) e versão mínima 0.151.0 só com turn (R-PY19-7, T4)"]},
+    "GAP-PLATFORM-PACKAGING": {
+        "progress_after": "PRECISE_SOURCE_CONTRACT_BOUNDARIES_AND_ORACLES_MAPPED+CLIENT_OBSERVED_PARTIAL_DISTRIBUTED_PROFILE_LINUX_X64",
+        "progress_justification": ("Rótulo de progresso muda: os 12 contratos têm observação parcial de cliente. O perfil distribuído observou o "
+                                   "caminho empacotado do Python (codex_cli_bin, prefixo de PATH, binário publicado) e os wrappers e resolvedores "
+                                   "do npm (PK01-PK09) com árvores publicadas e sintéticas, sempre em linux-x64; os ramos de outras plataformas "
+                                   "foram julgados sob shim de plataforma, sem processo, delimitador ou path.win32 reais; nenhuma instalação por "
+                                   "gerenciador foi feita."),
+        "remaining_boundaries_after": [
+            "Windows, macOS e arm64 reais: processos, sinais, chave Path, .exe e os outros cinco assets da release (perfil de plataforma)",
+            "Instalações reais por pip, npm, pnpm, vite-plus e bun e o build do wheel (não autorizados)",
+            "Proxy real com chave e provider (T4) e bundle/typecheck do SDK TS publicado (unidade posterior)"]},
+}
+grows = []
+for g in gaps6["rows"]:
+    obs7 = [c for c in g["contracts"] if c in {r["source_contract"] for r in rows if r["status"] == "OBSERVED_CLIENT_PARTIAL"}]
+    t = [c for c in g["contracts"] if c in DP_CT]
+    arms_g = sorted(a["arm_id"] for a in arms_dp if a["contract"] in g["contracts"])
+    extra = GAP_DP.get(g["id"])
+    grows.append({"id": g["id"], "owner": g["owner"], "contracts": g["contracts"], "contracts_total": g["contracts_total"],
+                  "contracts_observed_client_partial_v6": g["contracts_observed_client_partial_v6"],
+                  "contracts_observed_client_partial_v7": obs7, "contracts_touched_by_dp": t, "arms_observed_dp": arms_g,
+                  "contracts_open": [c for c in g["contracts"] if c not in obs7], "status_before": g["status_after"], "status_after": "OPEN",
+                  "progress_before": g["progress_after"], "progress_after": extra["progress_after"] if extra else g["progress_after"],
+                  "progress_changed": bool(extra), "observed_count_changed": obs7 != g["contracts_observed_client_partial_v6"],
+                  "remaining_boundaries_v6": g["remaining_boundaries_unchanged"],
+                  "remaining_boundaries_after": extra["remaining_boundaries_after"] if extra else g["remaining_boundaries_unchanged"],
+                  "why_still_open": ("nenhum requisito dos donos tem qualificação com recibo; o perfil distribuído só acrescenta observação parcial "
+                                     "de cliente, com build_link %s" % BUILD_LINK if t else "o perfil distribuído não toca contratos desta lacuna"),
+                  "qualification": "NOT_RUN", "receipt": None, "whole_requirement_covered": False,
+                  **({"progress_justification": extra["progress_justification"]} if extra else {})})
+gaps7 = {"kind": "SDK_GAPS_REVIEW", "task": TASK, "version": 7, "source": gaps6["source"], "base": src(V6D + "/gaps-review-v6.json"),
+         "binding": "coverage-observed-v7.json",
+         "decision_rule": ("Uma lacuna só deixa OPEN quando todo o requisito dos donos tiver qualificação com recibo. Observação parcial de "
+                           "cliente, no perfil de referência ou no distribuído, muda apenas o rótulo de progresso; nunca o status."),
+         "rows": grows,
+         "summary": {"OPEN": sum(1 for g in grows if g["status_after"] == "OPEN"),
+                     "observed_v7": {g["id"]: "%d/%d" % (len(g["contracts_observed_client_partial_v7"]), g["contracts_total"]) for g in grows},
+                     "observed_count_changed": [g["id"] for g in grows if g["observed_count_changed"]],
+                     "progress_changed": [g["id"] for g in grows if g["progress_changed"]],
+                     "touched_by_dp": [g["id"] for g in grows if g["contracts_touched_by_dp"]]},
+         "functional_receipts": 0, "parity_credit": 0}
+
+for name, doc in (("coverage-observed-v7.json", v7), ("gaps-review-v7.json", gaps7)):
+    with open(os.path.join(UNIT, name), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+print(json.dumps({"counts": counts, "changes": [x["source_contract"] for x in status_changes], "arms": v7["arms_dp_counts"],
+                  "parts": {k: v for k, v in v7["arm_discrimination_consumed"].items() if k != "parts_with_credit_restriction"},
+                  "residuals": res_counts, "v6_dest": {x["id"]: x["resolution"] for x in v6_dest},
+                  "conditions": {k: v for k, v in cond_summary.items() if k != "reading"},
+                  "unlock": {u["id"]: u["gain"] for u in unlock}, "gaps": gaps7["summary"]}, ensure_ascii=False, indent=1))

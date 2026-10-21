@@ -1,0 +1,68 @@
+{
+  "kind": "T3_DECISION_PACKET",
+  "task": "HISO005-P2-NEXT-RECON-20261020B",
+  "observedAt": "2026-10-20T06:51:45.109347+00:00",
+  "questions": [
+    {
+      "id": "Q1",
+      "spec": "SPEC0245",
+      "futureTask": "HISO005-P2-BUILD-0245",
+      "question": "Você aprova o BUILD local da SPEC0245 (SHA 04ec44eab0a2110e7804890e8688e4556aa58cd944ef7b279e15d031ec911af4), que faz o kernel B6 ler `.tsx` como TSX e recusar o JSX no domínio sem premissa nova, tirando 560 diagnósticos de uma AST falsa e nenhuma prova nova, ciente de que violações que só a avaliação do JSX exporia continuam UNKNOWN?",
+      "contract": {
+        "materialized": "materialized/0245_b6_tsx_parse.md.txt",
+        "target": "docs/02_spec/0245_b6_tsx_parse.md",
+        "sha256": "04ec44eab0a2110e7804890e8688e4556aa58cd944ef7b279e15d031ec911af4"
+      },
+      "measured": "variante A: 12.283 → 11.723 (−560); .tsx 704 → 144 tuplas; UNKNOWN_PARSE 29 → 0; nada muda fora dos .tsx; contextos 229/256; normal = strict; 0 violações, 0 provas",
+      "review": "R1 REVISE (6 obrigatórios) → r2; R2 APPROVE_SPEC (0 obrigatórios); 8 P3 aplicados em r3 sem terceira rodada",
+      "recommendation": "aprovar"
+    },
+    {
+      "id": "Q2",
+      "spec": "SPEC0246",
+      "futureTask": "HISO005-P2-BUILD-0246",
+      "question": "Você aprova o BUILD local da SPEC0246 (SHA f22569a2851197c58f8e9dd55664ad7a6a7031f0412e39f2a98c2fdf5a2dd493), regra de prova B6 por escopo que só é sound sob a premissa nova de integridade do reino e que na raiz atual gera 0 provas (13 folhas triviais só se também aprovar R), ou adia como recomendado até fechar a lacuna do valor CJS?",
+      "contract": {
+        "materialized": "materialized/0246_b6_scope_proof.md.txt",
+        "target": "docs/02_spec/0246_b6_scope_proof.md",
+        "sha256": "f22569a2851197c58f8e9dd55664ad7a6a7031f0412e39f2a98c2fdf5a2dd493"
+      },
+      "measured": "escopo: 0 provas (2 tuplas globais de tsconfig); escopo+R: 13 K5 triviais, 0 de aresta, 0 K7; K0 −657 e NEW −150 tuplas brutas, 0 provas novas; workspace corrigido: mesmo resultado",
+      "review": "R1 REVISE (6) → r2; R2 REVISE (3 P1 de texto: P-REINO por todo o processo, sem premissa = PROVEN global, lacuna CJS ampla) → aplicados em r3 DEPOIS do orçamento, sem terceira rodada (diff spec0246-r2-to-r3.diff.txt)",
+      "recommendation": "adiar"
+    },
+    {
+      "id": "Q2a",
+      "decision": "P-REINO",
+      "gain": "0 provas sozinha; pré-requisito de qualquer prova por escopo"
+    },
+    {
+      "id": "Q2b",
+      "decision": "R (tsconfig não global)",
+      "gain": "0 → 13 provas K5 triviais com P-REINO; 0 de aresta"
+    },
+    {
+      "id": "Q2c",
+      "decision": "K0 (leitura de parâmetro público não é UNKNOWN)",
+      "gain": "−657 tuplas brutas; 0 provas novas"
+    },
+    {
+      "id": "Q2d",
+      "decision": "NEW (new de construtor intrínseco ECMAScript modelado, condicionado aos argumentos)",
+      "gain": "−150 tuplas brutas; 0 provas novas"
+    }
+  ],
+  "separateFinding": {
+    "file": "finding-k0-cjs-exports-gap.json",
+    "what": "o valor CJS é a última escrita de module.exports; em F3 (função) e S10 (ramos no topo) as engines v4 (main) e v5 (PR #9) dão PROVEN global com K7 para um import(x) nunca avaliado",
+    "impact": "falha de soundness da regra global atual; na raiz real não se manifesta (há UNKNOWN), mas qualquer raiz limpa com esse padrão receberia prova falsa",
+    "recommendation": "abrir tarefa T3 própria antes da SPEC0246 (correção: união das escritas alcançáveis verificada por checkExport, ou UNKNOWN_MUTATION; F3 e S10 como aceites)"
+  },
+  "codeFinding": {
+    "what": "legacy/packages/README.md casa com o glob de workspaces; o resolvedor recusa o mapa; 746 arestas @cvg/* de 458 importadores viram contidas",
+    "measured": "variante: contidas 1.535 → 790, diagnósticos 12.283 → 12.195, contextos 229 → 241/256, provas iguais",
+    "recommendation": "backlog próprio (mover o README ou alinhar o resolvedor ao npm)"
+  },
+  "expectedAnswerForm": "Ex.: \"Aprovo o BUILD local da SPEC0245\" e/ou decisão sobre a SPEC0246 e suas premissas; cada aprovação vale só para o SHA citado, copiado byte a byte para docs/02_spec (o arquivo da pasta é .md.txt)",
+  "composition": "ordem proposta: lacuna CJS fechada, depois 0245, depois 0246 (se aprovada)"
+}

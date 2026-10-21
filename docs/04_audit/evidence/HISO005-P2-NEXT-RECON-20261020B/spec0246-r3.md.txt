@@ -1,0 +1,210 @@
+# SPEC0246 — Prova B6 por escopo: fecho limpo prova o módulo, sob premissa de integridade do reino
+
+**PROPOSTA T3, revisão r3. BUILD ainda não autorizado.** Preparação T1 `HISO005-P2-NEXT-RECON-20261020B`, com links relativos a `docs/02_spec`. Implementação futura proposta: `HISO005-P2-BUILD-0246`. Mesma frente HISO005/B6. Autoridade: [constituição D-12/T3](../07_agents/AGENTS.md), [SPEC0236](0236_b6_semantic_boundary_proof.md) (K5, K7, regra de status, §5/§6), [SPEC0241](0241_b6_integral_body_installed_provenance.md), [SPEC0244](0244_b6_esm_module_shape.md). Plano: [0391](../03_build/0391_hiso005_semantic_proof_execution.md). A r2 corrigiu a [revisão r1](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0246-r1/review.json). A r3 aplica os três obrigatórios e os P3 da [revisão r2](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/review-0246-r2/review.json), **depois do orçamento de duas rodadas e sem terceira rodada** ([correções](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/r2-corrections-0246.json)). As mudanças são só de texto e do preditor; os números não mudam.
+
+## 1. CURRENT — problema e evidência
+
+**Regra global.** O kernel define `status` assim:
+
+- `VIOLATION` se há violação;
+- senão `UNKNOWN` se há qualquer UNKNOWN;
+- senão `PROVEN`.
+
+Provas K5 (módulo) e K7 (origem) só saem com PROVEN global. O `installed[]` só fica PROVEN nesse caso. A SPEC0236 §5/§6 só descarrega as premissas de integridade do carregador e dos intrínsecos sob PROVEN global. Na raiz `228e7918` há 11.393 tuplas e nenhuma prova.
+
+**Medição da regra por escopo** ([medição](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/scope-v5tags.json), preditor `operators/scope.py`):
+
+- **Como foi aplicada.** A regra da §3 foi aplicada fora do engine, sobre o despejo de uma cópia diagnóstica da v5. A cópia acrescenta três registros:
+  - o importador de cada aresta contida;
+  - a gramática nativa de todo arquivo;
+  - o callee de cada `new` recusado.
+
+  O relatório da cópia é igual, em diagnósticos e tuplas, ao do BUILD0244 (12.283).
+
+- **Raiz.** São 1.341 arquivos. 1.061 têm aresta de resolução ou aresta contida com alvo, e 1.094 têm alguma aresta ou registro contido. Há 1.535 ocorrências de aresta contida (o contador de cobertura), ou 1.506 registros distintos; quando o erro não traz arquivo, a tupla já vai para o importador (262 importadores, como os 487 `UNKNOWN_NATIVE_BUILTIN`). Vinte arquivos estão em ciclos de resolução; todos já têm `UNKNOWN_CYCLE`.
+- **Gramática nativa.** Falha em 111 arquivos:
+  - 50 por _parameter property_, que a remoção de tipos recusa;
+  - 60 por sintaxe ESM em arquivo de modo CJS (31 `.ts` e 29 `.tsx`);
+  - 1 outro.
+
+  Todos já têm tupla. Rodar a gramática para todos não muda nenhuma prova nesta raiz, e no checker os diagnósticos iriam de 12.283 para 12.394.
+
+| Cenário (ganhos em tuplas removidas, sem efeito líquido) |                                                      Bloqueadores globais |    K5 | Arestas | K7 AST | `installed[]` |
+| -------------------------------------------------------- | ------------------------------------------------------------------------: | ----: | ------: | -----: | ------------: |
+| Escopo (§3)                                              | 2 (`UNKNOWN_RESOLUTION_CONFIG` em `tsconfig.json` e `tsconfig.base.json`) | **0** |       0 |      0 |             0 |
+| Escopo + R                                               |                                                                         0 |    13 |       0 |      0 |             0 |
+| Escopo + R + K0 (−657 tuplas)                            |                                                                         0 |    13 |       0 |      0 |             0 |
+| Escopo + R + NEW (−150 tuplas)                           |                                                                         0 |    13 |       0 |      0 |             0 |
+| Escopo + R + K0 + NEW (−807 tuplas)                      |                                                                         0 |    13 |       0 |      0 |             0 |
+
+**A regra de escopo, sozinha, não gera prova nenhuma na raiz real.** Com R, as 13 provas são triviais:
+
+- todas são folhas sem aresta e sem origem;
+- 11 são de primeira parte: 7 exportam só constantes primitivas (as 6 rotas e `policy-version.ts`), 1 exporta uma função que devolve `null` (`noop-rag-source.ts`) e 3 só têm tipos, sem export de runtime;
+- 2 são arquivos instalados vazios de pacotes com dezenas de entradas sujas (zod, 1 de 76; `@tanstack/react-query`, 1 de 23), que portanto não fecham.
+
+Nenhum importador fecha limpo.
+
+As remoções K0 e NEW são brutas e contam só as tuplas da própria premissa:
+
+- K0: 657 tuplas de leitura de parâmetro;
+- NEW: 150 tuplas `new` de construtor intrínseco ECMAScript. Pelas etiquetas: Date 72, Set 58, Map 24, WeakMap 8, RegExp 8, WeakSet 4, Error 3, Uint8Array 2. Ficam de fora Promise, Proxy e objetos do host.
+
+As consequências ficam, então o efeito líquido é desconhecido. O piso de zero provas é o que se mediu.
+
+**Caminho até a primeira aresta.** Cada importador precisa de pelo menos 2 classes de bloqueador removidas. Esse piso é instável: com a correção de workspaces o fecho cresce, e dos 3 mais próximos só `legacy-composition.ts` continua em 2 classes. Os 3 mais próximos dependem de `UNKNOWN_EXPORT` mais `UNKNOWN_WORKSPACE_CONFIG` ou `UNKNOWN_WORKSPACE_LINK`. Em `apps/api/src/operator-session-route-boundary.ts` → `routes/health.ts`, mesmo com K0 e NEW, ainda faltam:
+
+- operador sobre a entrada;
+- retorno parcial;
+- `Set.prototype.has`.
+
+**Achado de código, fora desta SPEC.** O glob `legacy/packages/*` casa com `legacy/packages/README.md`. O resolvedor recusa o mapa de workspaces, e 746 arestas `@cvg/*` de 458 importadores viram contidas.
+
+A variante que ignora entrada não-diretório, como faz o npm ([medição](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/scope-v5wstags.json)), dá:
+
+- arestas contidas: de 1.535 para 790;
+- diagnósticos: de 12.283 para 12.195;
+- contextos: de 229 para 241, de 256;
+- provas: as mesmas, 0 e 13.
+
+A correção é de código (mover o README) ou do resolvedor, com backlog próprio.
+
+**Lacuna do K0, achado à parte** ([achado](../04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/finding-k0-cjs-exports-gap.json)). O valor CJS é a última escrita de `module.exports`, não a união das escritas alcançáveis. Isso vale para toda escrita que não seja uma única atribuição incondicional no topo: ramos de `if` ou bloco com condição não primitiva, corpos de função e repetição. Em F3 (reatribuição dentro de função) e S10 (`if ({}) module.exports = g … else module.exports = 1` no topo), as engines v4 e v5 dão **PROVEN global**, com K5 e com K7 para um `import(x)` nunca avaliado. É uma falha da regra global atual, não desta SPEC. A correção esperada é o valor CJS ser a união das escritas alcançáveis verificada por `checkExport`, ou `UNKNOWN_MUTATION`, com F3 e S10 como aceites. **A lacuna precisa estar fechada antes de qualquer BUILD desta SPEC.**
+
+## 2. PROPOSED — delta e premissa
+
+Uma regra de prova por escopo. Status global, recusas e `installed[]` ficam como estão. Um módulo cujo fecho não tem UNKNOWN atribuído, nem bloqueador global, nem ciclo, recebe K5; uma origem AST nesse módulo recebe K7.
+
+**A regra não vale sem premissa nova.** Um módulo sujo fora do fecho pode alterar o reino compartilhado e mudar o carregamento de um módulo limpo. Exemplos: o carregador CJS/ESM (`Module.prototype.require`, cache), intrínsecos (`Object`, K4) ou `globalThis`.
+
+No fixture S1 da revisão, as 6 tuplas ficam todas em `evil.cjs` e `m.cjs` teria K5. No Node 22.23.2, porém, `require('./m.cjs')` depois de `evil.cjs` carrega `products/p.cjs`.
+
+A menor regra sound tem duas formas:
+
+- **Com a premissa P-REINO** (decisão T3): durante todo o tempo de vida do processo em que código do fecho possa executar (antes, durante e depois da avaliação do fecho, inclusive funções exportadas e loads tardios), nenhum código fora do fecho altera o reino compartilhado. Isso cobre os carregadores CJS e ESM (`Module.prototype.require`, `Module._load`, `Module._resolveFilename`, `Module._extensions`, `require.cache`, `module.register` e `registerHooks`), `Object` e os intrínsecos do K4, e `globalThis`. A premissa vai registrada em `derivation.scope.premise`. Contraexemplos fora da premissa: S1 (antes) e S11 (depois da avaliação, por função exportada).
+- **Sem premissa:** a única condição sound é não haver efeito opaco em nenhum arquivo do perfil, que na prática é o próprio PROVEN global (SPEC0236 §6). Código não analisado pode tocar o reino de muitas formas: corpo de classe recusada com bloco estático (S12, cuja única tupla é `ClassDeclaration`), aresta contida para código não analisado e chamada opaca. Um subconjunto medido dessas classes, só como limite inferior, já basta para zerar a regra:
+  - `UNKNOWN_MUTATION` (57);
+  - `UNKNOWN_REFLECTION` (10);
+  - `UNKNOWN_NATIVE_BUILTIN` (254);
+  - `UNKNOWN_BINDING` global (859);
+  - `UNKNOWN_EXPORTED_MUTABLE_STATE` (335).
+
+  Na raiz real esse subconjunto tem 1.515 tuplas em 594 arquivos, e a conclusão de 0 provas vale a fortiori.
+
+**Consumo pelo checker.** Uma prova por escopo vale sob P-REINO. Por isso:
+
+- o checker a publica como resolução **condicional**, numa lista própria `conditionallyResolvedDiagnostics` com a premissa;
+- ela não entra em `resolvedDiagnostics` e não marca nenhum pacote como `verified`;
+- o status do relatório e a contagem de diagnósticos não mudam.
+
+`installed[]` continua PROVEN só com PROVEN global.
+
+Fora do delta:
+
+- R, K0, NEW e o achado de workspaces, que são perguntas próprias (§8);
+- a lacuna do K0, que é tarefa própria anterior;
+- domínio, limites, census e formatos.
+
+## 3. Contrato
+
+### 3.1 Atribuição (união)
+
+Uma tupla pertence a todos os donos que se aplicarem:
+
+1. **Arquivo analisado:** o arquivo.
+2. **Aresta contida:** o alvo e cada importador. Hoje a tupla vai só para o alvo, e o BUILD passa a registrar o importador.
+3. **`node_modules/<pacote>/package.json`:** o pacote, inclusive os pacotes aninhados (prefixo até o último `node_modules/`).
+4. **Global:** arquivo vazio, configuração da raiz (`package.json`, `package-lock.json`, `tsconfig*.json`) ou qualquer arquivo sem dono pelos casos 1–3.
+
+### 3.2 Gramática
+
+A gramática nativa (V8 e remoção de tipos) roda para todo arquivo analisado depois do corpo COMPLETED, fora do census, dentro do prazo global existente. A falha vira `UNKNOWN_RUNTIME_SYNTAX` no arquivo. Arquivo sem modo de módulo também vira `UNKNOWN_RUNTIME_SYNTAX`. `phases.grammar` vale `COMPLETED` quando todos os arquivos passaram pela verificação.
+
+### 3.3 Fecho e provas
+
+**Fecho** de um módulo: o módulo, os alvos das arestas de resolução e das arestas contidas (transitivamente) e os pacotes desses arquivos.
+
+**K5** sai sob P-REINO quando todas as condições valem:
+
+- não há violação;
+- as fases acquisition, body, postBody, grammar e revalidation estão COMPLETED;
+- não há bloqueador global;
+- nenhum arquivo, alvo contido ou pacote do fecho tem tupla atribuída;
+- o fecho não contém ciclo, seja componente fortemente conexo não trivial ou laço próprio em arestas de resolução ou de aquisição.
+
+O formato da prova é o atual, mais `derivation.scope` com o fecho, a premissa e o digest das premissas.
+
+**Arestas e origens:**
+
+- Uma prova de aresta é a K5 de um importador. As dependências dela são as K5 dos alvos.
+- Uma origem AST recebe K7 quando o módulo dela tem K5.
+- Origens de pacote instalado não passam por K7: continuam no `installed[]`, só com PROVEN global.
+
+**Ciclos e status:** a emissão nunca segue ciclo; módulo em ciclo não recebe prova, sem tupla global nova. O status global fica como hoje.
+
+### 3.4 Conservação
+
+- **Base:** o kernel imediatamente anterior (v6, se a SPEC0245 entrar antes). O BUILD exige despejo diagnóstico e medição nessa base.
+- **Preditor:** `operators/scope.py` desta recon, congelado por hash e alinhado à §3 (atribuição por união, `installed[]` só sob PROVEN global, exclusão de ciclo).
+- **Tuplas:** o multiset é o da base mais as `UNKNOWN_RUNTIME_SYNTAX` da §3.2, listadas; violações iguais; normal = strict; validation true.
+- **Provas:** as emitidas são exatamente as previstas pelo preditor. Na raiz real são 0, e a emissão só é exercitada por fixtures (MP01–MP04).
+
+### 3.5 Versão
+
+O kernel recebe a versão `semantic-kernel-v7-scope-proof`. A ordem é: lacuna do K0 fechada, depois 0245, depois 0246.
+
+## 4. O que permanece UNKNOWN
+
+- Tudo o que a base recusa.
+- Módulos e origens cujo fecho tem tupla, ciclo ou alcança bloqueador global.
+- Instalados fora do PROVEN global.
+
+Na raiz real, 0 provas. Com P-REINO e R, 13 folhas triviais.
+
+## 5. Integração e recuperação
+
+- **Fontes:**
+  - `scripts/boundary-semantic-engine.mjs`: atribuição, gramática, provas e emissão sem ciclo;
+  - `scripts/check-product-boundary.mjs`: lista condicional e versão.
+- **Teste novo:** `tests/b6-0246-scope-proof.test.js`.
+- **Migrações literais:** registradas antes da edição.
+- **Medição:** a raiz física usada nesta recon foi removida depois da medição. O BUILD precisa de uma receita de reconstituição com conferência do hash de cada input.
+- **Rollback:** a base.
+- **A promoção para diante de:**
+  - prova com tupla, ciclo ou bloqueador global no fecho;
+  - pacote marcado como verified;
+  - violação perdida;
+  - validation false;
+  - obrigatório de revisão.
+
+## 6. Riscos
+
+- **Premissa P-REINO:** é confiança nova e só se justifica sob decisão explícita.
+- **Atribuição:** tupla de aresta contida sem importador registrado deixaria um importador falsamente limpo, daí a §3.1(2).
+- **Tamanho da derivação:** cada prova carrega premissas por digest.
+- **Valor:** nulo na raiz atual.
+
+## 7. Aceites futuros — todos NOT_RUN
+
+| ID   | Critério                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MP01 | Primeira falha na base: módulo limpo ao lado de módulo sujo não recebe K5.                                                                                                                                                                                                                                                                                                                                                                                |
+| MP02 | K5 para fecho limpo, com dependência K5 do alvo. Nenhuma prova quando o fecho tem tupla, alvo contido com importador registrado, pacote com tupla, falha de gramática, ciclo (incluindo ciclo só de aquisição, S2) ou bloqueador global. S1 (módulo que altera o carregador): prova só sob P-REINO, marcada condicional. S11 (reino alterado depois da avaliação, por função exportada) e S12 (bloco estático de classe) documentam o limite da premissa. |
+| MP03 | K7 só para origem AST em módulo provado. Pacote com 2 entradas alcançadas e 1 provada: `installed[]` UNKNOWN, diagnóstico não resolvido, verified false.                                                                                                                                                                                                                                                                                                  |
+| MP04 | Status global, violações e census como na base. O checker põe as origens com K7 de escopo só em `conditionallyResolvedDiagnostics`. Essas origens continuam em `unresolvedOrigins`, e a partição resolved + unresolved = baseline se mantém.                                                                                                                                                                                                              |
+| MP05 | Raiz real: provas iguais às previstas pelo preditor congelado (hoje 0); tuplas = base + gramática (+111); normal = strict; validation true.                                                                                                                                                                                                                                                                                                               |
+| MP06 | Regressões B6 preservadas; crítica fresca sem obrigatórios; 16 gates Node22; consumidor fresco.                                                                                                                                                                                                                                                                                                                                                           |
+| MP07 | Promoção só do delta próprio; sem push, deploy ou produção.                                                                                                                                                                                                                                                                                                                                                                                               |
+
+## 8. Autoridade e decisões separadas
+
+A regra muda K5/K7 e a semântica de status da SPEC0236 e exige a premissa P-REINO. D-12/T3 exige revisão explícita pelo usuário. Cada decisão abaixo é uma pergunta T3 própria, com ganho medido nesta raiz:
+
+- **P-REINO**, necessária para qualquer prova por escopo. Ganho sozinha: 0 provas.
+- **R:** `UNKNOWN_RESOLUTION_CONFIG` de `tsconfig*.json` não é global. O Node 22 não lê tsconfig na resolução de runtime (`paths`, `extends`, `references`). `compilerOptions.plugins` são transformações do build do dist, e a pergunta precisa tratá-las à parte, pela proveniência compilada. Ganho, com P-REINO: de 0 para 13 provas K5 triviais; 0 de aresta.
+- **K0:** a leitura de parâmetro de superfície pública deixa de ser UNKNOWN. Ganho: −657 tuplas brutas e 0 provas novas.
+- **NEW:** `new` dos construtores intrínsecos ECMAScript listados cria objeto modelado, condicionado aos argumentos: iterável em Map, Set, WeakMap e WeakSet usa o protocolo de iteração; Error e Date fazem ToString/ToPrimitive de argumento objeto. Ganho: −150 tuplas brutas e 0 provas novas.
+
+Recomendação desta preparação: **não construir a SPEC0246 agora**. O valor hoje é nulo, a premissa é nova e a lacuna do K0 vem antes.
+
+Esta preparação não autoriza código, produção, release, dados reais, push ou deploy.

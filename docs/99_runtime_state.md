@@ -1,3 +1,18 @@
+# CONT-20261018-D9EF — estado em 20/10/2026, segunda atualização (Claude Code)
+
+- `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 20/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).
+- `last_completed_action`:
+  - **HISO-005:**
+    - O [recon 20261020B](04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/REPORT.txt) preparou a SPEC0245 (TSX) e a SPEC0246 (prova por escopo) e achou uma falha de soundness: o kernel usa a última escrita de `module.exports`, o que dá PROVEN falso em raiz limpa ([achado](04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/finding-k0-cjs-exports-gap.json)). Achou também o glob de workspaces que casa com `legacy/packages/README.md`, agora no backlog como `HISO005-P2-WORKSPACE-MAP` ([0370](03_build/0370_harness_product_isolation_backlog.md)).
+    - O usuário aprovou o BUILD local da [SPEC0245](02_spec/0245_b6_tsx_parse.md) e adiou a SPEC0246 até a correção do CJS. O BUILD0245 está neste PR: engine `semantic-kernel-v6-tsx-parse`, certify 16/16 na segunda tentativa (a primeira deu NO_GO por 3 timeouts num teste do Claude100 sob carga alta, sem relação com o delta), consumidor fresco PASS. A B6 caiu de 12.283 para 11.723 diagnósticos, com zero provas e zero violações, e continua `INCOMPLETE`. [Relatório](04_audit/evidence/HISO005-P2-BUILD-0245-20261020/REPORT.txt).
+    - A [SPEC0247](02_spec/0247_b6_cjs_export_soundness.md) corrige o valor CJS sem premissa nova. Na raiz real nenhuma tupla muda; nos 71 fixtures, fecha 18 provas falsas e 3 violações falsas, ao custo de 9 provas corretas e 2 violações verdadeiras que viram UNKNOWN. O usuário aprovou o BUILD local. [Decisão](04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/user-decision-20261020.json).
+  - **Codex100 (DX100-G02):** a [ligação v7](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-binding/coverage-observed-v7.json) tem 44 contratos `OBSERVED_CLIENT_PARTIAL` e 0 abertos. A R2 deu REVISE só de texto, aceito como [errata pelo lead](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-binding/lead-decision-r2-p2.json). O [HOW final](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-binding/HOW-final-g02.md) responde "ainda não" ao fechamento do G02. Zero recibos funcionais e zero crédito de paridade.
+
+- `next_action`:
+  1. HISO-005: BUILD0247 em andamento; depois, PR e revisão da SPEC0246 com a lacuna CJS fechada.
+  2. Codex100: o fechamento do G02 depende de decisões do usuário (G01, plano de runners e acessos das 22 famílias, oráculo e dono por requisito, plataformas, gate T4 e outro pin), listadas no HOW final.
+  3. Riscos registrados: folga de 27 contextos no `maxContexts` (15 com a correção de workspaces); tempo do worker de 154 a 188 s sob carga, contra o teto de 300 s; timeout de 15 s em `tests/claude100/reference-capture/controller.test.js` sob carga alta.
+
 # CONT-20261018-D9EF — estado em 20/10/2026 (Claude Code)
 
 - `status: IN_PROGRESS`. Substitui o `next_action` da entrada de 19/10 logo abaixo. [Claim](08_runtime/agent_coordination.md).

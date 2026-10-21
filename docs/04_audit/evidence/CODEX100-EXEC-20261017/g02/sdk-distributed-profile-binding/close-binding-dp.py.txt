@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+# DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE - estado da unidade e próxima tarefa (somente leitura das entradas).
+# Uso: python3 -I -B close-binding-dp.py.txt <repo_root> <phase>   (phase = pending | repaired | final)
+# pending: grava state.json (EXECUTED_PENDING_REVIEW) e next-task.json a partir do v7, das lacunas v7, da validação e do passo 0.
+# repaired: idem, com a R1 e o reparo (repair-r1.json) no bloco review; status REPAIRED_PENDING_R2.
+# final: idem, com o bloco review lido de review-rN/review.json e da disposição de cada rodada (review-rN/executor-disposition.json ou,
+# na R1 reparada, repair-r1.json), e o status pela regra abaixo.
+# Regra do status (lição DP1-ADM/R2-F04): P1 ou P2 só fecham como FIXED; P1/P2 aberto ou veredito REVISE dá REVIEW_REVISE; item levado
+# adiante dá COMPLETED_LOCAL_WITH_CARRIED_FINDINGS; senão COMPLETED_LOCAL.
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+ROOT, PHASE = sys.argv[1], sys.argv[2]
+UNIT = os.path.join(ROOT, "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-distributed-profile-binding")
+TASK = "DX100-G02:BIND-SDK-DISTRIBUTED-PROFILE"
+G02 = "docs/04_audit/evidence/CODEX100-EXEC-20261017/g02/"
+
+
+def load(rel):
+    with open(os.path.join(UNIT, rel), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sha(rel):
+    with open(os.path.join(UNIT, rel), "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def save(rel, doc):
+    with open(os.path.join(UNIT, rel), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+
+
+v7, g7, val, iv = load("coverage-observed-v7.json"), load("gaps-review-v7.json"), load("validation.json"), load("input-verification.json")
+review = {}
+status = "EXECUTED_PENDING_REVIEW"
+def disposition_of(rd):
+    if os.path.exists(os.path.join(UNIT, rd, "executor-disposition.json")):
+        return rd + "/executor-disposition.json", load(rd + "/executor-disposition.json")
+    if rd == "review-r1" and os.path.exists(os.path.join(UNIT, "repair-r1.json")):
+        return "repair-r1.json", load("repair-r1.json")
+    return None, None
+
+
+if PHASE in ("repaired", "final"):
+    rounds = sorted(d for d in os.listdir(UNIT) if d.startswith("review-r") and os.path.isfile(os.path.join(UNIT, d, "review.json")))
+    carried, problems = [], []
+    for rd in rounds:
+        rv = load(rd + "/review.json")
+        dpath, disp = disposition_of(rd)
+        dmap = {x["id"]: x for x in (disp or {}).get("dispositions", [])}
+        review[rd.upper().replace("REVIEW-", "")] = {
+            "path": rd + "/review.json", "sha256": sha(rd + "/review.json"), "verdict": rv["verdict"], "subject": rv["subject"],
+            "subject_sha256": rv["subject_sha256"],
+            "counts": {s: sum(1 for f in rv["findings"] if f["severity"] == s) for s in ("P1", "P2", "P3")},
+            "findings": [{"id": f["id"], "severity": f["severity"], "title": f["title"], "status": dmap.get(f["id"], {}).get("status")}
+                         for f in rv["findings"]],
+            "disposition": {"path": dpath, "sha256": sha(dpath)} if disp else None}
+    last = load(rounds[-1] + "/review.json")
+    _, last_disp = disposition_of(rounds[-1])
+    lmap = {x["id"]: x["status"] for x in last_disp["dispositions"]}
+    for f in last["findings"]:
+        st = lmap.get(f["id"])
+        if st is None:
+            problems.append("%s sem disposição" % f["id"])
+        if f["severity"] in ("P1", "P2") and st != "FIXED":
+            problems.append("%s %s com status %s" % (f["id"], f["severity"], st))
+        if st == "CARRIED_OVER":
+            carried.append(f["id"])
+    if PHASE == "repaired":
+        status = "REPAIRED_PENDING_R2"
+    elif last["verdict"] != "APPROVE" or problems:
+        status = "REVIEW_REVISE"
+    else:
+        status = "COMPLETED_LOCAL_WITH_CARRIED_FINDINGS" if carried else "COMPLETED_LOCAL"
+    review["status_rule"] = {"problems": problems, "carried_over": carried}
+
+res = v7["residual_counts_dp"]
+state = {
+    "kind": "UNIT_STATE", "program": "CODEX100 (IN_PROGRESS)", "task": TASK, "track": "T1 documental",
+    "lead": "Claude Code (CONT-20261018-D9EF); executor subagente", "status": status,
+    "write_scope": G02 + "sdk-distributed-profile-binding/**",
+    "anchors": {"v5_and_user_decision": "refs/remotes/origin/main (blobs iguais)",
+                "v6": "../sdk-continuation-3-binding/review-freeze-r2.json (v6, lacunas v6 e HOW v3 iguais ao freeze aprovado)",
+                "spec_dp": "cópias inputs/spec-dp dos commits do DP-1 e do DP-2 (blobs iguais)",
+                "admissions": {"DP-1": "9bb9184cc (conteúdo) e 3ca3fd3b0 (recibo)", "DP-1R": "0ab937df5 (conteúdo) e 44bb8b4d8 (recibo)",
+                               "DP-2": "c0e877e16 (conteúdo) e c9b9650bf (recibo)"},
+                "durability": ("nenhuma ref contém os seis commits das admissões DP (só os HEAD das worktrees destacadas); fora de qualquer ref "
+                               "ficam as pastas g02 sdk-continuation-3-1-admission, sdk-continuation-3-2-admission, sdk-continuation-3-binding, "
+                               "sdk-distributed-acquisition, sdk-distributed-profile-spec, sdk-distributed-profile-dp1-admission, -dp1r-admission, "
+                               "-dp2-admission e esta unidade; as demais pastas g02, inclusive o v5, estão em origin/main 24b1bbc8")},
+    "step0_input_verification": {"result": iv["result"], "checks": "%d/%d" % (sum(c["ok"] for c in iv["checks"]), len(iv["checks"])),
+                                 "record": "input-verification.json"},
+    "result": {
+        "map": "coverage-observed-v7.json", "v6_unchanged_sha256": v7["sources"]["coverage_observed_v6"]["sha256"],
+        "counts_v6": v7["counts_v6"], "counts_v7": v7["counts"], "status_changes": [x["source_contract"] for x in v7["status_changes"]],
+        "bound_cases_dp": v7["bound_cases_dp"], "not_consumed": v7["not_consumed"],
+        "control_slots_not_consumed": [x["case"] for x in v7["control_slots"]], "conditional_slots": v7["conditional_slots"],
+        "parts": {k: v for k, v in v7["arm_discrimination_consumed"].items() if k != "parts_with_credit_restriction"},
+        "credit_restrictions": v7["arm_discrimination_consumed"]["parts_with_credit_restriction"],
+        "arms": v7["arms_dp_counts"], "pin": "0.153.4", "build_link": "NO_BUILD_LINK_DECLARED",
+        "records_for_bind_applied": [x["id"] for x in v7["records_for_bind_applied"]],
+        "d3_vocabulary_qualified_by_dp": v7["d3_vocabulary"]["qualified_by_dp"],
+        "residuals_dp": res, "v6_distributed_destination_resolved": {x["id"]: x["resolution"] for x in v7["v6_distributed_destination_resolved"]},
+        "conditions": {k: v for k, v in v7["conditions_check"]["summary"].items() if k != "reading"},
+        "projection_confirmed": v7["projection_check"]["confirmed"],
+        "gaps": {"OPEN": g7["summary"]["OPEN"], "observed_v7": g7["summary"]["observed_v7"],
+                 "progress_changed": g7["summary"]["progress_changed"], "record": "gaps-review-v7.json"},
+        "decisions_that_would_unlock": {u["id"]: u["gain"] for u in v7["decisions_that_would_unlock"]},
+        "how_final": {"path": "HOW-final-g02.md", "sha256": sha("HOW-final-g02.md")},
+        "g02_can_close": ("Ainda não. O recorte SDK do G02 (perfis de fonte e distribuído) terminou o que estava planejado e o que resta dele "
+                          "cabe sem decisão nova do usuário ou depende das decisões listadas; o cartão, porém, tem aceite mais amplo e depende "
+                          "do DX100-G01. Fecha com cinco condições do Lead, nenhuma do usuário: G01 fechado antes (ou justificativa explícita); "
+                          "destino aceito para os oráculos i64 INCOMPLETE e os 11 edges de ID (sugestão DX100-A01); plano de runners e acesso "
+                          "por família aceito; dono para os itens sem decisão nova; seis commits DP ancorados e pastas fora de ref levadas à "
+                          "main (ver HOW-final-g02.md)."),
+        "user_decisions": [u["id"] for u in v7["decisions_that_would_unlock"] if u.get("decision_owner") == "USER"],
+        "lead_decisions": [u["id"] for u in v7["decisions_that_would_unlock"] if u.get("decision_owner") == "LEAD"]},
+    "validation": {"result": val["result"], "errors": len(val["errors"]), "negative_controls_rejected": val["negative_controls_rejected"],
+                   "record": "validation.json"},
+    "scripts": ["verify-inputs-dpbind.py.txt", "build-binding-dp.py.txt", "validate-binding-dp.py.txt", "close-binding-dp.py.txt"],
+    "formatting": {"tool": "prettier do node_modules do repositório, --ignore-path /dev/null --write",
+                   "order": ["verify-inputs-dpbind.py.txt grava input-verification.json; prettier",
+                             "build-binding-dp.py.txt grava coverage-observed-v7.json e gaps-review-v7.json (o v7 liga o sha do input-verification.json formatado); prettier",
+                             "validate-binding-dp.py.txt grava validation.json (liga o sha do v7 e das lacunas v7 formatados); prettier",
+                             "HOW-final-g02.md escrito à mão; prettier",
+                             "close-binding-dp.py.txt grava state.json e next-task.json; prettier"],
+                   "effect": "Só a forma (arrays curtos numa linha e quebras); o conteúdo JSON é o do script."},
+    "budget": {"services": 0, "reviews": "%d/2" % len([k for k in review if k.startswith("R")]), "grouped_repairs": "%d/1" % (
+        1 if os.path.exists(os.path.join(UNIT, "repair-r1.json")) else 0)},
+    "repair": {"path": "repair-r1.json", "sha256": sha("repair-r1.json"), "preimages": "archives/r1-preimages/"}
+              if os.path.exists(os.path.join(UNIT, "repair-r1.json")) else None,
+    "closing_pending": [x for x, f in (("ledger-delta-cont-d9ef.md", "ledger-delta-cont-d9ef.md"), ("secret-scan.json (gitleaks, código de saída)", "secret-scan.json"))
+                        if not os.path.exists(os.path.join(UNIT, f))] + ([] if PHASE == "final" else ["links e higiene depois da última escrita"]),
+    "review": review or None,
+    "functional_receipts": 0, "parity_credit": 0,
+    "note": ("Observação de cliente não é paridade. Sem serviço, SDK, rede, PG, commit ou branch; Docker só para o gitleaks. Ledgers, "
+             "coordenação, 0384-0386 e catálogo central não editados."),
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+save("state.json", state)
+nt = {
+    "task": "DX100-G02:CLOSE-OR-CONTINUE (proposta; decisão do Lead)", "previous_task": TASK, "previous_status": status,
+    "status": "READY_PENDING_LEAD_DECISION", "track": "T1 documental", "t3_required": False, "t4_required": False,
+    "resume_checkpoint": G02 + "sdk-distributed-profile-binding/state.json",
+    "inputs": {"how_final": G02 + "sdk-distributed-profile-binding/HOW-final-g02.md", "map_v7": G02 + "sdk-distributed-profile-binding/coverage-observed-v7.json",
+               "gaps_v7": G02 + "sdk-distributed-profile-binding/gaps-review-v7.json"},
+    "options": [
+        {"id": "A", "what": ("Preparar o fechamento do DX100-G02 como habilitador, nas cinco condições do HOW-final-g02.md: G01 fechado antes "
+                             "(ou justificativa explícita); destino aceito para os oráculos i64 INCOMPLETE e os 11 edges de ID (sugestão "
+                             "DX100-A01); plano de runners e acesso por família aceito; dono para os itens sem decisão nova (unidade G02 ou os "
+                             "cartões D01, A01 e Z02, pelo mapa do HOW); seis commits DP ancorados e pastas fora de ref levadas à main."),
+         "needs_user_decision": False},
+        {"id": "B", "what": ("Manter o G02 aberto para as unidades que cabem sem decisão nova do usuário (HOW-final-g02.md, seção 'O que ainda "
+                             "cabe sem decisão nova do usuário')."), "needs_user_decision": False},
+        {"id": "C", "what": "Levar ao usuário a lista de decisões que destravariam algo (HOW-final-g02.md, nove itens), se o Lead quiser.",
+         "needs_user_decision": True},
+    ],
+    "housekeeping": {"order": ["ancorar antes os seis commits das admissões DP (9bb9184cc, 3ca3fd3b0, 0ab937df5, 44bb8b4d8, c0e877e16, c9b9650bf) "
+                               "por ref, tag ou bundle registrado, por decisão do Lead; hoje só as worktrees destacadas os ancoram",
+                               "só depois apagar as worktrees e os runtimes privados das unidades DP (/mnt/dados/cvg-work/cvg-codex100-dp1-*, "
+                               "-dp1r-* e -dp2-*)",
+                               "manter o cache distribuído (/mnt/dados/cvg-work/cvg-codex100-distributed-cache-20261019) enquanto houver unidade "
+                               "da seção 'O que ainda cabe sem decisão nova do usuário' do HOW; apagá-lo pediria aquisição nova"],
+                     "irreversible": "apagar as worktrees antes de ancorar deixa os commits sujeitos a prune"},
+    "not_authorized_now": ["rede ou nova aquisição", "provider, credencial, login, turn ou chamada a modelo (gate T4)",
+                           "capability do kernel ou privilégio (Q4)", "npm/pip install ou instalação global", "outras versões de pydantic ou Node (Q5)",
+                           "push", "produção", "SPEC0239 BUILD"],
+    "functional_receipts": 0, "parity_credit": 0, "created_at": datetime.now(timezone.utc).isoformat()}
+save("next-task.json", nt)
+print(status, json.dumps(review.get("status_rule") if review else None, ensure_ascii=False))

@@ -1,0 +1,67 @@
+Agente: tipo Plan (sem Write/Edit), novo, não-fork, lançado em 2026-10-20T11:23Z. Texto enviado, byte a byte abaixo.
+
+Você é um crítico independente e novo, sem contexto anterior, de uma proposta de SPEC T3 no repositório
+/home/ricardo/Área de trabalho/cvg-operational-harness (branch main, checkout compartilhado com outros agentes).
+Sua tarefa é REVISAR (não planejar implementação): ler, testar com fixtures e devolver um veredito em JSON.
+
+REGRAS (obrigatórias)
+- Somente leitura. Não edite, crie, mova nem apague nada no repositório (inclusive docs/04_audit/evidence), nem em
+  /mnt/dados/cvg-work/cvg-d9ef-pr9-20261020 ou /mnt/dados/cvg-work/cvg-hiso005-eval-228e.
+- Para rodar fixtures, você pode criar arquivos SOMENTE dentro de
+  /mnt/dados/cvg-work/cvg-hiso005-cjs-spec-runtime-20261020/critic-R1/ (crie a pasta).
+- Sem commit, push, branch, PG, porta ou rede. Não use cvg-codex100-*, cvg-dx100-*, cvg-hiso005-build0245-* nem nada do Codex.
+- Node 22: /home/ricardo/.nvm/versions/node/v22.23.2/bin/node (a engine recusa outro Node). Python sempre com -I.
+- Antes de rodar engines, confira `uptime`; com load acima de 12, espere (sem laço de sleep curto; rode depois).
+- Não mexa nas cópias de engine; leia-as. Não mate processos de ninguém.
+
+OBJETO
+- Texto: docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/spec0247-r1.md.txt (sha256 aca9d747bb8ca28906b7e82c6f825354fbbf080fb9b512972cbf364e03bffe16).
+  É a proposta SPEC0247 (valor exportado CJS no kernel B6). Os links do texto são relativos a docs/02_spec.
+- Primeira rodada de revisão (R1). Congelamento: contract-freeze-r1.json. Orçamento: 2 rodadas, 1 reparo.
+
+CONTEXTO MÍNIMO
+- O kernel B6 (scripts/boundary-semantic-engine.mjs) é uma interpretação abstrata que diz se o núcleo importa o
+  produto (products/). Regra global: qualquer tupla UNKNOWN na execução impede todas as provas; sem UNKNOWN nem
+  violação, a execução sai PROVEN, com K5 por arquivo e K7 por origem léxica (ex.: import(x)).
+- O achado (docs/04_audit/evidence/HISO005-P2-NEXT-RECON-20261020B/finding-k0-cjs-exports-gap.json) mostrou PROVEN
+  falso quando module.exports é reescrito em função (F3) ou em ramos de if no topo (S10).
+- O usuário adiou a SPEC0246 (prova por escopo) até fechar essa lacuna.
+- Formato e precedentes: docs/02_spec/0236_b6_semantic_boundary_proof.md (§5, K0–K7), 0244_b6_esm_module_shape.md,
+  0245_b6_tsx_parse.md. Constituição: docs/07_agents/AGENTS.md (D-12).
+- Evidência da unidade: docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/ (fixtures.json,
+  fixture-summary.json, probe-*.json, real-conservation.json, real-*-summary.json, tools-variants.json,
+  variant-*.diff.txt, operators/*.py). Uma medição sobre a base v6 está em andamento e não faz parte desta rodada.
+
+ENGINES PRIVADAS (só leitura; já com typescript pinado ao lado)
+- base v5: /mnt/dados/cvg-work/cvg-hiso005-cjs-spec-runtime-20261020/tools-v5/scripts/boundary-semantic-engine.mjs
+  (sha256 c724567f…, igual à main remota 6c9fc651)
+- proposta: /mnt/dados/cvg-work/cvg-hiso005-cjs-spec-runtime-20261020/tools-v6t2/scripts/boundary-semantic-engine.mjs
+  (diff contra a v5 em variant-v6t2.diff.txt)
+- Como rodar um fixture: veja operators/probe.py. Em resumo: crie uma raiz com package.json, entry.js e m.js;
+  calcule a origem com semanticOriginId; chame runSemanticBoundary({root, starts:['entry.js'], origins, installed:[],
+  compiled:{status:'UNAVAILABLE',files:[]}}) via `node -e` com env mínimo (PATH com o Node 22, LANG=C, TZ=UTC).
+  A raiz precisa ser um caminho real (realpath) e absoluto. Exemplo pronto em operators/probe.py (você pode copiar a
+  lógica para um script seu dentro de critic-R1/).
+
+O QUE AVALIAR
+1. Soundness. Procure um programa CJS pequeno em que a proposta dê PROVEN mas, em runtime, código não analisado seja
+   alcançado pelo valor exportado (module.exports, exports, this de topo etc.), ou em que o valor CJS fique errado sem
+   raiz no próprio módulo. Teste na engine proposta e na v5. Ideias: ciclos, if aninhado, return, require.cache,
+   Object.defineProperty, alias de exports, getters, module.exports em subexpressão, sombra, TS em modo CJS,
+   importador que muta o valor, interação com o objeto inicial opaco e com checkExport.
+2. Contrato (§3): precisão e completude para o BUILD — definições, categorias fechadas, posições excluídas, efeitos,
+   conservação (§3.6) verificável tupla a tupla, versão, aceites (§7). O texto e o diff da variante coincidem?
+3. Números da §1 e da tabela de variantes conferem com a evidência?
+4. É a menor correção sound? As alternativas estão descritas com justiça?
+5. Há premissa nova escondida, ou algum caminho para PROVEN novo?
+6. Clareza do português (frases simples) e se a decisão do usuário cabe numa pergunta simples.
+
+SAÍDA
+Sua resposta final deve ser APENAS um objeto JSON (sem texto fora dele), no formato:
+{"round":"R1","specSha256":"…","verdict":"APPROVE_SPEC" ou "REVISE",
+ "mandatory":[{"id":"R1-01","severity":"P1" ou "P2","where":"§…","problem":"…","evidence":"fixture/comando/resultado","fix":"…"}],
+ "optional":[{"id":"R1-P3-01","severity":"P3","where":"…","problem":"…","fix":"…"}],
+ "testsRun":[{"name":"…","files":{"…":"…"},"engine":"v5|v6t2","status":"…","unknownReasons":["…"]}],
+ "notes":"…"}
+P1 = obrigatório (soundness, contrato errado ou incompleto, número errado). P2 = obrigatório menor (texto que induz
+erro no BUILD ou na decisão). P3 = opcional. Seja concreto e só aponte o que você confirmou.

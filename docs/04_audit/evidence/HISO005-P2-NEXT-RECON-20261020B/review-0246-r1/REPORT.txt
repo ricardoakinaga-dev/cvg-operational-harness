@@ -1,0 +1,42 @@
+Revisão R1 da SPEC0246 (prova B6 por escopo) — crítico novo, não-fork
+Tarefa: HISO005-P2-NEXT-RECON-20261020B
+Rascunho: spec0246-r1.md.txt (sha256 803304ce424533888d469eae0dfbac801cbeed10205adffb54bd28061758c321)
+Veredito: REVISE (2 P1, 4 P2, 9 P3 opcionais)
+
+O que confere
+- Recalculei a regra com um script próprio, independente do scope.py, sobre o despejo v5tags.
+  - Escopo puro: 0 provas, com 2 tuplas globais (UNKNOWN_RESOLUTION_CONFIG em tsconfig.json e tsconfig.base.json).
+  - Escopo + R: 13 K5, todas folhas sem aresta, sem origem e com gramática OK. Provas de aresta e K7: 0.
+  - Atribuição como união (letra da SPEC) e como precedência (scope.py) dão o mesmo resultado nesta raiz. A variante v5wstags também.
+- Tuplas fora de arquivo analisado: 407 = 288 manifestos de pacote não alcançado + 117 alvos contidos + 2 globais. Classificação correta. Não achei "18 globais" em nenhum artefato.
+- A cópia diagnóstica é fiel: diagnósticos, unknowns e usage iguais ao relatório final do BUILD0244 (12.283).
+- Achado de workspaces confirmado e bem posto fora da SPEC:
+  - 746 registros contidos, com alvo legacy/packages/README.md, em 458 importadores;
+  - na variante: contidas 1.535 → 790, diagnósticos 12.283 → 12.195, contextos 229 → 241.
+- O checker resolve origens AST por K7 sem olhar o status global (proofByOrigin depende só de valid).
+- O texto é honesto ao dizer que a regra sozinha dá 0 provas e, com R, 13 triviais.
+
+Obrigatórios
+- R1-01 (P1, §2/§3.3/§8): premissa nova de integridade do reino.
+  - Um módulo sujo fora do fecho pode alterar o carregador CJS/ESM ou o Object/K4. A SPEC0236 §5/§6 só descarrega isso sob PROVEN global.
+  - Fixture S1: com a engine v5, as 6 tuplas ficam todas em evil.cjs. Pela §3.3, m.cjs teria K5. No Node 22.23.2 real, com evil carregado antes, require(m) carrega products/p.cjs.
+  - Pedido: declarar a premissa como T3 (ou uma condição global sound) e tirar "sem premissa nova".
+- R1-02 (P1, K7 instalado): origens instaladas não são K7; passam por installed[] e closedInstalled (verified = true).
+  - O .filter(Boolean) do engine, sem a guarda global, marca PROVEN um pacote com uma única entrada provada.
+  - Na raiz, com R, isso acontece com zod (1 de 76) e @tanstack/react-query (1 de 23). Viola a SPEC0236 (graph.installed).
+  - Pedido: especificar installed[] sob escopo — todas as entradas, ≥1 entrada, sem tupla do pacote — com fixture.
+- R1-03 (P2): emissão com ciclo não definida.
+  - Na fixture S2, um ciclo só de aquisição, sem tupla nenhuma, faz a v5 estourar a pilha no emit. O resultado é um UNKNOWN_CYCLE global e todas as provas zeradas.
+  - Sob escopo, isso quebraria a §3.4.
+- R1-04 (P2): base de conservação. A §3.5 põe a 0245 (v6) antes, mas a §3.4 e o MP05 comparam com a v5 e com o despejo v5. Falta também congelar o preditor.
+- R1-05 (P2): a gramática não é "82 .ts de remoção de tipos".
+  - 50 falhas são parameter property e 60 são ESM em modo CJS (31 .ts + 29 .tsx).
+  - Todos os 111 arquivos já têm tupla, então a §3.2 não muda prova nesta raiz.
+  - Falta especificar census, arquivos sem modo e phases.grammar.
+- R1-06 (P2): unidades e conjunto de K0/NEW.
+  - Os números são de tuplas, não de leituras nem de "new".
+  - A decomposição 76/72/30 vem das 212 tuplas, não das 163 removidas.
+  - O conjunto NEW inclui Promise, Proxy e URL, o que não bate com "intrínseco modelado".
+
+Detalhes, cenários (S1–S9) e comandos: review.json.
+Nada foi alterado fora desta pasta. Fixtures e cópia do engine ficaram só no scratchpad.
