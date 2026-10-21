@@ -214,10 +214,12 @@ describeWithPostgres('Phase 3 PostgreSQL iterative runtime durability', () => {
       const trajectory = await app.inject({
         method: 'GET',
         url: `/v1/executions/${executionId}/trajectory`,
+        // SPEC0176 (AUD-0621 F01): an unassigned Operator gets 404; the
+        // tenant-wide reader exercises the durable trajectory export.
         headers: {
           'x-tenant-id': tenantId,
-          'x-operator-id': 'operator.phase3',
-          'x-operator-role': 'Operator'
+          'x-operator-id': 'supervisor.phase3',
+          'x-operator-role': 'Supervisor'
         }
       })
       expect(trajectory.statusCode).toBe(200)

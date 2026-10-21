@@ -64,9 +64,11 @@ describe('critical runtime flows', () => {
         idempotencyKey: 'e2e-task-1'
       }
     })
+    // SPEC0176 §5: approval/task events are not session-linked by their
+    // producer; the full tenant audit reader still exposes them.
     const audit = await app.inject({
       method: 'GET',
-      url: `/v1/audit/sessions/${sessionId}`,
+      url: `/v1/observability/audit-evidence?sessionId=${sessionId}`,
       headers: {
         'x-operator-id': 'supervisor.shift-a',
         'x-operator-role': 'Supervisor'
@@ -84,8 +86,10 @@ describe('critical runtime flows', () => {
     )
     expect(
       (
-        audit.json() as Envelope<{ events: Array<{ type: string }> }>
-      ).data.events.map((event) => event.type)
+        audit.json() as Envelope<{
+          page: { items: Array<{ type: string }> }
+        }>
+      ).data.page.items.map((event) => event.type)
     ).toContain('approval_decision')
   })
 })
