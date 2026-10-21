@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { TenantIdSchema } from '@cvg/platform'
 import {
   runPostgresMigrations,
+  TENANT_SCHEMA_TABLES,
   TenantScopedPostgresRuntimeRepository,
   withTenantContext
 } from '@cvg/persistence'
@@ -378,6 +379,249 @@ describe('AAA-19 continuous PostgreSQL worker', () => {
           .query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
           .catch(() => undefined)
         await migrationClient.end()
+      }
+    },
+    60_000
+  )
+})
+
+// SPEC0249 (AUD-0621 F06, F20) with a minimal runtime role (no SUPERUSER,
+// no BYPASSRLS, only SELECT/INSERT/UPDATE on the tenant inventory).
+describe('SPEC0249 PostgreSQL continuous worker lease integrity', () => {
+  const itWithPostgres = testDatabaseUrl ? it : it.skip
+  const password = 'synthetic-0249-role-password'
+
+  async function minimalRoleFixture(label: string) {
+    const databaseUrl = testDatabaseUrl as string
+    const suffix = `${Date.now()}_${randomBytes(3).toString('hex')}`
+    const schemaName = `cvg_p0249_${label}_${suffix}`
+    const role = `cvg_p0249_${label}_${suffix}`
+    const admin = new Client({ connectionString: databaseUrl })
+    await admin.connect()
+    await runPostgresMigrations(admin, { schemaName })
+    await admin.query(
+      `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+    )
+    await admin.query(`GRANT USAGE ON SCHEMA ${schemaName} TO ${role}`)
+    for (const table of TENANT_SCHEMA_TABLES) {
+      await admin.query(
+        `GRANT SELECT, INSERT, UPDATE ON ${schemaName}."${table}" TO ${role}`
+      )
+    }
+    const url = new URL(databaseUrl)
+    url.username = role
+    url.password = password
+    const roleUrl = url.toString()
+    const pool = new Pool({
+      connectionString: roleUrl,
+      options: `-c search_path=${schemaName}`
+    })
+    return {
+      admin,
+      pool,
+      roleUrl,
+      schemaName,
+      repository: new TenantScopedPostgresRuntimeRepository(pool),
+      async attempts(eventId: string) {
+        const result = await admin.query<{
+          attempt: number
+          outcome: string | null
+        }>(
+          `SELECT attempt, outcome FROM ${schemaName}.outbox_attempts
+            WHERE tenant_id = $1 AND event_id = $2 ORDER BY id`,
+          [tenantIdRaw, eventId]
+        )
+        return result.rows
+      },
+      async effectResult(eventId: string) {
+        const result = await admin.query<{ result: unknown }>(
+          `SELECT result FROM ${schemaName}.outbox_effects
+            WHERE tenant_id = $1 AND event_id = $2`,
+          [tenantIdRaw, eventId]
+        )
+        return result.rows.map((row) => row.result)
+      },
+      async leaseUntil(eventId: string): Promise<number> {
+        const result = await admin.query<{ lease_until: Date | null }>(
+          `SELECT lease_until FROM ${schemaName}.outbox_events
+            WHERE tenant_id = $1 AND id = $2`,
+          [tenantIdRaw, eventId]
+        )
+        return result.rows[0]?.lease_until?.getTime() ?? 0
+      },
+      async close() {
+        await pool.end().catch(() => undefined)
+        await admin
+          .query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
+          .catch(() => undefined)
+        await admin
+          .query(`DROP OWNED BY ${role} CASCADE`)
+          .catch(() => undefined)
+        await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined)
+        await admin.end().catch(() => undefined)
+      }
+    }
+  }
+
+  itWithPostgres(
+    'AC06: a stale process with the same worker id cannot finish the newer claim',
+    async () => {
+      const x = await minimalRoleFixture('stale')
+      const gateA = deferred()
+      const gateB = deferred()
+      const startedA = deferred()
+      const startedB = deferred()
+      let a: PostgresContinuousWorkerRuntime | undefined
+      let b: PostgresContinuousWorkerRuntime | undefined
+      try {
+        const event = await x.repository.enqueue({
+          tenantId,
+          type: 'message.outbound',
+          payload: { fixture: 'p0249-stale' },
+          idempotencyKey: 'pg-p0249-stale-process',
+          correlationId
+        })
+        const env = workerEnv(x.roleUrl, x.schemaName, 'worker-p0249-same')
+        // A never renews (heartbeat far beyond the lease): its claim expires
+        // while the handler is blocked, like a paused or partitioned process.
+        a = createPostgresContinuousWorker(env, {
+          handlers: {
+            inboundProcess: () => ({ status: 'unused' }),
+            messageOutbound: async () => {
+              startedA.resolve()
+              await gateA.promise
+              return { type: 'p0249.attempt_a' }
+            }
+          },
+          tuning: { ...tuning, concurrency: 1, leaseMs: 1_000 },
+          heartbeatIntervalMs: 60_000
+        })
+        a.worker.start()
+        await startedA.promise
+        await delay(1_300)
+        b = createPostgresContinuousWorker(env, {
+          handlers: {
+            inboundProcess: () => ({ status: 'unused' }),
+            messageOutbound: async () => {
+              startedB.resolve()
+              await gateB.promise
+              return { type: 'p0249.attempt_b' }
+            }
+          },
+          tuning: { ...tuning, concurrency: 1, leaseMs: 30_000 }
+        })
+        b.worker.start()
+        await startedB.promise
+
+        // The stale process finishes first: its ack must not close B's claim.
+        gateA.resolve()
+        await vi.waitFor(
+          () => {
+            expect(a!.worker.metrics().errors).toBeGreaterThanOrEqual(1)
+          },
+          { timeout: 10_000, interval: 25 }
+        )
+        expect(a.worker.metrics().processed).toBe(0)
+        const during = await x.repository.findOutboxById(tenantId, event.id)
+        expect(during).toMatchObject({ status: 'processing', attempts: 2 })
+
+        gateB.resolve()
+        await vi.waitFor(
+          async () => {
+            const record = await x.repository.findOutboxById(tenantId, event.id)
+            expect(record?.status).toBe('processed')
+          },
+          { timeout: 10_000, interval: 25 }
+        )
+        // The outbox sanitizer keeps only allowlisted fields such as `type`.
+        expect(await x.effectResult(event.id)).toEqual([
+          { type: 'p0249.attempt_b' }
+        ])
+        expect(
+          (await x.attempts(event.id)).map((row) => [row.attempt, row.outcome])
+        ).toEqual([
+          [1, 'lease_expired'],
+          [2, 'processed']
+        ])
+      } finally {
+        gateA.resolve()
+        gateB.resolve()
+        await a?.worker.stop().catch(() => undefined)
+        await b?.worker.stop().catch(() => undefined)
+        await a?.pool.end().catch(() => undefined)
+        await b?.pool.end().catch(() => undefined)
+        await x.close()
+      }
+    },
+    60_000
+  )
+
+  itWithPostgres(
+    'AC08: heartbeats renew the lease of a long handler so no other worker can take it',
+    async () => {
+      const x = await minimalRoleFixture('renew')
+      const gate = deferred()
+      const started = deferred()
+      let first: PostgresContinuousWorkerRuntime | undefined
+      try {
+        const event = await x.repository.enqueue({
+          tenantId,
+          type: 'message.outbound',
+          payload: { fixture: 'p0249-renew' },
+          idempotencyKey: 'pg-p0249-long-handler',
+          correlationId
+        })
+        first = createPostgresContinuousWorker(
+          workerEnv(x.roleUrl, x.schemaName, 'worker-p0249-long'),
+          {
+            handlers: {
+              inboundProcess: () => ({ status: 'unused' }),
+              messageOutbound: async () => {
+                started.resolve()
+                await gate.promise
+                return { type: 'p0249.long_handler' }
+              }
+            },
+            tuning: { ...tuning, concurrency: 1, leaseMs: 2_000 },
+            heartbeatIntervalMs: 250
+          }
+        )
+        first.worker.start()
+        await started.promise
+        const initialLease = await x.leaseUntil(event.id)
+        const deadline = Date.now() + 5_000
+        const intruderClaims: unknown[] = []
+        while (Date.now() < deadline) {
+          intruderClaims.push(
+            await x.repository.claimNext({
+              tenantId,
+              workerId: 'worker-p0249-intruder',
+              leaseMs: 2_000
+            })
+          )
+          await delay(200)
+        }
+        expect(intruderClaims.filter(Boolean)).toEqual([])
+        expect(await x.leaseUntil(event.id)).toBeGreaterThan(initialLease)
+        expect(first.worker.metrics().heartbeats).toBeGreaterThanOrEqual(1)
+        expect(first.worker.metrics().leaseLost).toBe(0)
+
+        gate.resolve()
+        await vi.waitFor(
+          async () => {
+            const record = await x.repository.findOutboxById(tenantId, event.id)
+            expect(record).toMatchObject({ status: 'processed', attempts: 1 })
+          },
+          { timeout: 10_000, interval: 25 }
+        )
+        expect(await x.effectResult(event.id)).toEqual([
+          { type: 'p0249.long_handler' }
+        ])
+      } finally {
+        gate.resolve()
+        await first?.worker.stop().catch(() => undefined)
+        await first?.pool.end().catch(() => undefined)
+        await x.close()
       }
     },
     60_000

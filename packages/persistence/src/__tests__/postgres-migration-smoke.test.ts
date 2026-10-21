@@ -522,6 +522,18 @@ describe('postgres migration smoke', () => {
               : row
           ] as unknown as T[])
         }
+        // SPEC0249: the ack checks that its claim token is the current
+        // attempt of the event.
+        if (text.includes('FROM outbox_attempts AS a')) {
+          return result([
+            {
+              attempt: 1,
+              worker_id: 'worker-ack-boundary',
+              outcome: null,
+              newer: false
+            }
+          ] as unknown as T[])
+        }
         if (
           text.includes('FROM outbox_effects') &&
           text.includes('FOR UPDATE')
@@ -558,6 +570,7 @@ describe('postgres migration smoke', () => {
       tenantId: row.tenant_id,
       eventId: row.id,
       workerId: row.lease_owner,
+      claimToken: '1',
       effect: () => {
         expect(activeTransaction).toBe(false)
         expect(commits).toBe(1)

@@ -261,6 +261,12 @@ export class PostgresEffectJournal implements EffectJournalPort {
     return row ? mapEffectJournalRow(row) : undefined
   }
 
+  /**
+   * Sweeps only the rows of the session's tenant context: the predicate
+   * repeats the RLS policy so a table whose RLS was disabled by mistake still
+   * cannot leak the sweep to another tenant (SPEC0249, AUD-0621 F05). Without
+   * a tenant context nothing changes.
+   */
   async releaseExpired(now: Date, ttlMs: number): Promise<number> {
     assertReleaseWindow(now, ttlMs)
 
@@ -272,6 +278,7 @@ export class PostgresEffectJournal implements EffectJournalPort {
              updated_at = $1,
              revision = revision + 1
          WHERE state = 'RESERVED'
+           AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
            AND (
              expires_at <= $1
              OR updated_at + ($2::bigint * interval '1 millisecond') <= $1
@@ -285,6 +292,7 @@ export class PostgresEffectJournal implements EffectJournalPort {
              updated_at = $1,
              revision = revision + 1
          WHERE state = 'EFFECT_STARTED'
+           AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
            AND (
              expires_at <= $1
              OR updated_at + ($2::bigint * interval '1 millisecond') <= $1

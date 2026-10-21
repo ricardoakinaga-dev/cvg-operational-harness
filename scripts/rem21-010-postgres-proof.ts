@@ -387,6 +387,10 @@ async function runSyntheticWorkload(
         tenantId,
         eventId: event.id,
         workerId,
+        // SPEC0249 (AUD-0621 F06): the PostgreSQL ack is fenced by the claim.
+        ...(event.claimToken !== undefined
+          ? { claimToken: event.claimToken }
+          : {}),
         result: { accepted: true, synthetic: true, eventId: event.id }
       })
       processed.add(event.id)

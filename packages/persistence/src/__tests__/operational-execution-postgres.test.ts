@@ -12,6 +12,7 @@ import {
 } from '../operational-execution-postgres.ts'
 import { readPostgresMigrationSql, runPostgresMigrations } from '../postgres.ts'
 import type { PostgresPoolLike } from '../tenant-scoped-postgres.ts'
+import { TENANT_SCHEMA_TABLES } from '../tenant-schema.ts'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const describeWithPostgres = testDatabaseUrl ? describe : describe.skip
@@ -266,5 +267,99 @@ describeWithPostgres('PostgreSQL operational execution authority', () => {
         actorId: 'operator.pg.synthetic'
       })
     ).rejects.toBeInstanceOf(OperationalExecutionError)
+  })
+})
+
+// SPEC0249 AC10 (AUD-0621 F17): lease-expiry recovery honours maxAttempts.
+// Runs as a minimal runtime role (no SUPERUSER, no BYPASSRLS).
+describeWithPostgres('SPEC0249 bounded crash recovery (minimal role)', () => {
+  const suffix = `${Date.now()}_${randomBytes(3).toString('hex')}`
+  const schema = `cvg_p0249_exec_${suffix}`
+  const role = `cvg_p0249_exec_${suffix}`
+  const password = 'synthetic-0249-role-password'
+  let admin: Client
+  let pool: Pool
+
+  beforeAll(async () => {
+    if (!testDatabaseUrl) return
+    admin = new Client({ connectionString: testDatabaseUrl })
+    await admin.connect()
+    await runPostgresMigrations(admin, { schemaName: schema })
+    await admin.query(
+      `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+    )
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+    for (const table of TENANT_SCHEMA_TABLES) {
+      await admin.query(
+        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+      )
+    }
+    const url = new URL(testDatabaseUrl)
+    url.username = role
+    url.password = password
+    pool = new Pool({
+      connectionString: url.toString(),
+      max: 2,
+      options: `-c search_path=${schema}`
+    })
+  })
+
+  afterAll(async () => {
+    if (!testDatabaseUrl) return
+    await pool?.end().catch(() => undefined)
+    await admin
+      ?.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+      .catch(() => undefined)
+    await admin?.query(`DROP OWNED BY ${role} CASCADE`).catch(() => undefined)
+    await admin?.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined)
+    await admin?.end().catch(() => undefined)
+  })
+
+  it('AC10: repeated crash recovery terminates the execution at maxAttempts', async () => {
+    const store = new PostgresOperationalExecutionStore(
+      pool as unknown as PostgresPoolLike,
+      { maxAttempts: 2, leaseMs: 1_000, retryDelayMs: 1 }
+    )
+    let now = new Date('2026-10-20T12:00:00.000Z')
+    const submitted = await store.submit(submission('pg-p0249-crash'), now)
+
+    const first = await store.claimNext(tenantA, 'pg-crashing-worker-1', now)
+    expect(first?.record.attempt).toBe(1)
+    now = new Date(now.getTime() + 2_000)
+    const firstRecovery = await store.recoverExpired(tenantA, now)
+    expect(firstRecovery.map((record) => record.state)).toEqual(['QUEUED'])
+
+    const second = await store.claimNext(tenantA, 'pg-crashing-worker-2', now)
+    expect(second?.record.attempt).toBe(2)
+    now = new Date(now.getTime() + 2_000)
+    const secondRecovery = await store.recoverExpired(tenantA, now)
+    // The exhausted execution is terminal and is not reported as requeued.
+    expect(secondRecovery).toEqual([])
+    expect(
+      await store.claimNext(tenantA, 'pg-crashing-worker-3', now)
+    ).toBeNull()
+
+    const record = await store.get(tenantA, submitted.record.id)
+    expect(record).toMatchObject({
+      state: 'FAILED_TERMINAL',
+      attempt: 2,
+      leaseOwner: null,
+      leaseUntil: null
+    })
+    expect(record?.failure).toMatchObject({
+      kind: 'SEMANTIC_TERMINAL',
+      code: 'retry_exhausted'
+    })
+    const events = await store.listEvents(tenantA, submitted.record.id)
+    expect(events.at(-1)).toMatchObject({
+      type: 'FAILED_TERMINAL',
+      reason: 'retry_exhausted'
+    })
+    const queue = await admin.query<{ status: string }>(
+      `SELECT status FROM ${schema}.operational_execution_outbox
+        WHERE tenant_id = $1 AND execution_id = $2`,
+      [tenantA, submitted.record.id]
+    )
+    expect(queue.rows[0]?.status).toBe('dead_letter')
   })
 })

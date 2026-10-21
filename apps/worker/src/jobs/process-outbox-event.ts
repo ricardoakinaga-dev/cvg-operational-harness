@@ -103,11 +103,15 @@ export async function completeClaimedOutboxEvent(
   input: CompleteClaimedOutboxEventInput
 ): Promise<ClaimedOutboxEventResult> {
   const event = input.event
+  // SPEC0249 (AUD-0621 F06): every completion presents the token of this
+  // claim, so a newer claim of the same event is never closed by this one.
+  const claim = claimTokenOf(event)
   if (await isTakeoverActive(input.takeoverActive)) {
     await input.adapter.fail({
       tenantId: input.tenantId,
       eventId: event.id,
       workerId: input.workerId,
+      ...claim,
       terminal: true,
       handoff: true,
       error: OUTBOX_TAKEOVER_SUPPRESSED_ERROR
@@ -125,6 +129,7 @@ export async function completeClaimedOutboxEvent(
       tenantId: input.tenantId,
       eventId: event.id,
       workerId: input.workerId,
+      ...claim,
       terminal: true,
       error: `unknown controlled outbox handler: ${event.type}`
     })
@@ -135,6 +140,7 @@ export async function completeClaimedOutboxEvent(
       tenantId: input.tenantId,
       eventId: event.id,
       workerId: input.workerId,
+      ...claim,
       effect: input.effect,
       ...(input.takeoverActive !== undefined
         ? { takeoverActive: input.takeoverActive }
@@ -162,6 +168,7 @@ export async function completeClaimedOutboxEvent(
         tenantId: input.tenantId,
         eventId: event.id,
         workerId: input.workerId,
+        ...claim,
         ...(isNonRetryableOutboxError(error) ? { terminal: true } : {}),
         error
       })
@@ -169,6 +176,13 @@ export async function completeClaimedOutboxEvent(
       throw error
     }
   }
+}
+
+/** The claim token of a claimed event, ready to spread into ack/fail. */
+export function claimTokenOf(event: OutboxEventRecord): {
+  claimToken?: string
+} {
+  return event.claimToken !== undefined ? { claimToken: event.claimToken } : {}
 }
 
 async function isTakeoverActive(

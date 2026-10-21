@@ -7,6 +7,8 @@ import {
   readPostgresMigrationSql,
   runPostgresMigrations
 } from '../postgres.ts'
+import { renewClaim } from '../postgres-outbox.ts'
+import { TENANT_SCHEMA_TABLES } from '../tenant-schema.ts'
 
 const databaseUrl = process.env.TEST_DATABASE_URL
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000101'
@@ -338,6 +340,8 @@ describe('durable PostgreSQL outbox', () => {
             tenantId: tenantB,
             eventId: created.id,
             workerId: 'worker-b',
+            // SPEC0249: the PostgreSQL ack is fenced by the claim token.
+            ...(claimed.claimToken ? { claimToken: claimed.claimToken } : {}),
             result: { mustNot: 'cross-tenant' }
           })
         ).rejects.toMatchObject({ code: 'invalid_action' })
@@ -354,6 +358,7 @@ describe('durable PostgreSQL outbox', () => {
             tenantId: tenantA,
             eventId: claimed.id,
             workerId: owner ?? 'worker-a',
+            ...(claimed.claimToken ? { claimToken: claimed.claimToken } : {}),
             effect: () => ({ synthetic: true }),
             now: new Date(claimed.leaseUntil!.getTime() - 1)
           })
@@ -392,6 +397,7 @@ describe('durable PostgreSQL outbox', () => {
             tenantId: tenantA,
             eventId: current.id,
             workerId: ownerWorkerId,
+            ...(current.claimToken ? { claimToken: current.claimToken } : {}),
             error: new Error('synthetic transient failure')
           })
         }
@@ -525,5 +531,433 @@ describe('durable PostgreSQL outbox', () => {
       }
     },
     30_000
+  )
+})
+
+// SPEC0249 (AUD-0621 F06, F17, F20): per-claim fencing token, renewal and
+// bounded crash recovery, run as a minimal runtime role (no SUPERUSER, no
+// BYPASSRLS) with only SELECT/INSERT/UPDATE on the tenant inventory.
+describe('SPEC0249 durable outbox claim fencing (minimal role)', () => {
+  const password = 'synthetic-0249-role-password'
+
+  async function fencingFixture(label: string) {
+    const suffix = `${Date.now()}_${randomBytes(3).toString('hex')}`
+    const schema = `cvg_p0249_${label}_${suffix}`
+    const role = `cvg_p0249_${label}_${suffix}`
+    const admin = new Client({ connectionString: databaseUrl })
+    await admin.connect()
+    await runPostgresMigrations(admin, { schemaName: schema })
+    await admin.query(
+      `CREATE ROLE ${role} LOGIN PASSWORD '${password}' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION`
+    )
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+    for (const table of TENANT_SCHEMA_TABLES) {
+      await admin.query(
+        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+      )
+    }
+    const url = new URL(databaseUrl as string)
+    url.username = role
+    url.password = password
+    const runtime = new Client({
+      connectionString: url.toString(),
+      options: `-c search_path=${schema}`
+    })
+    await runtime.connect()
+    await runtime.query("SELECT set_config('cvg.tenant_id', $1, false)", [
+      tenantA
+    ])
+    let now = new Date('2026-10-20T12:00:00.000Z')
+    const repository = new PostgresRuntimeRepository(runtime, {
+      tenantIsolation: true,
+      clock: () => now
+    })
+    return {
+      admin,
+      runtime,
+      repository,
+      schema,
+      clock: () => now,
+      advance(ms: number) {
+        now = new Date(now.getTime() + ms)
+      },
+      enqueue(key: string) {
+        return repository.enqueue({
+          tenantId: tenantA,
+          type: 'synthetic.p0249',
+          payload: { synthetic: true },
+          correlationId,
+          idempotencyKey: key,
+          createdAt: now,
+          availableAt: now
+        })
+      },
+      async attempts(eventId: string) {
+        const result = await admin.query<{
+          id: string
+          attempt: number
+          worker_id: string
+          outcome: string | null
+        }>(
+          `SELECT id::text AS id, attempt, worker_id, outcome
+             FROM ${schema}.outbox_attempts
+            WHERE tenant_id = $1 AND event_id = $2
+            ORDER BY id`,
+          [tenantA, eventId]
+        )
+        return result.rows
+      },
+      async row(eventId: string) {
+        const result = await admin.query<{
+          status: string
+          attempts: number
+          lease_owner: string | null
+          lease_until: Date | null
+        }>(
+          `SELECT status, attempts, lease_owner, lease_until
+             FROM ${schema}.outbox_events
+            WHERE tenant_id = $1 AND id = $2`,
+          [tenantA, eventId]
+        )
+        return result.rows[0]
+      },
+      async close() {
+        await runtime.end().catch(() => undefined)
+        await admin
+          .query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
+          .catch(() => undefined)
+        await admin
+          .query(`DROP OWNED BY ${role} CASCADE`)
+          .catch(() => undefined)
+        await admin.query(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined)
+        await admin.end().catch(() => undefined)
+      }
+    }
+  }
+
+  it.skipIf(!databaseUrl)(
+    'AC03: a stale attempt with a reused worker id cannot fail or ack the newer claim',
+    async () => {
+      const x = await fencingFixture('fence')
+      try {
+        const event = await x.enqueue('p0249-fence-key')
+        const worker = 'synthetic-same-worker'
+        const first = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: worker,
+          leaseMs: 30_000
+        })
+        x.advance(31_000)
+        const second = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: worker,
+          leaseMs: 30_000
+        })
+        expect(first?.attempts).toBe(1)
+        expect(second?.attempts).toBe(2)
+
+        await expect(
+          x.repository.fail({
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: worker,
+            terminal: true,
+            error: 'stale-first-attempt',
+            ...(first?.claimToken ? { claimToken: first.claimToken } : {})
+          })
+        ).rejects.toMatchObject({ code: 'conflict' })
+        await expect(
+          x.repository.ack({
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: worker,
+            result: { stale: true },
+            ...(first?.claimToken ? { claimToken: first.claimToken } : {})
+          })
+        ).rejects.toMatchObject({ code: 'conflict' })
+        await expect(x.row(event.id)).resolves.toMatchObject({
+          status: 'processing',
+          attempts: 2,
+          lease_owner: worker
+        })
+        expect(first?.claimToken).toMatch(/^[1-9][0-9]*$/)
+        expect(second?.claimToken).toMatch(/^[1-9][0-9]*$/)
+        expect(second?.claimToken).not.toBe(first?.claimToken)
+
+        const acked = await x.repository.ack({
+          tenantId: tenantA,
+          eventId: event.id,
+          workerId: worker,
+          result: { current: true },
+          ...(second?.claimToken ? { claimToken: second.claimToken } : {})
+        })
+        expect(acked).toMatchObject({ status: 'processed', attempts: 2 })
+        const attempts = await x.attempts(event.id)
+        expect(attempts.map((row) => [row.attempt, row.outcome])).toEqual([
+          [1, 'lease_expired'],
+          [2, 'processed']
+        ])
+        // The idempotent processed branch only answers the attempt that
+        // processed the event.
+        await expect(
+          x.repository.ack({
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: worker,
+            result: { stale: true },
+            ...(first?.claimToken ? { claimToken: first.claimToken } : {})
+          })
+        ).rejects.toMatchObject({ code: 'conflict' })
+      } finally {
+        await x.close()
+      }
+    },
+    60_000
+  )
+
+  it.skipIf(!databaseUrl)(
+    'AC04: ack and fail without a claim token are refused without writes',
+    async () => {
+      const x = await fencingFixture('notoken')
+      try {
+        const event = await x.enqueue('p0249-notoken-key')
+        const claimed = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: 'synthetic-worker',
+          leaseMs: 30_000
+        })
+        expect(claimed?.status).toBe('processing')
+        await expect(
+          x.repository.fail({
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: 'synthetic-worker',
+            terminal: true,
+            error: 'no-token'
+          })
+        ).rejects.toMatchObject({ code: 'validation_failed' })
+        await expect(
+          x.repository.ack({
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: 'synthetic-worker',
+            result: { noToken: true }
+          })
+        ).rejects.toMatchObject({ code: 'validation_failed' })
+        await expect(x.row(event.id)).resolves.toMatchObject({
+          status: 'processing',
+          attempts: 1
+        })
+        const attempts = await x.attempts(event.id)
+        expect(attempts.map((row) => row.outcome)).toEqual([null])
+      } finally {
+        await x.close()
+      }
+    },
+    60_000
+  )
+
+  it.skipIf(!databaseUrl)(
+    'AC05: a token from before a requeue cannot close the requeued claim (no ABA)',
+    async () => {
+      const x = await fencingFixture('aba')
+      try {
+        const event = await x.enqueue('p0249-aba-key')
+        const worker = 'synthetic-same-worker'
+        const before = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: worker,
+          leaseMs: 30_000
+        })
+        await x.repository.fail({
+          tenantId: tenantA,
+          eventId: event.id,
+          workerId: worker,
+          terminal: true,
+          error: 'dead-letter-first',
+          ...(before?.claimToken ? { claimToken: before.claimToken } : {})
+        })
+        await x.repository.requeueDeadLetter({
+          tenantId: tenantA,
+          eventId: event.id,
+          operatorId: 'op_synthetic_p0249',
+          correlationId
+        })
+        const after = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: worker,
+          leaseMs: 30_000
+        })
+        expect(after?.attempts).toBe(before?.attempts)
+        await expect(
+          x.repository.fail({
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: worker,
+            terminal: true,
+            error: 'stale-before-requeue',
+            ...(before?.claimToken ? { claimToken: before.claimToken } : {})
+          })
+        ).rejects.toMatchObject({ code: 'conflict' })
+        await expect(x.row(event.id)).resolves.toMatchObject({
+          status: 'processing',
+          attempts: 1
+        })
+        expect(after?.claimToken).not.toBe(before?.claimToken)
+        const failed = await x.repository.fail({
+          tenantId: tenantA,
+          eventId: event.id,
+          workerId: worker,
+          error: 'current-attempt',
+          ...(after?.claimToken ? { claimToken: after.claimToken } : {})
+        })
+        expect(failed.status).toBe('failed')
+      } finally {
+        await x.close()
+      }
+    },
+    60_000
+  )
+
+  it.skipIf(!databaseUrl)(
+    'AC07: renewal extends only the current live claim and refuses expired, stale or foreign claims',
+    async () => {
+      const x = await fencingFixture('renew')
+      try {
+        const event = await x.enqueue('p0249-renew-key')
+        const ctx = { client: x.runtime, repositoryNow: x.clock }
+        const first = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: 'synthetic-worker-a',
+          leaseMs: 30_000
+        })
+        const token = first?.claimToken ?? 'missing'
+        x.advance(20_000)
+        const renewed = await renewClaim(ctx, {
+          tenantId: tenantA,
+          eventId: event.id,
+          workerId: 'synthetic-worker-a',
+          claimToken: token,
+          leaseMs: 30_000
+        })
+        expect(renewed).toMatchObject({
+          status: 'processing',
+          leaseOwner: 'synthetic-worker-a',
+          claimToken: token
+        })
+        expect(renewed?.leaseUntil?.toISOString()).toBe(
+          new Date(x.clock().getTime() + 30_000).toISOString()
+        )
+        const leaseAfterRenewal = (await x.row(event.id))?.lease_until
+        await expect(
+          renewClaim(ctx, {
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: 'synthetic-worker-b',
+            claimToken: token,
+            leaseMs: 30_000
+          })
+        ).resolves.toBeNull()
+        // A foreign renewal is refused without a write.
+        expect((await x.row(event.id))?.lease_until?.toISOString()).toBe(
+          leaseAfterRenewal?.toISOString()
+        )
+
+        // Expired: refused without a write; the lease is not resurrected.
+        x.advance(31_000)
+        const leaseBefore = (await x.row(event.id))?.lease_until
+        await expect(
+          renewClaim(ctx, {
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: 'synthetic-worker-a',
+            claimToken: token,
+            leaseMs: 30_000
+          })
+        ).resolves.toBeNull()
+        expect((await x.row(event.id))?.lease_until?.toISOString()).toBe(
+          leaseBefore?.toISOString()
+        )
+
+        // Takeover: the old token can no longer renew the new claim.
+        const takeover = await x.repository.claimNext({
+          tenantId: tenantA,
+          workerId: 'synthetic-worker-a',
+          leaseMs: 30_000
+        })
+        expect(takeover?.attempts).toBe(2)
+        const leaseOfTakeover = (await x.row(event.id))?.lease_until
+        await expect(
+          renewClaim(ctx, {
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: 'synthetic-worker-a',
+            claimToken: token,
+            leaseMs: 30_000
+          })
+        ).resolves.toBeNull()
+        // A stale token is refused without a write on the newer claim.
+        expect((await x.row(event.id))?.lease_until?.toISOString()).toBe(
+          leaseOfTakeover?.toISOString()
+        )
+        await expect(
+          renewClaim(ctx, {
+            tenantId: tenantA,
+            eventId: event.id,
+            workerId: 'synthetic-worker-a',
+            leaseMs: 30_000
+          })
+        ).rejects.toMatchObject({ code: 'validation_failed' })
+      } finally {
+        await x.close()
+      }
+    },
+    60_000
+  )
+
+  it.skipIf(!databaseUrl)(
+    'AC09: crash recovery dead-letters an event that exhausted its attempts',
+    async () => {
+      const x = await fencingFixture('exhaust')
+      try {
+        const event = await x.enqueue('p0249-exhaust-key')
+        const claims = []
+        for (let index = 0; index < OUTBOX_MAX_ATTEMPTS + 2; index += 1) {
+          claims.push(
+            await x.repository.claimNext({
+              tenantId: tenantA,
+              workerId: `synthetic-crashing-worker-${index}`,
+              leaseMs: 30_000
+            })
+          )
+          x.advance(31_000)
+        }
+        expect(
+          claims.slice(0, OUTBOX_MAX_ATTEMPTS).map((claim) => claim?.attempts)
+        ).toEqual([1, 2, 3, 4, 5].slice(0, OUTBOX_MAX_ATTEMPTS))
+        expect(claims.slice(OUTBOX_MAX_ATTEMPTS)).toEqual([null, null])
+        await expect(x.row(event.id)).resolves.toMatchObject({
+          status: 'dead_letter',
+          attempts: OUTBOX_MAX_ATTEMPTS,
+          lease_owner: null,
+          lease_until: null
+        })
+        const attempts = await x.attempts(event.id)
+        expect(attempts).toHaveLength(OUTBOX_MAX_ATTEMPTS)
+        expect(attempts.every((row) => row.outcome === 'lease_expired')).toBe(
+          true
+        )
+        const audit = await x.admin.query<{ count: number }>(
+          `SELECT count(*)::int AS count FROM ${x.schema}.audit_events
+            WHERE tenant_id = $1 AND payload->>'eventId' = $2
+              AND payload->>'action' = 'dead_letter'`,
+          [tenantA, event.id]
+        )
+        expect(audit.rows[0]?.count).toBe(1)
+      } finally {
+        await x.close()
+      }
+    },
+    60_000
   )
 })

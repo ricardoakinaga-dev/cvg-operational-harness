@@ -1173,6 +1173,13 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
         )
         const recovered: ExecutionRecord[] = []
         for (const row of selected.rows) {
+          // SPEC0249 (AUD-0621 F17): an expired lease counts as a failed
+          // attempt. On the last allowed attempt it terminates like a
+          // retryable failure would, instead of being requeued forever.
+          if (row.attempt >= this.maxAttempts) {
+            await this.terminateExhaustedRecovery(client, tenant, row, now)
+            continue
+          }
           const updated = await client.query<ExecutionRow>(
             `UPDATE operational_executions
                 SET state = 'QUEUED', lease_owner = NULL, lease_until = NULL,
@@ -1210,6 +1217,63 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
         }
         return recovered
       })
+    )
+  }
+
+  private async terminateExhaustedRecovery(
+    client: PostgresQueryable,
+    tenant: TenantId,
+    row: ExecutionRow,
+    now: Date
+  ): Promise<void> {
+    const exhausted = retryExhaustedFailure(this.maxAttempts)
+    const terminated = await client.query<ExecutionRow>(
+      `UPDATE operational_executions
+          SET state = 'FAILED_TERMINAL', lease_owner = NULL,
+              lease_until = NULL, failure = $3::jsonb,
+              updated_at = $2, completed_at = $2
+        WHERE tenant_id = $1 AND id = $4
+          AND state IN ('CLAIMED', 'RUNNING')
+          AND lease_until <= $2
+          AND attempt >= $5
+        RETURNING ${executionColumns}`,
+      [
+        tenant,
+        now,
+        jsonText(exhausted, 'Execution failure'),
+        row.id,
+        this.maxAttempts
+      ]
+    )
+    if (!terminated.rows[0]) {
+      throw new OperationalExecutionError(
+        'conflict',
+        'Recovery exhaustion transition lost'
+      )
+    }
+    const record = mapRecord(terminated.rows[0])
+    const deadLettered = await client.query(
+      `UPDATE operational_execution_outbox
+          SET status = 'dead_letter', available_at = $3,
+              lease_owner = NULL, lease_until = NULL,
+              last_error = $4, processed_at = $3
+        WHERE tenant_id = $1 AND execution_id = $2`,
+      [tenant, record.id, now, exhausted.message]
+    )
+    if (deadLettered.rowCount !== 1) {
+      throw new OperationalExecutionError(
+        'conflict',
+        'Recovery exhaustion queue pairing was lost'
+      )
+    }
+    await this.appendEvent(
+      client,
+      record,
+      'FAILED_TERMINAL',
+      null,
+      'retry_exhausted',
+      undefined,
+      now
     )
   }
 

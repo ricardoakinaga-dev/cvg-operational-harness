@@ -3,30 +3,31 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
   CVG_TENANT_CONTEXT_SETTING,
   readPostgresMigrationSql,
-  type PostgresPoolLike
+  TENANT_SCHEMA_INVENTORY,
+  TENANT_SCHEMA_TABLES,
+  type PostgresPoolLike,
+  type PostgresQueryable
 } from '@cvg/persistence'
 
 /**
- * Tables the PostgreSQL worker reads or writes during a controlled drain. Each
- * one must exist in the runtime schema with RLS + FORCE RLS enabled, and the
- * runtime role must not own them.
+ * Tables the PostgreSQL worker preflight verifies: every tenant-scoped table
+ * of the canonical inventory (`TENANT_SCHEMA_TABLES`, AUD19-005), the same
+ * set the API startup preflight checks and the migration job grants. Each one
+ * must exist in the runtime schema with RLS + FORCE RLS enabled and exactly
+ * its inventory policy, and the runtime role must not own it. Deriving the
+ * list keeps a table the worker writes from being skipped by a hand-kept
+ * list: the kernel's effect journal and approvals (SPEC0249, AUD-0621 F05;
+ * a journal without RLS let one tenant's expiry sweep rewrite another
+ * tenant's reservation) and any table a later migration adds to the
+ * inventory. PROD-0373's liveness heartbeat and pause switch stay covered: an
+ * unreadable switch keeps the worker paused.
  */
-export const WORKER_CRITICAL_TABLES = [
-  'conversations',
-  'messages',
-  'sessions',
-  'agent_runs',
-  'tool_calls',
-  'approval_requests',
-  'tasks',
-  'audit_events',
-  'outbox_events',
-  'outbox_attempts',
-  'outbox_effects',
-  // PROD-0373: liveness heartbeat and the kernel pause switch (0027). An
-  // unreadable switch keeps the worker paused, so the grant is required.
-  'worker_heartbeats',
-  'kernel_pause_switches'
+export const WORKER_CRITICAL_TABLES: readonly string[] = TENANT_SCHEMA_TABLES
+
+/** Tables of the governed kernel whose isolation the kernel also checks. */
+export const KERNEL_DURABLE_TABLES = [
+  'effect_journal',
+  'runtime_approvals'
 ] as const
 
 export const OPERATIONAL_HARNESS_CRITICAL_TABLES = [
@@ -69,11 +70,114 @@ const ROLE_QUERY = `SELECT rolname, rolsuper, rolbypassrls, rolcreatedb,
                       WHERE rolname = current_user
                       LIMIT 1`
 
-const TENANT_ONLY_POLICY_TABLES = new Set([
-  'runtime_approvals',
-  'worker_heartbeats',
-  'kernel_pause_switches'
-])
+const TENANT_EXPRESSION =
+  "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
+
+/**
+ * The policy each critical table must carry, from the canonical tenant
+ * inventory (`TENANT_SCHEMA_INVENTORY`). A table outside the inventory fails
+ * closed: the worker never guesses how a table is isolated.
+ */
+function expectedTenantPolicy(table: string): {
+  name: string
+  expression: string
+} {
+  const entry = TENANT_SCHEMA_INVENTORY.find((item) => item.table === table)
+  if (!entry) {
+    throw new Error(
+      'PostgreSQL worker tenant isolation policies are not verified'
+    )
+  }
+  return {
+    name: entry.policy,
+    expression:
+      entry.expression === 'tenant-only'
+        ? TENANT_EXPRESSION
+        : `tenant_isolation_quarantined = false AND ${TENANT_EXPRESSION}`
+  }
+}
+
+/**
+ * Verifies that every table exists in the current schema with RLS and FORCE
+ * RLS enabled, is not owned by `forbiddenOwner` (the runtime role, when
+ * given) and carries exactly the inventory policy.
+ */
+export async function assertTenantIsolatedTables(
+  client: Pick<PostgresQueryable, 'query'>,
+  criticalTables: readonly string[],
+  options: { forbiddenOwner?: string } = {}
+): Promise<void> {
+  const tables = await client.query<{
+    relname: string
+    owner: string
+    relrowsecurity: boolean
+    relforcerowsecurity: boolean
+  }>(
+    `SELECT c.relname,
+            pg_get_userbyid(c.relowner) AS owner,
+            c.relrowsecurity,
+            c.relforcerowsecurity
+       FROM pg_class AS c
+       INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = current_schema()
+        AND c.relname = ANY($1::text[])`,
+    [criticalTables]
+  )
+  if (tables.rows.length !== criticalTables.length) {
+    throw new Error(
+      'PostgreSQL worker schema is missing tenant-isolated tables'
+    )
+  }
+  if (
+    tables.rows.some(
+      (table) =>
+        (options.forbiddenOwner !== undefined &&
+          table.owner === options.forbiddenOwner) ||
+        !table.relrowsecurity ||
+        !table.relforcerowsecurity
+    )
+  ) {
+    throw new Error(
+      'PostgreSQL worker tables must be tenant-isolated and not owned by the runtime role'
+    )
+  }
+
+  const policies = await client.query<{
+    tablename: string
+    policyname: string
+    permissive: string
+    roles: string
+    cmd: string
+    qual: string | null
+    with_check: string | null
+  }>(
+    `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
+       FROM pg_policies
+      WHERE schemaname = current_schema() AND tablename = ANY($1::text[])`,
+    [criticalTables]
+  )
+  for (const table of criticalTables) {
+    const expected = expectedTenantPolicy(table)
+    const tablePolicies = policies.rows.filter(
+      (policy) => policy.tablename === table
+    )
+    const policy = tablePolicies[0]
+    if (
+      tablePolicies.length !== 1 ||
+      !policy ||
+      policy.policyname !== expected.name ||
+      policy.permissive !== 'PERMISSIVE' ||
+      policy.roles !== '{public}' ||
+      policy.cmd !== 'ALL' ||
+      normalizePolicyExpression(policy.qual) !== expected.expression ||
+      normalizePolicyExpression(policy.with_check) !== expected.expression
+    ) {
+      throw new Error(
+        'PostgreSQL worker tenant isolation policies are not verified'
+      )
+    }
+  }
+}
 
 /**
  * Verifies the effective PostgreSQL role and tenant-isolation schema before the
@@ -142,81 +246,9 @@ export async function assertPostgresWorkerPreflight(
       throw new Error('PostgreSQL worker role must not create schema objects')
     }
 
-    const tables = await client.query<{
-      relname: string
-      owner: string
-      relrowsecurity: boolean
-      relforcerowsecurity: boolean
-    }>(
-      `SELECT c.relname,
-              pg_get_userbyid(c.relowner) AS owner,
-              c.relrowsecurity,
-              c.relforcerowsecurity
-         FROM pg_class AS c
-         INNER JOIN pg_namespace AS n ON n.oid = c.relnamespace
-        WHERE n.nspname = current_schema()
-          AND c.relname = ANY($1::text[])`,
-      [criticalTables]
-    )
-    if (tables.rows.length !== criticalTables.length) {
-      throw new Error(
-        'PostgreSQL worker schema is missing tenant-isolated tables'
-      )
-    }
-    if (
-      tables.rows.some(
-        (table) =>
-          table.owner === role.rolname ||
-          !table.relrowsecurity ||
-          !table.relforcerowsecurity
-      )
-    ) {
-      throw new Error(
-        'PostgreSQL worker tables must be tenant-isolated and not owned by the runtime role'
-      )
-    }
-
-    const policies = await client.query<{
-      tablename: string
-      policyname: string
-      permissive: string
-      roles: string
-      cmd: string
-      qual: string | null
-      with_check: string | null
-    }>(
-      `SELECT tablename, policyname, permissive, roles, cmd, qual, with_check
-         FROM pg_policies
-        WHERE schemaname = current_schema() AND tablename = ANY($1::text[])`,
-      [criticalTables]
-    )
-    for (const table of criticalTables) {
-      const tablePolicies = policies.rows.filter(
-        (policy) => policy.tablename === table
-      )
-      const policy = tablePolicies[0]
-      const tenantExpression =
-        "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
-      const expected =
-        ['outbox_effects', 'outbox_attempts'].includes(table) ||
-        TENANT_ONLY_POLICY_TABLES.has(table)
-          ? tenantExpression
-          : `tenant_isolation_quarantined = false AND ${tenantExpression}`
-      if (
-        tablePolicies.length !== 1 ||
-        !policy ||
-        policy.policyname !== `${table}_tenant_isolation` ||
-        policy.permissive !== 'PERMISSIVE' ||
-        policy.roles !== '{public}' ||
-        policy.cmd !== 'ALL' ||
-        normalizePolicyExpression(policy.qual) !== expected ||
-        normalizePolicyExpression(policy.with_check) !== expected
-      ) {
-        throw new Error(
-          'PostgreSQL worker tenant isolation policies are not verified'
-        )
-      }
-    }
+    await assertTenantIsolatedTables(client, criticalTables, {
+      forbiddenOwner: role.rolname
+    })
 
     const tablePrivileges = await client.query<{
       can_select: boolean

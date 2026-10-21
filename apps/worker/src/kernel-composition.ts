@@ -25,9 +25,11 @@ import {
 import {
   PostgresApprovalAuthority,
   PostgresEffectJournal,
+  PostgresRuntimeRepository,
   PostgresWorkerOperations,
   TenantScopedPostgresRuntimeRepository,
   withTenantContext,
+  withTenantTransaction,
   type InboundRuntimeContext,
   type PostgresPoolLike
 } from '@cvg/persistence'
@@ -52,6 +54,10 @@ import {
 } from '@cvg/shared'
 import type { ControlledWorkerHandlers } from './controlled-worker.ts'
 import { NonRetryableOutboxError } from './jobs/process-outbox-event.ts'
+import {
+  assertTenantIsolatedTables,
+  KERNEL_DURABLE_TABLES
+} from './postgres-role-preflight.ts'
 
 export const WORKER_RUNTIME_ENV = 'CVG_WORKER_RUNTIME'
 export const KERNEL_WORKER_RUNTIME = 'kernel'
@@ -261,8 +267,10 @@ function createControlledModelGateway(): ModelGateway {
 
 /**
  * Durable prerequisites probe: the tenant-scoped `effect_journal` (0013) and
- * `runtime_approvals` (0015) tables must exist and be reachable. Missing
- * migrations fail closed before any turn runs.
+ * `runtime_approvals` (0015) tables must exist, be reachable and keep RLS,
+ * FORCE RLS and exactly their inventory policy (SPEC0249, AUD-0621 F05).
+ * Missing migrations or isolation fail closed before any turn runs. Role and
+ * grants are checked by the worker role preflight, which runs first.
  */
 export async function assertPostgresKernelPrerequisites(
   pool: PostgresPoolLike,
@@ -278,6 +286,7 @@ export async function assertPostgresKernelPrerequisites(
         'SELECT 1 FROM runtime_approvals WHERE tenant_id = $1 LIMIT 0',
         [tenantId]
       )
+      await assertTenantIsolatedTables(client, KERNEL_DURABLE_TABLES)
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -324,8 +333,15 @@ export function createPostgresKernelRuntime(
   // The in-memory ledger is the runtime's working chain; every record a turn
   // appends is also persisted to `audit_events` before the turn is reported.
   // The ledger rotates so a long-running worker does not grow without bound.
-  let audit: HashChainedAuditLedger = new SanitizedAuditLedger()
-  let ledgerId = randomUUID()
+  // SPEC0249 (AUD-0621 F19): a per-ledger cursor and transactional batches
+  // keep the persisted chain contiguous across failed or partial writes.
+  const auditTrail = createKernelAuditTrail(
+    createPostgresKernelAuditStore(pool, tenantId),
+    {
+      createLedger: () => new SanitizedAuditLedger(),
+      rotateAt: KERNEL_AUDIT_LEDGER_ROTATE_AT
+    }
+  )
   const modelGateway = createControlledModelGateway()
   const conversations = new TenantScopedPostgresRuntimeRepository(pool)
   const workerOperations = new PostgresWorkerOperations(pool)
@@ -342,67 +358,71 @@ export function createPostgresKernelRuntime(
   const runTurn = async (
     turnInput: GovernedTurnInput
   ): Promise<GovernedTurnResult> => {
-    if (audit.size() >= KERNEL_AUDIT_LEDGER_ROTATE_AT) {
-      audit = new SanitizedAuditLedger()
-      ledgerId = randomUUID()
-    }
-    const ledger = audit
-    const turnLedgerId = ledgerId
-    const firstRecord = ledger.size()
-    const result = await withTenantContext(pool, tenantId, async (client) => {
-      const effectJournal = new PostgresEffectJournal(client)
-      const outbox = async (
-        event: OutboxEnqueueInput
-      ): Promise<{ eventId: string }> => {
-        const enqueued = await conversations.enqueue({
-          tenantId,
-          type: 'message.outbound',
-          payload: {
-            synthetic: true,
-            sourceEventType: event.eventType,
-            capability: turnInput.capability,
-            action: turnInput.action,
-            resourceType: turnInput.resource.type,
+    const turnAudit = auditTrail.begin()
+    const ledger = turnAudit.ledger
+    let failure: { error: unknown } | undefined
+    let result: GovernedTurnResult | undefined
+    try {
+      result = await withTenantContext(pool, tenantId, async (client) => {
+        const effectJournal = new PostgresEffectJournal(client)
+        const outbox = async (
+          event: OutboxEnqueueInput
+        ): Promise<{ eventId: string }> => {
+          const enqueued = await conversations.enqueue({
+            tenantId,
+            type: 'message.outbound',
+            payload: {
+              synthetic: true,
+              sourceEventType: event.eventType,
+              capability: turnInput.capability,
+              action: turnInput.action,
+              resourceType: turnInput.resource.type,
+              correlationId: event.correlationId,
+              traceId: event.traceId
+            },
+            idempotencyKey: `kernel-outbox:${event.idempotencyKey}`,
             correlationId: event.correlationId,
-            traceId: event.traceId
-          },
-          idempotencyKey: `kernel-outbox:${event.idempotencyKey}`,
-          correlationId: event.correlationId,
-          conversationId: turnInput.conversationId,
-          sessionId: turnInput.sessionId ?? null
-        })
-        return { eventId: enqueued.id }
-      }
-      const composition = createGovernedRuntimeComposition({
-        policy,
-        approvals,
-        modelGateway,
-        telemetry,
-        audit: ledger,
-        toolExecutor,
-        outbox,
-        effectJournal,
-        requireDurable: true,
-        durableApprovals: true,
-        effectScopes: CONTROLLED_KERNEL_EFFECT_SCOPES,
-        pause: {
-          isPaused: (pausedTenant) =>
-            workerOperations.isPaused(TenantIdSchema.parse(pausedTenant))
+            conversationId: turnInput.conversationId,
+            sessionId: turnInput.sessionId ?? null
+          })
+          return { eventId: enqueued.id }
         }
+        const composition = createGovernedRuntimeComposition({
+          policy,
+          approvals,
+          modelGateway,
+          telemetry,
+          audit: ledger,
+          toolExecutor,
+          outbox,
+          effectJournal,
+          requireDurable: true,
+          durableApprovals: true,
+          effectScopes: CONTROLLED_KERNEL_EFFECT_SCOPES,
+          pause: {
+            isPaused: (pausedTenant) =>
+              workerOperations.isPaused(TenantIdSchema.parse(pausedTenant))
+          }
+        })
+        return composition.runtime.runTurn(turnInput)
       })
-      return composition.runtime.runTurn(turnInput)
-    })
-    await persistKernelAudit(
-      conversations,
-      tenantId,
-      turnLedgerId,
-      ledger
-        .records()
-        .slice(firstRecord)
-        .filter((record) => record.correlationId === turnInput.correlationId)
-    )
-    retainRecent(turnResults, result)
-    return result
+    } catch (error) {
+      failure = { error }
+    } finally {
+      auditTrail.end(turnAudit)
+    }
+    // Records of a failed turn are persisted too: skipping them would leave
+    // a permanent gap in the chain. The turn error wins over a flush error.
+    try {
+      await auditTrail.flush()
+    } catch (flushError) {
+      if (failure) throw failure.error
+      throw flushError
+    }
+    if (failure) throw failure.error
+    const completed = result as GovernedTurnResult
+    retainRecent(turnResults, completed)
+    return completed
   }
 
   return {
@@ -411,7 +431,7 @@ export function createPostgresKernelRuntime(
     policy,
     approvals,
     get audit() {
-      return audit
+      return auditTrail.current()
     },
     telemetry,
     conversations,
@@ -453,44 +473,201 @@ function retainRecent<T>(list: T[], item: T): void {
   }
 }
 
+/** Records written per transaction when the trail catches up. */
+export const KERNEL_AUDIT_BATCH_SIZE = 200
+
+/** Durable side of the kernel audit trail. */
+export interface KernelAuditBatchStore {
+  /** Inserts the records of one ledger atomically: all or none. */
+  insert(ledgerId: string, records: readonly AuditLedgerRecord[]): Promise<void>
+  /** Highest persisted sequence of the ledger; 0 when it has no row. */
+  persistedThrough(ledgerId: string): Promise<number>
+}
+
+export interface KernelAuditTrailOptions {
+  readonly createLedger: () => HashChainedAuditLedger
+  readonly createLedgerId?: () => string
+  readonly rotateAt?: number
+  readonly batchSize?: number
+}
+
+/** The ledger one turn appends to, held from `begin` to `end`. */
+export interface KernelAuditTurnHandle {
+  readonly ledger: HashChainedAuditLedger
+  readonly ledgerId: string
+}
+
+export interface KernelAuditTrail {
+  /** The ledger new turns append to. */
+  current(): HashChainedAuditLedger
+  /** Takes the current ledger for a turn, rotating it when full. */
+  begin(): KernelAuditTurnHandle
+  end(handle: KernelAuditTurnHandle): void
+  /** Persists every record above each ledger's cursor, in order. */
+  flush(): Promise<void>
+  /** Ledgers still held in memory (the current one included). */
+  pendingLedgers(): number
+}
+
+interface KernelAuditCursor extends KernelAuditTurnHandle {
+  persisted: number
+  active: number
+  uncertain: boolean
+}
+
 /**
- * Persists the governed-runtime audit records of one turn. Each row keeps the
- * ledger id, sequence and hashes so the chain can be re-verified from the
- * database. A failure propagates: the outbox event is retried and the replay
- * is idempotent, so no turn is reported without its durable audit.
+ * SPEC0249 (AUD-0621 F19). Each in-memory ledger keeps a cursor of the
+ * records known to be persisted. A flush writes everything above the cursor
+ * in transactional batches and advances the cursor only after each commit,
+ * so a failed write is resent exactly, by the next turn, from where it
+ * stopped. After a failed batch the commit may still have happened; the
+ * cursor is then reconciled from the highest persisted sequence before any
+ * write, so nothing is duplicated. Flushes are serialized per process. A
+ * rotated ledger is dropped only once persisted and with no active turn.
  */
-async function persistKernelAudit(
-  conversations: TenantScopedPostgresRuntimeRepository,
+export function createKernelAuditTrail(
+  store: KernelAuditBatchStore,
+  options: KernelAuditTrailOptions
+): KernelAuditTrail {
+  const rotateAt = options.rotateAt ?? KERNEL_AUDIT_LEDGER_ROTATE_AT
+  const batchSize = options.batchSize ?? KERNEL_AUDIT_BATCH_SIZE
+  const createLedgerId = options.createLedgerId ?? randomUUID
+  const newCursor = (): KernelAuditCursor => ({
+    ledger: options.createLedger(),
+    ledgerId: createLedgerId(),
+    persisted: 0,
+    active: 0,
+    uncertain: false
+  })
+  const cursors: KernelAuditCursor[] = [newCursor()]
+  let chain: Promise<void> = Promise.resolve()
+
+  const latest = (): KernelAuditCursor =>
+    cursors[cursors.length - 1] as KernelAuditCursor
+
+  async function flushCursor(cursor: KernelAuditCursor): Promise<void> {
+    if (cursor.uncertain) {
+      const through = await store.persistedThrough(cursor.ledgerId)
+      if (
+        !Number.isSafeInteger(through) ||
+        through < cursor.persisted ||
+        through > cursor.ledger.size()
+      ) {
+        throw new Error('Kernel audit chain diverged from the persisted ledger')
+      }
+      cursor.persisted = through
+      cursor.uncertain = false
+    }
+    while (cursor.persisted < cursor.ledger.size()) {
+      const batch = cursor.ledger
+        .records()
+        .slice(cursor.persisted, cursor.persisted + batchSize)
+      try {
+        await store.insert(cursor.ledgerId, batch)
+      } catch (error) {
+        cursor.uncertain = true
+        throw error
+      }
+      cursor.persisted += batch.length
+    }
+  }
+
+  async function flushAll(): Promise<void> {
+    for (const cursor of [...cursors]) await flushCursor(cursor)
+    while (cursors.length > 1) {
+      const oldest = cursors[0] as KernelAuditCursor
+      if (oldest.active > 0 || oldest.persisted < oldest.ledger.size()) break
+      cursors.shift()
+    }
+  }
+
+  return {
+    current: () => latest().ledger,
+    begin() {
+      let cursor = latest()
+      if (cursor.ledger.size() >= rotateAt) {
+        cursor = newCursor()
+        cursors.push(cursor)
+      }
+      cursor.active += 1
+      return cursor
+    },
+    end(handle) {
+      const cursor = cursors.find((candidate) => candidate === handle)
+      if (cursor && cursor.active > 0) cursor.active -= 1
+    },
+    flush() {
+      const run = chain.then(flushAll)
+      chain = run.catch(() => undefined)
+      return run
+    },
+    pendingLedgers: () => cursors.length
+  }
+}
+
+/**
+ * PostgreSQL side of the trail. Each batch is one tenant-scoped transaction;
+ * every row keeps the ledger id, sequence and hashes so the chain can be
+ * re-verified from the database (`verifyPersistedKernelAudit`).
+ */
+export function createPostgresKernelAuditStore(
+  pool: PostgresPoolLike,
+  tenantId: TenantId
+): KernelAuditBatchStore {
+  return {
+    insert: (ledgerId, records) =>
+      withTenantTransaction(pool, tenantId, async (client) => {
+        const repository = new PostgresRuntimeRepository(client, {
+          tenantIsolation: true
+        })
+        for (const record of records) {
+          await repository.appendAudit(
+            kernelAuditEvent(tenantId, ledgerId, record)
+          )
+        }
+      }),
+    persistedThrough: (ledgerId) =>
+      withTenantContext(pool, tenantId, async (client) => {
+        const result = await client.query<{ through: string | null }>(
+          `SELECT max((payload->'kernelAudit'->>'sequence')::bigint)::text
+                    AS through
+             FROM audit_events
+            WHERE tenant_id = $1 AND actor_id = $2
+              AND payload->'kernelAudit'->>'ledgerId' = $3`,
+          [tenantId, KERNEL_AUDIT_ACTOR_ID, ledgerId]
+        )
+        return Number(result.rows[0]?.through ?? 0)
+      })
+  }
+}
+
+function kernelAuditEvent(
   tenantId: TenantId,
   ledgerId: string,
-  records: readonly AuditLedgerRecord[]
-): Promise<void> {
-  for (const record of records) {
-    await conversations.appendAudit(
-      {
-        type: 'policy_decision',
-        actorType: 'System',
-        actorId: KERNEL_AUDIT_ACTOR_ID,
-        correlationId: record.correlationId,
-        policyVersion: CONTROLLED_KERNEL_POLICY_VERSION,
-        payload: {
-          tenantId,
-          kernelAudit: {
-            ledgerId,
-            sequence: record.sequence,
-            eventId: record.eventId,
-            eventType: record.type,
-            actor: record.actor,
-            timestamp: record.timestamp,
-            previousHash: auditHashRef(record.previousHash),
-            payloadHash: auditHashRef(record.payloadHash),
-            eventHash: auditHashRef(record.eventHash),
-            payload: record.payload ?? null
-          }
-        }
-      },
-      tenantId
-    )
+  record: AuditLedgerRecord
+): Parameters<PostgresRuntimeRepository['appendAudit']>[0] {
+  return {
+    tenantId,
+    type: 'policy_decision',
+    actorType: 'System',
+    actorId: KERNEL_AUDIT_ACTOR_ID,
+    correlationId: record.correlationId,
+    policyVersion: CONTROLLED_KERNEL_POLICY_VERSION,
+    payload: {
+      tenantId,
+      kernelAudit: {
+        ledgerId,
+        sequence: record.sequence,
+        eventId: record.eventId,
+        eventType: record.type,
+        actor: record.actor,
+        timestamp: record.timestamp,
+        previousHash: auditHashRef(record.previousHash),
+        payloadHash: auditHashRef(record.payloadHash),
+        eventHash: auditHashRef(record.eventHash),
+        payload: record.payload ?? null
+      }
+    }
   }
 }
 

@@ -50,8 +50,10 @@ import type {
   OutboxClaimInput,
   OutboxEnqueueInput,
   OutboxFailInput,
+  OutboxHeartbeatInput,
   OutboxRequeueInput
 } from './outbox.ts'
+import { renewClaim } from './postgres-outbox.ts'
 import type {
   AuditEvidenceCheckpointCreateInput,
   AuditEvidenceCheckpointRecord,
@@ -241,6 +243,19 @@ export class TenantScopedPostgresRuntimeRepository {
 
   fail(input: OutboxFailInput): Promise<DurableOutboxEventRecord> {
     return this.run(input.tenantId, (repository) => repository.fail(input))
+  }
+
+  /**
+   * SPEC0249 (AUD-0621 F20): renews the lease of the current claim by
+   * compare-and-swap on owner, attempt and claim token. Null means the lease
+   * is no longer this claim's; the caller must treat it as lost.
+   */
+  heartbeatClaim(
+    input: OutboxHeartbeatInput
+  ): Promise<DurableOutboxEventRecord | null> {
+    return withTenantContext(this.pool, input.tenantId, (client) =>
+      renewClaim({ client, repositoryNow: () => new Date() }, input)
+    )
   }
 
   requeueDeadLetter(
