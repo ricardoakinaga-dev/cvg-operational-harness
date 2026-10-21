@@ -5,6 +5,7 @@ import type { ShiftConfig } from './config.ts'
 import { allowlistedFetch, type FetchLike } from './egress.ts'
 import {
   buildOrganizerGateway,
+  isSyntheticOrganizer,
   ModelOrganizer,
   type Organizer
 } from './organizer.ts'
@@ -35,11 +36,22 @@ export interface ComposeOptions {
   /** Network implementation under the egress allowlist (tests only). */
   fetchImpl?: FetchLike
   /**
-   * Synthetic, in-process organizer for local tests and the sandbox. It
-   * never contacts a model; production composition always uses the model
-   * gateway, which denies clinical notes (NO_MODEL).
+   * Synthetic, in-process organizer for tests only: accepted solely when it
+   * carries the SYNTHETIC_ORGANIZER mark (sandbox/services.ts) and the
+   * process runs under the test runner (NODE_ENV=test). It never contacts a
+   * model; every other composition uses the model gateway, which denies
+   * clinical notes (NO_MODEL).
    */
   organizer?: Organizer
+}
+
+function assertTestOrganizer(organizer: Organizer | undefined): void {
+  if (organizer === undefined) return
+  if (process.env.NODE_ENV !== 'test' || !isSyntheticOrganizer(organizer)) {
+    throw new Error(
+      'organizer injection is limited to the synthetic organizer under the test runner'
+    )
+  }
 }
 
 /**
@@ -51,6 +63,7 @@ export function composeShiftApp(
   options: ComposeOptions = {}
 ): ShiftApp {
   const { env, members } = config
+  assertTestOrganizer(options.organizer)
   const store = new ShiftStore(env.SHIFT_DATA_DIR)
   const guarded = (origins: string[]) =>
     allowlistedFetch(origins, options.fetchImpl)

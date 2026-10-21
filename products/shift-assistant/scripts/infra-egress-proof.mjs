@@ -16,27 +16,43 @@
 // FAIL because the host-published forbidden receiver becomes reachable.
 // This proves the Docker network layer locally; the production host firewall
 // (deploy/egress-policy.example.nft) needs the host operator.
+// At the end the product container is stopped like the compose supervisor
+// does (`docker stop`, 15 s grace): it must exit 0 within the 10 s budget.
+// Optional `--name-prefix <p>` (default `cvg-shift-aud0621`) and
+// `--label <key=value>` name and label every container, network and volume.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 
 const args = process.argv.slice(2)
 const selfTest = args.includes('--self-test-non-internal')
-const [image, receiverImage] = args.filter((arg) => !arg.startsWith('--'))
+const option = (name) => {
+  const index = args.indexOf(name)
+  return index >= 0 ? args[index + 1] : undefined
+}
+const optionValues = new Set(
+  ['--name-prefix', '--label'].map(option).filter(Boolean)
+)
+const [image, receiverImage] = args.filter(
+  (arg) => !arg.startsWith('--') && !optionValues.has(arg)
+)
 if (!image || !receiverImage) {
   process.stderr.write(
-    'usage: infra-egress-proof.mjs <image> <receiver-image>\n'
+    'usage: infra-egress-proof.mjs <image> <receiver-image> [--name-prefix <p>] [--label <k=v>]\n'
   )
   process.exit(2)
 }
 
-const run = `aud0621-${randomBytes(3).toString('hex')}`
+const prefix = option('--name-prefix') ?? 'cvg-shift-aud0621'
+const label = option('--label')
+const labels = label ? ['--label', label] : []
+const run = `${prefix}-${randomBytes(3).toString('hex')}`
 const names = {
-  backend: `cvg-shift-${run}-backend`,
-  outside: `cvg-shift-${run}-outside`,
-  allowed: `cvg-shift-${run}-allowed`,
-  forbidden: `cvg-shift-${run}-forbidden`,
-  product: `cvg-shift-${run}-product`,
-  volume: `cvg-shift-${run}-data`
+  backend: `${run}-backend`,
+  outside: `${run}-outside`,
+  allowed: `${run}-allowed`,
+  forbidden: `${run}-forbidden`,
+  product: `${run}-product`,
+  volume: `${run}-data`
 }
 const SECRET = 'segredo-sintetico-da-prova-de-egress'
 const ANA = '5511900000001'
@@ -128,12 +144,13 @@ try {
   must([
     'network',
     'create',
+    ...labels,
     ...(selfTest ? [] : ['--internal']),
     '--driver',
     'bridge',
     names.backend
   ])
-  must(['network', 'create', '--driver', 'bridge', names.outside])
+  must(['network', 'create', ...labels, '--driver', 'bridge', names.outside])
   const outsideGateway = must([
     'network',
     'inspect',
@@ -141,10 +158,11 @@ try {
     '{{(index .IPAM.Config 0).Gateway}}',
     names.outside
   ])
-  must(['volume', 'create', names.volume])
+  must(['volume', 'create', ...labels, names.volume])
   must([
     'run',
     '-d',
+    ...labels,
     '--name',
     names.allowed,
     '--network',
@@ -168,6 +186,7 @@ try {
   must([
     'run',
     '-d',
+    ...labels,
     '--name',
     names.forbidden,
     '--network',
@@ -196,6 +215,7 @@ try {
   must([
     'run',
     '-d',
+    ...labels,
     '--name',
     names.product,
     '--network',
@@ -350,6 +370,27 @@ try {
   )
   report.forbiddenIp = forbiddenIp
   report.forbiddenPublished = `${outsideGateway}:${hostPort}`
+
+  // Stop as the compose supervisor does: SIGTERM, 15 s grace, then SIGKILL.
+  // The product's own budget is 10 s and a clean stop exits 0.
+  const stopStarted = Date.now()
+  const stopped = docker(['stop', '-t', '15', names.product], {
+    timeout: 30_000
+  })
+  const stopMs = Date.now() - stopStarted
+  const exitCode = docker([
+    'inspect',
+    '-f',
+    '{{.State.ExitCode}}',
+    names.product
+  ]).stdout.trim()
+  check(
+    'docker stop ends the product within the 10 s budget',
+    stopped.status === 0 && stopMs <= 10_000,
+    `${stopMs} ms`
+  )
+  check('clean stop exits 0', exitCode === '0', `exit ${exitCode}`)
+  report.stop = { ms: stopMs, exitCode: Number(exitCode) }
 } catch (error) {
   check('setup', false, error instanceof Error ? error.message : 'unknown')
 } finally {
@@ -364,7 +405,7 @@ try {
     'ps',
     '-a',
     '--filter',
-    `name=cvg-shift-${run}`,
+    `name=${run}`,
     '-q'
   ]).stdout.trim()
   report.cleanup = leftovers ? 'INCOMPLETE' : 'DONE'

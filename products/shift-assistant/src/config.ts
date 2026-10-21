@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { parseMembers, type Member } from './domain.ts'
+import { isInternalServiceUrl } from './egress.ts'
 
 /** A deadline in milliseconds, accepted only within [1 s, `max`]. */
 function ms(max: number) {
@@ -41,6 +42,7 @@ const EnvSchema = z
     EVOLUTION_URL: z.url().optional(),
     EVOLUTION_API_KEY: z.string().optional(),
     EVOLUTION_INSTANCE: z.string().optional(),
+    /** Local Whisper only: loopback, private address or internal service name. */
     WHISPER_URL: z.url(),
     WHISPER_MODEL: z.string().default('whisper-1'),
     LLM_BASE_URL: z.url(),
@@ -50,6 +52,14 @@ const EnvSchema = z
     LLM_MODEL: z.string().min(1)
   })
   .superRefine((env, ctx) => {
+    if (!isInternalServiceUrl(env.WHISPER_URL)) {
+      // Value never echoed: only the field name reaches the error.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['WHISPER_URL'],
+        message: 'must be a local or internal destination'
+      })
+    }
     if (env.LLM_LOCATION === 'external' && !env.LLM_API_KEY) {
       ctx.addIssue({ code: 'custom', message: 'LLM_API_KEY is required' })
     }

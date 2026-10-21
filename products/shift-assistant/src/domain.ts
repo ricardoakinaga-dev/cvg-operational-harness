@@ -99,9 +99,31 @@ export interface Task {
    * reminder of this window is sent; "adiar" opens a new window.
    */
   reminderUncertain?: boolean
+  /**
+   * Reminder attempts of this slot that provably never left the process
+   * (`not_sent`), and when the next one may start. Five attempts in all,
+   * then `reminderSendFailed` holds the window until "adiar" or "feito".
+   */
+  reminderNotSentAttempts?: number
+  reminderRetryAt?: string
+  reminderSendFailed?: boolean
 }
 
 export type TaskStatus = 'draft' | 'open' | 'done' | 'cancelled'
+
+/**
+ * Retry budget of SPEC 0179 section 6: delays after the 1st..4th failed
+ * attempt; the 5th failed attempt is final. Inbox processing counts it per
+ * message across stages (stricter than "per stage", so a failure that moves
+ * between stages cannot retry forever); reminders refused before they left
+ * the process count it per slot; the external monitor's alert queue counts
+ * it per delivery.
+ */
+export const RETRY_DELAYS_MS: readonly number[] = [
+  30_000, 120_000, 600_000, 1_800_000
+]
+/** Attempts in all, including the first. */
+export const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1
 
 /** Processing stages that call a dependency and can be retried. */
 export type ProcessingStage = 'download' | 'transcribe' | 'organize' | 'reply'
@@ -156,6 +178,12 @@ export type ShiftEvent =
       slot: number
       outcome: 'not_sent' | 'uncertain'
       code: string
+      /** `not_sent` only: attempt number of this slot (absent in old journals). */
+      attempt?: number
+      /** `not_sent` only: earliest next attempt; absent when final. */
+      nextAttemptAt?: string
+      /** `not_sent` only: no automatic attempt follows (permanent or budget spent). */
+      final?: boolean
     }
   | {
       type: 'recovery_recorded'

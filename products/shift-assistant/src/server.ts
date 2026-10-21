@@ -108,7 +108,9 @@ export function buildShiftServer(options: ShiftServerOptions): Server {
             ready: health.ready,
             mode: health.mode,
             effectsEnabled: health.effectsEnabled,
-            reasonCodes: health.reasonCodes
+            reasonCodes: health.reasonCodes,
+            // Content-free codes for the external monitor (health.ts).
+            attention: health.attention
           })
           return
         }

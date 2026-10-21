@@ -6,14 +6,39 @@
 // (no shell, package manager or shell utility, no setuid/setgid file, no
 // node_modules), the program owned by root and /data owned by 10001, and
 // that executing a shell in the image fails. Prints a JSON report.
+// Optional `--name-prefix <p>` and `--label <key=value>` name and label the
+// short-lived containers it creates, so a shared host can tell them apart.
 // Exit 0 PASS, 1 FAIL, 2 tool or image unavailable.
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
-const image = process.argv[2]
+const flags = new Map()
+const positional = []
+for (let index = 2; index < process.argv.length; index += 1) {
+  const value = process.argv[index]
+  if (value === '--name-prefix' || value === '--label') {
+    flags.set(value, process.argv[index + 1])
+    index += 1
+  } else positional.push(value)
+}
+const image = positional[0]
 if (!image) {
-  process.stderr.write('usage: image-contract.mjs <image>\n')
+  process.stderr.write(
+    'usage: image-contract.mjs <image> [--name-prefix <p>] [--label <k=v>]\n'
+  )
   process.exit(2)
+}
+const run = randomBytes(3).toString('hex')
+let containers = 0
+/** `--name`/`--label` for a container this script creates. */
+function identity() {
+  containers += 1
+  const prefix = flags.get('--name-prefix')
+  const label = flags.get('--label')
+  return [
+    ...(prefix ? ['--name', `${prefix}-contract-${run}-${containers}`] : []),
+    ...(label ? ['--label', label] : [])
+  ]
 }
 
 function docker(args, options = {}) {
@@ -59,7 +84,7 @@ check(
   health[0]
 )
 
-const created = docker(['create', image])
+const created = docker(['create', ...identity(), image])
 if (created.status !== 0) {
   process.stderr.write('cannot create container\n')
   process.exit(2)
@@ -155,6 +180,7 @@ check(
 const passwd = docker([
   'run',
   '--rm',
+  ...identity(),
   '--entrypoint',
   '/bin/sh',
   image,
@@ -162,7 +188,14 @@ const passwd = docker([
   'true'
 ])
 check('executing /bin/sh fails', passwd.status !== 0, `exit ${passwd.status}`)
-const bash = docker(['run', '--rm', '--entrypoint', 'bash', image])
+const bash = docker([
+  'run',
+  '--rm',
+  ...identity(),
+  '--entrypoint',
+  'bash',
+  image
+])
 check('executing bash fails', bash.status !== 0, `exit ${bash.status}`)
 
 const report = {

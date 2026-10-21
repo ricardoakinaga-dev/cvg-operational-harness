@@ -82,15 +82,19 @@ truncar e o journal continua no sucessor listado em `journal.json`. Linha no mei
 que não é JSON, evento desconhecido ou prefixo divergente impedem a abertura para
 recuperação humana; a validação campo a campo de cada evento é do formato V2.
 Um binário anterior ao AUD-0621 não entende linhas `transaction` nem sucessores:
-não use rollback de binário sobre um volume já aberto por esta versão. Migração
-V2, outbox durável, lock de escritor único, backup/restore e alerta recebido
-continuam especificados em0179 e pendentes.
+não use rollback de binário sobre um volume já aberto por esta versão. Backup
+com inventário e hash, restore com comparação sob hold e sandbox, monitor externo
+com fila durável e recibo: [operations.md](operations.md) (PISO-008, prova local
+sintética). Migração V2, outbox durável e lock de escritor único continuam
+especificados em0179 e pendentes.
 
 ## Aceites distintos
 
 Build/imagem/demo comprovam o artefato estrutural. A imagem sem shell e o egress
 pela rede interna têm prova local sintética (AUD-0621 F25); o filtro do host de
 produção e a imagem construída no ambiente real continuam pendentes do operador.
-PISO008 exige restore/alerta executados.
+PISO008 tem restore/alerta executados localmente com processos separados
+([operations.md](operations.md)); monitor em outra máquina e receptor real ficam
+para o ambiente de operação.
 PISO009 exige guia validado e áudios; PISO010 exige candidato aprovado e duas semanas
 de acompanhamento. Esses resultados não são herdados da certificação do harness.

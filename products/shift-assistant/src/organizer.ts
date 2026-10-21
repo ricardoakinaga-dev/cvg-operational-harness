@@ -13,6 +13,23 @@ export interface Organizer {
   organize(text: string, now: Date, signal?: AbortSignal): Promise<Organized>
 }
 
+/**
+ * Marks the in-process synthetic organizer of the sandbox. The composition
+ * accepts an injected organizer only with this mark and only under the test
+ * runner; production always organizes through the model gateway (NO_MODEL).
+ */
+export const SYNTHETIC_ORGANIZER: unique symbol = Symbol.for(
+  'cvg.shift-assistant.synthetic-organizer'
+)
+
+export function isSyntheticOrganizer(organizer: Organizer): boolean {
+  return (
+    (organizer as Organizer & { [SYNTHETIC_ORGANIZER]?: unknown })[
+      SYNTHETIC_ORGANIZER
+    ] === true
+  )
+}
+
 export const ORGANIZER_PROMPT = `Você organiza anotações de plantão de um hospital veterinário.
 Recebe a fala ou o texto de um plantonista e devolve SOMENTE um objeto JSON com:
 {

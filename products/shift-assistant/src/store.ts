@@ -11,11 +11,13 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import {
+  MAX_ATTEMPTS,
   normalizePatientId,
   normalizePatientName,
   SHIFT_EVENT_TYPES,
   type InboundMessage,
   type KnownPatient,
+  type MessageKind,
   type Note,
   type ProcessingStage,
   type ShiftEvent,
@@ -67,12 +69,86 @@ export interface RetryState {
   nextAttemptAt: string
 }
 
+export interface StoreOptions {
+  /**
+   * Operational hold: replay only. Nothing is created, isolated or written;
+   * an uncommitted final tail is left in place and reported. Used to inspect
+   * a restored or backed-up volume before any process may write to it.
+   */
+  readOnly?: boolean
+}
+
+/**
+ * Normalized, content-free projection of the journal (SPEC 0179 section 10):
+ * states, numbers, dates, counters and SHA-256 of text, with phones and
+ * provider message IDs replaced by opaque references. Two volumes with the
+ * same committed history have equal projections. The references are unkeyed
+ * hashes: they keep values out of reports, but a small space such as a phone
+ * number can be brute-forced, so the projection is stored next to the
+ * journal copy with the same permissions, never published.
+ */
+export interface StoreProjection {
+  paused: boolean
+  nextTaskNumber: number
+  messages: Array<{
+    ref: string
+    provider: InboundMessage['provider']
+    kind: MessageKind
+    fromRef: string
+    receivedAt: string
+    textSha256: string
+    hasMedia: boolean
+    state: 'pending' | 'processed' | 'review_required'
+    retry?: RetryState
+    reviewReason?: string
+  }>
+  notes: Array<{
+    id: string
+    messageRef: string
+    authorRef: string
+    kind: MessageKind
+    createdAt: string
+    rawTextSha256: string
+    mediaFile?: string
+    organizedSha256?: string
+    patientIdRefs: string[]
+    unverifiedNumbers: number
+    blockingIssues: number
+    confirmed: boolean
+    supersededBy?: string
+  }>
+  tasks: Array<{
+    number: number
+    noteId?: string
+    ownerRef: string
+    status: Task['status']
+    dueAt: string
+    createdAt: string
+    descriptionSha256: string
+    patientRef?: string
+    patientIdRef?: string
+    remindedCount: number
+    lastRemindedAt?: string
+    doneAt?: string
+    reminderInFlight?: number
+    reminderUncertain?: boolean
+    reminderNotSentAttempts?: number
+    reminderRetryAt?: string
+    reminderSendFailed?: boolean
+  }>
+}
+
 const MANIFEST = 'journal.json'
 const LEGACY = 'events.jsonl'
 const LF = 0x0a
 
 function sha256(bytes: Uint8Array | string): string {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+/** Opaque, stable reference for a phone or provider ID in projections. */
+function opaque(value: string): string {
+  return sha256(`cvg-shift-ref:${value}`).slice(0, 16)
 }
 
 /** Writes every byte, then syncs: a short write never passes for a commit. */
@@ -133,8 +209,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class ShiftStore {
   readonly #dir: string | undefined
   readonly #mediaDir: string | undefined
+  readonly #readOnly: boolean
   #active: string | undefined
   #storageFailed = false
+  #pendingTailBytes = 0
   readonly #messages = new Map<string, InboundMessage>()
   readonly #processed = new Set<string>()
   readonly #review = new Map<string, string>()
@@ -144,12 +222,19 @@ export class ShiftStore {
   #paused = false
 
   /** `dataDir` undefined keeps everything in memory (tests). */
-  constructor(dataDir?: string) {
+  constructor(dataDir?: string, options: StoreOptions = {}) {
+    this.#readOnly = options.readOnly === true
     if (!dataDir) return
     this.#dir = dataDir
-    mkdirSync(dataDir, { recursive: true })
     this.#mediaDir = join(dataDir, 'media')
-    mkdirSync(this.#mediaDir, { recursive: true })
+    if (this.#readOnly) {
+      if (!existsSync(dataDir)) {
+        throw new ShiftJournalError('STORAGE_UNAVAILABLE', 'volume missing')
+      }
+    } else {
+      mkdirSync(dataDir, { recursive: true })
+      mkdirSync(this.#mediaDir, { recursive: true })
+    }
     const manifest = this.#readManifest()
     manifest.segments.forEach((segment, index) =>
       this.#replay(manifest, segment, index === manifest.segments.length - 1)
@@ -176,6 +261,9 @@ export class ShiftStore {
    */
   commit(events: ShiftEvent[]): void {
     if (events.length === 0) return
+    if (this.#readOnly) {
+      throw new ShiftJournalError('STORAGE_UNAVAILABLE', 'read-only hold')
+    }
     const record: JournalRecord =
       events.length === 1
         ? events[0]!
@@ -203,8 +291,18 @@ export class ShiftStore {
     for (const event of events) this.#apply(event)
   }
 
+  /** False under the read-only hold: nothing may be written. */
   get storageHealthy(): boolean {
-    return !this.#storageFailed
+    return !this.#storageFailed && !this.#readOnly
+  }
+
+  get readOnly(): boolean {
+    return this.#readOnly
+  }
+
+  /** Read-only hold only: bytes of an uncommitted final tail left in place. */
+  get pendingTailBytes(): number {
+    return this.#pendingTailBytes
   }
 
   /**
@@ -216,6 +314,9 @@ export class ShiftStore {
     const base = sha256(key).slice(0, 32)
     let name = `${base}.${extension}`
     if (!this.#mediaDir) return name
+    if (this.#readOnly) {
+      throw new ShiftJournalError('STORAGE_UNAVAILABLE', 'read-only hold')
+    }
     const path = join(this.#mediaDir, name)
     if (existsSync(path)) {
       if (sha256(readFileSync(path)) === sha256(bytes)) return name
@@ -336,6 +437,96 @@ export class ShiftStore {
     )
   }
 
+  /** Reminders that never left the process and spent their budget. */
+  failedReminders(): Task[] {
+    return [...this.#tasks.values()].filter(
+      (task) => task.status === 'open' && task.reminderSendFailed === true
+    )
+  }
+
+  /** Content-free projection of everything committed (see StoreProjection). */
+  projection(): StoreProjection {
+    const state = (id: string): StoreProjection['messages'][number]['state'] =>
+      this.#review.has(id)
+        ? 'review_required'
+        : this.#processed.has(id)
+          ? 'processed'
+          : 'pending'
+    return {
+      paused: this.#paused,
+      nextTaskNumber: this.nextTaskNumber(),
+      messages: [...this.#messages.values()].map((message) => {
+        const retry = this.#retry.get(message.messageId)
+        const review = this.#review.get(message.messageId)
+        return {
+          ref: opaque(message.messageId),
+          provider: message.provider,
+          kind: message.kind,
+          fromRef: opaque(message.fromPhone),
+          receivedAt: message.receivedAt,
+          textSha256: sha256(message.text),
+          hasMedia: message.mediaRef !== undefined,
+          state: state(message.messageId),
+          ...(retry ? { retry: { ...retry } } : {}),
+          ...(review !== undefined ? { reviewReason: review } : {})
+        }
+      }),
+      notes: [...this.#notes.values()].map((note) => ({
+        id: note.id,
+        messageRef: opaque(note.messageId),
+        authorRef: opaque(note.authorPhone),
+        kind: note.kind,
+        createdAt: note.createdAt,
+        rawTextSha256: sha256(note.rawText),
+        ...(note.mediaFile ? { mediaFile: note.mediaFile } : {}),
+        ...(note.organized
+          ? { organizedSha256: sha256(JSON.stringify(note.organized)) }
+          : {}),
+        patientIdRefs: (note.organized?.pacientes ?? [])
+          .map((patient) => patient.id)
+          .filter((id): id is string => typeof id === 'string' && id !== '')
+          .map((id) => opaque(normalizePatientId(id))),
+        unverifiedNumbers: note.unverifiedNumbers.length,
+        blockingIssues: note.blockingIssues?.length ?? 0,
+        confirmed: note.confirmed,
+        ...(note.supersededBy ? { supersededBy: note.supersededBy } : {})
+      })),
+      tasks: [...this.#tasks.values()]
+        .sort((left, right) => left.number - right.number)
+        .map((task) => ({
+          number: task.number,
+          ...(task.noteId !== undefined ? { noteId: task.noteId } : {}),
+          ownerRef: opaque(task.ownerPhone),
+          status: task.status,
+          dueAt: task.dueAt,
+          createdAt: task.createdAt,
+          descriptionSha256: sha256(task.description),
+          ...(task.patient
+            ? { patientRef: opaque(normalizePatientName(task.patient)) }
+            : {}),
+          ...(task.patientId
+            ? { patientIdRef: opaque(normalizePatientId(task.patientId)) }
+            : {}),
+          remindedCount: task.remindedCount,
+          ...(task.lastRemindedAt
+            ? { lastRemindedAt: task.lastRemindedAt }
+            : {}),
+          ...(task.doneAt ? { doneAt: task.doneAt } : {}),
+          ...(task.reminderInFlight !== undefined
+            ? { reminderInFlight: task.reminderInFlight }
+            : {}),
+          ...(task.reminderUncertain ? { reminderUncertain: true } : {}),
+          ...(task.reminderNotSentAttempts
+            ? { reminderNotSentAttempts: task.reminderNotSentAttempts }
+            : {}),
+          ...(task.reminderRetryAt
+            ? { reminderRetryAt: task.reminderRetryAt }
+            : {}),
+          ...(task.reminderSendFailed ? { reminderSendFailed: true } : {})
+        }))
+    }
+  }
+
   /** Never reused, even after a restart or with gaps in the history. */
   nextTaskNumber(): number {
     let max = 0
@@ -355,6 +546,7 @@ export class ShiftStore {
       task.status !== 'open' ||
       task.reminderInFlight !== undefined ||
       task.reminderUncertain === true ||
+      task.reminderSendFailed === true ||
       task.remindedCount + 1 !== slot
     ) {
       return false
@@ -423,6 +615,11 @@ export class ShiftStore {
         'JOURNAL_CORRUPT',
         `${segment.file} incomplete line inside the history`
       )
+    }
+    if (this.#readOnly) {
+      // Under hold the tail stays where it is; a writable start isolates it.
+      this.#pendingTailBytes = tail.byteLength
+      return
     }
     this.#isolateTail(manifest, segment, bytes, end)
   }
@@ -640,6 +837,8 @@ export class ShiftStore {
         if (task) {
           delete task.reminderUncertain
           delete task.reminderInFlight
+          clearNotSent(task)
+          delete task.reminderSendFailed
         }
         return
       }
@@ -652,7 +851,20 @@ export class ShiftStore {
         const task = this.#tasks.get(event.number)
         if (!task) return
         delete task.reminderInFlight
-        if (event.outcome === 'uncertain') task.reminderUncertain = true
+        if (event.outcome === 'uncertain') {
+          task.reminderUncertain = true
+          return
+        }
+        // Never left the process. Journals written before the budget have
+        // no attempt number: count them, so they are bounded too.
+        const attempt = event.attempt ?? (task.reminderNotSentAttempts ?? 0) + 1
+        if (attempt > 0) task.reminderNotSentAttempts = attempt
+        delete task.reminderRetryAt
+        if (event.final === true || attempt >= MAX_ATTEMPTS) {
+          task.reminderSendFailed = true
+        } else if (event.nextAttemptAt !== undefined) {
+          task.reminderRetryAt = event.nextAttemptAt
+        }
         return
       }
       case 'task_reminded': {
@@ -661,6 +873,7 @@ export class ShiftStore {
           task.remindedCount += 1
           task.lastRemindedAt = event.at
           delete task.reminderInFlight
+          clearNotSent(task)
         }
         return
       }
@@ -680,4 +893,9 @@ export class ShiftStore {
     if (task) Object.assign(task, patch)
     if (task && patch.dueAt) delete task.lastRemindedAt
   }
+}
+
+function clearNotSent(task: Task): void {
+  delete task.reminderNotSentAttempts
+  delete task.reminderRetryAt
 }

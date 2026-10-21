@@ -7,6 +7,7 @@ núcleo, contratos públicos e backlog na raiz do repositório.
 - [Backlog canônico PISO](backlog.md).
 - [Correspondência AP–PISO–HISO](requisitos-ap.md).
 - [Operação e recuperação local](operacao-local.md).
+- [Backup, restore e monitor externo](operations.md).
 - [Guia preparado para homologação](guia-plantonista.md).
 - [Corpus sintético e etapas de qualificação](homologacao-corpus.md).
 - [Comandos de build/testes e deploy](../README.md).

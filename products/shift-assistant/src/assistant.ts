@@ -15,7 +15,13 @@ import type {
   ShiftEvent,
   Task
 } from './domain.ts'
-import { normalizePatientName, samePhone } from './domain.ts'
+import {
+  MAX_ATTEMPTS,
+  normalizePatientName,
+  RETRY_DELAYS_MS,
+  samePhone
+} from './domain.ts'
+import { evaluateHealth, type AssistantHealth } from './health.ts'
 import {
   formatLocalTime,
   unverifiedNumbers,
@@ -64,27 +70,14 @@ export type AdmitResult =
   | 'storage_unavailable'
   | 'stopping'
 
-export interface AssistantHealth {
-  ready: boolean
-  mode: 'running' | 'paused' | 'stopping'
-  effectsEnabled: boolean
-  /** Stable codes for readiness failures; empty when ready. */
-  reasonCodes: string[]
-  /** Operator attention that does not make the service unready. */
-  attention: string[]
-  pendingMessages: number
-  retryingMessages: number
-  reviewRequiredMessages: number
-  openTasks: number
-  uncertainReminders: number
-}
+export type { AssistantHealth } from './health.ts'
 
 const MINUTE = 60_000
-/** Delays after the 1st..4th failure of a stage; the 5th failure is final. */
-const RETRY_DELAYS_MS = [30_000, 120_000, 600_000, 1_800_000]
-/** Failed attempts per message, across stages: the 5th is final. */
-const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1
-const HEALTH_GRACE_MS = 30_000
+/**
+ * Not-sent reminder failures that no later attempt can fix: the text exceeds
+ * the channel ceiling or the channel origin is outside the egress allowlist.
+ */
+const PERMANENT_NOT_SENT = new Set(['TEXT_TOO_LARGE', 'EGRESS_DENIED'])
 
 type AbortCause = 'paused' | 'shutdown' | 'deadline'
 
@@ -246,51 +239,35 @@ export class ShiftAssistant {
     }
   }
 
+  /** Readiness and attention from progress, storage and backlog (health.ts). */
   health(): AssistantHealth {
-    const now = this.#clock().getTime()
-    const reasons: string[] = []
-    const attention: string[] = []
-    const paused = this.#store.paused
-    const pending = this.#store.unprocessedMessages()
-    if (!this.#store.storageHealthy) reasons.push('storage_unavailable')
-    if (this.#stopping) reasons.push('stopping')
-    if (pending.length >= this.#maxPending) reasons.push('backlog_full')
-    if (
-      this.#job &&
-      performance.now() - this.#job.startedAt >
-        this.#jobTimeoutMs + HEALTH_GRACE_MS
-    ) {
-      reasons.push('job_deadline_exceeded')
-    }
-    if (this.#scheduler) {
-      const last = this.#lastTickAt ?? this.#scheduler.since
-      if (now - last > 2 * this.#scheduler.intervalMs + HEALTH_GRACE_MS) {
-        reasons.push('scheduler_stale')
-      }
-    }
-    if (!paused && this.#inboxStalled(pending, now)) {
-      reasons.push('inbox_stalled')
-    }
-    const retrying = pending.filter((message) =>
-      this.#store.retryState(message.messageId)
-    ).length
-    const review = this.#store.reviewRequiredMessages().length
-    const uncertain = this.#store.uncertainReminders().length
-    if (review > 0) attention.push('review_required')
-    if (uncertain > 0) attention.push('reminder_uncertain')
-    const ready = reasons.length === 0
-    return {
-      ready,
-      mode: this.#stopping ? 'stopping' : paused ? 'paused' : 'running',
-      effectsEnabled: ready && !paused,
-      reasonCodes: reasons,
-      attention,
-      pendingMessages: pending.length,
-      retryingMessages: retrying,
-      reviewRequiredMessages: review,
-      openTasks: this.#store.openTasks().length,
-      uncertainReminders: uncertain
-    }
+    return evaluateHealth({
+      now: this.#clock().getTime(),
+      monotonicNow: performance.now(),
+      paused: this.#store.paused,
+      stopping: this.#stopping,
+      storageHealthy: this.#store.storageHealthy,
+      pending: this.#store.unprocessedMessages().map((message) => {
+        const retry = this.#store.retryState(message.messageId)
+        return {
+          receivedAt: message.receivedAt,
+          ...(retry ? { nextAttemptAt: retry.nextAttemptAt } : {})
+        }
+      }),
+      maxPending: this.#maxPending,
+      jobTimeoutMs: this.#jobTimeoutMs,
+      ...(this.#job ? { jobStartedAt: this.#job.startedAt } : {}),
+      ...(this.#scheduler ? { scheduler: { ...this.#scheduler } } : {}),
+      ...(this.#lastTickAt !== undefined
+        ? { lastTickAt: this.#lastTickAt }
+        : {}),
+      lastProgressAt: this.#lastProgressAt,
+      activeSince: this.#activeSince,
+      reviewRequired: this.#store.reviewRequiredMessages().length,
+      uncertainReminders: this.#store.uncertainReminders().length,
+      failedReminders: this.#store.failedReminders().length,
+      openTasks: this.#store.openTasks().length
+    })
   }
 
   /**
@@ -348,6 +325,8 @@ export class ShiftAssistant {
           const outcome =
             error instanceof DispatchError ? error.outcome : 'uncertain'
           const code = errorCode(error)
+          const budget =
+            outcome === 'not_sent' ? this.#notSentBudget(task, code) : {}
           this.#commit([
             {
               type: 'reminder_dispatch_failed',
@@ -355,13 +334,15 @@ export class ShiftAssistant {
               number: task.number,
               slot,
               outcome,
-              code
+              code,
+              ...budget
             }
           ])
           this.#logger.error('shift.reminder.failed', {
             task: task.number,
             outcome,
-            code
+            code,
+            ...('final' in budget ? { final: budget.final } : {})
           })
         }
       }
@@ -371,12 +352,41 @@ export class ShiftAssistant {
     }
   }
 
+  /**
+   * Budget of a reminder that provably never left the process (SPEC 0179
+   * section 6): five attempts in all at the inbox delays, at once final for
+   * a permanent cause. An abort by pause or shutdown before the send is not
+   * an attempt.
+   */
+  #notSentBudget(
+    task: Task,
+    code: string
+  ): { attempt: number; nextAttemptAt?: string; final: boolean } {
+    const previous = task.reminderNotSentAttempts ?? 0
+    if (code === 'TRANSPORT_ABORTED') return { attempt: previous, final: false }
+    const attempt = previous + 1
+    if (PERMANENT_NOT_SENT.has(code) || attempt >= MAX_ATTEMPTS) {
+      return { attempt, final: true }
+    }
+    return {
+      attempt,
+      nextAttemptAt: new Date(
+        this.#clock().getTime() + RETRY_DELAYS_MS[attempt - 1]!
+      ).toISOString(),
+      final: false
+    }
+  }
+
   #reminderDue(task: Task): boolean {
     const now = this.#clock().getTime()
     if (task.status !== 'open') return false
     if (Date.parse(task.dueAt) > now) return false
     if (task.remindedCount >= this.#maxReminders) return false
     if (task.reminderUncertain || task.reminderInFlight !== undefined) {
+      return false
+    }
+    if (task.reminderSendFailed) return false
+    if (task.reminderRetryAt && Date.parse(task.reminderRetryAt) > now) {
       return false
     }
     if (
@@ -391,26 +401,6 @@ export class ShiftAssistant {
       if (!note || !note.confirmed || note.supersededBy) return false
     }
     return true
-  }
-
-  /**
-   * True when an eligible message has waited past the job deadline (plus a
-   * scheduler round, which is what wakes due retries) and no job started or
-   * finished in that time: a healthy, moving backlog is not a stall.
-   */
-  #inboxStalled(pending: InboundMessage[], now: number): boolean {
-    const limit =
-      this.#jobTimeoutMs + HEALTH_GRACE_MS + (this.#scheduler?.intervalMs ?? 0)
-    if (now - this.#lastProgressAt <= limit) return false
-    return pending.some((message) => {
-      const retry = this.#store.retryState(message.messageId)
-      const eligibleSince = Math.max(
-        Date.parse(message.receivedAt),
-        retry ? Date.parse(retry.nextAttemptAt) : 0,
-        this.#activeSince
-      )
-      return now - eligibleSince > limit
-    })
   }
 
   #control(
@@ -1213,7 +1203,8 @@ function bindPatient(
 }
 
 /** Short code shown in the preview and used by "ok nota <código>". */
-function noteCode(note: Note): string {
+/** Short code the author types in "ok nota <código>". */
+export function noteCode(note: Note): string {
   return note.id.replace(/-/g, '').slice(0, 8)
 }
 
