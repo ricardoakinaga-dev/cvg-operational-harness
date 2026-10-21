@@ -1,6 +1,6 @@
 # AUD0621 — remediação da auditoria crítica 0621 — 21/10/2026
 
-- F02–F24 e F26: fechados localmente, provados por teste e pela requalificação ([plano 0392](03_build/0392_aud0621_remediation.md)). F01 e F21: fechados localmente, com dependência de ambiente real. F25: ver a frente PISO-008 no 0392.
+- F02–F24 e F26: fechados localmente, provados por teste e pela requalificação ([plano 0392](03_build/0392_aud0621_remediation.md)). F01 e F21: fechados localmente, com dependência de ambiente real. F25: fechado localmente pela frente PISO-008 (backup, restore, monitor externo, stop e imagem); falta o ambiente real (nft no host, receita no CI, monitor em outra máquina).
 - Abertos e donos, sem cartão concorrente:
   - escopo por caso em `GET /v1/tasks`, `GET /v1/approvals` e no PATCH de task, P1, SPEC nova e decisão do usuário ([UP91-018](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-018));
   - produtor verificado de `case_principals` antes de uso trusted ([UP91-025](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-025));

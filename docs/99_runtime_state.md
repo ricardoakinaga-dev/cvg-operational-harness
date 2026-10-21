@@ -4,6 +4,7 @@
 - `last_completed_action`:
   - Cinco frentes em candidatas próprias, cada uma com first red, mutantes e crítico independente sem obrigatórios: produto (SPEC0179/0180), F01 (SPEC0176), runtime ([SPEC0248](02_spec/0248_runtime_budget_cancel_limits.md)), persistência e worker ([SPEC0249](02_spec/0249_persistence_worker_integrity.md)) e API/web ([SPEC0250](02_spec/0250_api_tasks_session_approvals.md)). As três SPECs novas seguiram para o BUILD pela regra do usuário (APPROVE do crítico, sem premissa nova nem migração nova).
   - Integração com correções do lead: F17 no store em memória da execution spine, prova `rem21-010` rolando a 0029, catálogo de skips, teste de task lendo a auditoria completa e paginação na SPEC0107.
+  - F25 local pela frente PISO-008 (SPEC0179 §10): backup, restore, monitor externo com recibos, stop e imagem; crítico R3 APPROVE. [Evidência](04_audit/evidence/AUD0621-PRODUCT-PISO008-20261021/promotion.json).
   - Requalificação por crítico independente: nenhum dos 26 defeitos reproduz nas sondas do auditor. [Requalificação](04_audit/evidence/AUD0621-INTEGRATION-20261021/requalification/requalification.md), [gates](04_audit/evidence/AUD0621-INTEGRATION-20261021/gates.json).
 - `next_action`:
   1. Usuário: decidir o escopo por caso em tasks e approvals (resíduo P1 do F01, SPEC nova) e o produtor verificado de `case_principals` (UP91-025) antes de qualquer uso trusted.
