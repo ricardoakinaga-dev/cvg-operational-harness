@@ -17,6 +17,13 @@ import {
 } from '../contracts.ts'
 import { ChannelError } from '../errors.ts'
 import type { FetchLike } from './evolution.ts'
+import {
+  channelSendTimeoutMs,
+  drainBoundedBody,
+  isResponseTooLarge,
+  oversizedResponseError,
+  raceSignal
+} from './bounded-body.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
 
 export interface ChatwootAdapterOptions {
@@ -27,6 +34,11 @@ export interface ChatwootAdapterOptions {
   fetchImpl?: FetchLike
   clock?: () => Date
   maxResponseBytes?: number
+  /**
+   * SPEC 0248 — deadline of one send, headers and body included, in
+   * milliseconds: an integer in 1..120000, 20000 by default.
+   */
+  timeoutMs?: number
   /**
    * AUD19-007 — explicit opt-in for loopback/private networks (local
    * homologation). Default false: private/reserved addresses are denied.
@@ -70,6 +82,7 @@ export class ChatwootChannelAdapter
   readonly #fetch?: FetchLike
   readonly #clock: () => Date
   readonly #maxResponseBytes: number
+  readonly #timeoutMs: number
   readonly #allowedHosts: string[]
   readonly #allowPrivateNetworks: boolean
   readonly #allowHttp: boolean
@@ -81,6 +94,7 @@ export class ChatwootChannelAdapter
     this.#clock = options.clock ?? (() => new Date())
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+    this.#timeoutMs = channelSendTimeoutMs(options.timeoutMs, 'Chatwoot')
     if (this.enabled) {
       const baseUrl = withoutTrailingSlashes(options.baseUrl?.trim() ?? '')
       if (!baseUrl || !options.apiKey || !options.accountId) {
@@ -194,6 +208,9 @@ export class ChatwootChannelAdapter
     const endpoint = `${this.#baseUrl}/api/v1/accounts/${this.#accountId}/conversations/${message.conversationId}/messages`
     // AUD21-REM21-004 — validate every hop and bind the default Node socket
     // to the addresses returned by that same validation.
+    // SPEC 0248: the deadline and the byte ceiling travel with the request
+    // and cover the body until its end.
+    const signal = AbortSignal.timeout(this.#timeoutMs)
     try {
       const fetchImpl = (url: string, requestInit: Record<string, unknown>) =>
         this.#fetch!(url, requestInit as RequestInit)
@@ -203,32 +220,42 @@ export class ChatwootChannelAdapter
             boundFetchImpl: this.#boundFetch
           }
         : { ...(this.#dnsLookup ? { dnsLookup: this.#dnsLookup } : {}) }
-      const response = await fetchWithSsrfGuard(
-        fetchImpl,
-        endpoint,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            api_access_token: this.#apiKey ?? ''
+      const response = await raceSignal(
+        fetchWithSsrfGuard(
+          fetchImpl,
+          endpoint,
+          {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              api_access_token: this.#apiKey ?? ''
+            },
+            body: JSON.stringify({
+              content: message.body.text,
+              message_type: 'outgoing'
+            }),
+            signal,
+            maxResponseBytes: this.#maxResponseBytes,
+            redirect: 'manual'
           },
-          body: JSON.stringify({
-            content: message.body.text,
-            message_type: 'outgoing'
-          }),
-          redirect: 'manual'
-        },
-        {
-          allowedHosts: this.#allowedHosts,
-          allowedProtocols: this.#allowHttp ? ['https:', 'http:'] : ['https:'],
-          allowPrivateNetworks: this.#allowPrivateNetworks,
-          allowLoopbackOnly: this.#allowHttp
-        },
-        deps
+          {
+            allowedHosts: this.#allowedHosts,
+            allowedProtocols: this.#allowHttp
+              ? ['https:', 'http:']
+              : ['https:'],
+            allowPrivateNetworks: this.#allowPrivateNetworks,
+            allowLoopbackOnly: this.#allowHttp
+          },
+          deps
+        ),
+        signal
       )
-      return this.#mapResponse(response, message)
+      return await this.#mapResponse(response, message, signal)
     } catch (error) {
       if (error instanceof ChannelError) throw error
+      if (isResponseTooLarge(error)) {
+        throw oversizedResponseError(error, 'Chatwoot')
+      }
       if (error instanceof Error && error.name === 'UnsafeUrlError') {
         throw new ChannelError(
           'url_rejected',
@@ -243,7 +270,8 @@ export class ChatwootChannelAdapter
 
   async #mapResponse(
     response: Response,
-    message: CanonicalOutboundMessage
+    message: CanonicalOutboundMessage,
+    signal: AbortSignal
   ): Promise<OutboundResult> {
     if (!response.ok) {
       throw new ChannelError(
@@ -252,13 +280,7 @@ export class ChatwootChannelAdapter
         response.status >= 500 || response.status === 429
       )
     }
-    const body = await response.text()
-    if (new TextEncoder().encode(body).length > this.#maxResponseBytes) {
-      throw new ChannelError(
-        'provider_rejected',
-        'Chatwoot response exceeded the size limit'
-      )
-    }
+    await drainBoundedBody(response, this.#maxResponseBytes, signal)
     return {
       externalId: message.messageId,
       channel: this.channel,

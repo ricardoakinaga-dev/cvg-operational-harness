@@ -1,6 +1,7 @@
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP, type LookupFunction } from 'node:net'
+import { responseTooLarge } from './bounded-body.ts'
 
 /**
  * Node-only transport for the composed SSRF guard. The URL hostname remains
@@ -176,7 +177,7 @@ async function readResponse(
     total += bytes.byteLength
     if (typeof maxResponseBytes === 'number' && total > maxResponseBytes) {
       response.destroy()
-      throw new Error('Response exceeds maxResponseBytes')
+      throw responseTooLarge(response.statusCode)
     }
     chunks.push(bytes)
   }

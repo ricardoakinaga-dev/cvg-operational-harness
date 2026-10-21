@@ -19,13 +19,50 @@ export class OrchestratorDecisionError extends Error {
     public readonly code:
       | 'decision_unparseable'
       | 'decision_invalid'
-      | 'orchestrator_unavailable',
-    message: string
+      | 'orchestrator_unavailable'
+      | 'budget_exhausted',
+    message: string,
+    /**
+     * Model usage the decision spent before it failed (SPEC 0248 R4), so a
+     * failed decision never hides consumption that already happened.
+     */
+    public readonly usage: ModelUsage = EMPTY_MODEL_USAGE
   ) {
     super(message)
     this.name = 'OrchestratorDecisionError'
   }
 }
+
+/**
+ * Runtime-owned budget port for decision model calls (SPEC 0248 §3.1). The
+ * runtime reserves and accounts each call with the same functions the kernel
+ * uses for its own model calls, so the orchestrator never spends outside the
+ * execution budget. `false` always means: do not start anything else.
+ */
+export interface DecisionModelGate {
+  /** Reserves one model call before the provider starts. */
+  beginCall(): boolean
+  /** Accounts the usage of a call that returned. */
+  recordCall(usage: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly costUsd: number
+  }): boolean
+  /** Reserves one decision repair before the repair call. */
+  beginRepair(): boolean
+}
+
+/**
+ * Decision input with the optional budget port. The shared
+ * `IterativeOrchestratorInput` contract is unchanged; a runtime that owns a
+ * budget passes the port, and an orchestrator without one keeps today's
+ * behaviour (it selects actions, budgets stay outside).
+ */
+export interface GovernedDecisionInput extends IterativeOrchestratorInput {
+  readonly modelGate?: DecisionModelGate
+}
+
+const BUDGET_EXHAUSTED_MESSAGE = 'Decision model budget is exhausted'
 
 export type OrchestrationRule = (
   context: StepContext
@@ -149,7 +186,7 @@ export class HybridOrchestrator implements IterativeOrchestrator {
   }
 
   public async decide(
-    input: IterativeOrchestratorInput
+    input: GovernedDecisionInput
   ): Promise<IterativeOrchestratorTurn> {
     const context = input.context
     for (const rule of this.rules) {
@@ -172,6 +209,7 @@ export class HybridOrchestrator implements IterativeOrchestrator {
       )
     }
 
+    const gate = input.modelGate
     let usage: ModelUsage = EMPTY_MODEL_USAGE
     let lastErrors: readonly string[] = []
     let repairAttempt = 0
@@ -179,7 +217,15 @@ export class HybridOrchestrator implements IterativeOrchestrator {
       if (input.signal?.aborted) {
         throw new OrchestratorDecisionError(
           'orchestrator_unavailable',
-          'Decision was cancelled by the runtime deadline'
+          'Decision was cancelled by the runtime deadline',
+          usage
+        )
+      }
+      if (gate && !gate.beginCall()) {
+        throw new OrchestratorDecisionError(
+          'budget_exhausted',
+          BUDGET_EXHAUSTED_MESSAGE,
+          usage
         )
       }
       const prompt = buildDecisionPrompt({
@@ -209,12 +255,30 @@ export class HybridOrchestrator implements IterativeOrchestrator {
         ...(input.signal ? { signal: input.signal } : {})
       })
       usage = addUsage(usage, modelResult)
+      if (
+        gate &&
+        !gate.recordCall({
+          inputTokens: modelResult.inputTokens,
+          outputTokens: modelResult.outputTokens,
+          costUsd: modelResult.costUsd
+        })
+      ) {
+        throw new OrchestratorDecisionError(
+          'budget_exhausted',
+          BUDGET_EXHAUSTED_MESSAGE,
+          usage
+        )
+      }
       let parsed: unknown
       try {
         parsed = parseDecisionText(modelResult.text)
       } catch (error) {
-        if (repairAttempt >= this.maxDecisionRepairs) {
-          throw error
+        if (!this.mayRepair(repairAttempt, gate)) {
+          // The orchestrator's own failures carry the usage spent so far; a
+          // failure raised by the model result itself propagates unchanged.
+          throw error instanceof OrchestratorDecisionError
+            ? new OrchestratorDecisionError(error.code, error.message, usage)
+            : error
         }
         repairAttempt += 1
         lastErrors = [
@@ -232,14 +296,27 @@ export class HybridOrchestrator implements IterativeOrchestrator {
           usage: resultToUsage(usage)
         }
       }
-      if (repairAttempt >= this.maxDecisionRepairs) {
+      if (!this.mayRepair(repairAttempt, gate)) {
         throw new OrchestratorDecisionError(
           'decision_invalid',
-          `Orchestrator decision stayed invalid after ${repairAttempt} repairs: ${errors.join('; ')}`
+          `Orchestrator decision stayed invalid after ${repairAttempt} repairs: ${errors.join('; ')}`,
+          usage
         )
       }
       repairAttempt += 1
       lastErrors = errors
     }
+  }
+
+  /**
+   * A repair needs both the orchestrator's own ceiling and, when the runtime
+   * owns a budget, a reserved repair (SPEC 0248 R3).
+   */
+  private mayRepair(
+    repairAttempt: number,
+    gate: DecisionModelGate | undefined
+  ): boolean {
+    if (repairAttempt >= this.maxDecisionRepairs) return false
+    return gate ? gate.beginRepair() : true
   }
 }

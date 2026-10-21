@@ -14,9 +14,9 @@ import type {
 } from '../contracts.ts'
 import { ModelProviderError } from '../errors.ts'
 import {
-  assertResponseSize,
   networkError,
-  providerHttpError
+  providerHttpError,
+  readBoundedText
 } from './http-errors.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
 
@@ -169,6 +169,8 @@ export class OpenAICompatibleProvider implements ModelProvider {
           },
           body: JSON.stringify(body),
           signal,
+          // The bound transport cuts the body at the ceiling (SPEC 0248).
+          maxResponseBytes: this.#maxResponseBytes,
           redirect: 'manual'
         },
         {
@@ -188,20 +190,21 @@ export class OpenAICompatibleProvider implements ModelProvider {
           `Provider endpoint rejected: ${error.message}`
         )
       }
-      throw networkError(this.id, error)
+      throw networkError(this.id, error, this.#maxResponseBytes)
     }
 
     if (!response.ok) {
+      // The known HTTP status wins; the unread body is released (D011).
+      await response.body?.cancel().catch(() => undefined)
       throw providerHttpError(this.id, response.status)
     }
 
-    let rawBody: string
-    try {
-      rawBody = await response.text()
-    } catch (error) {
-      throw networkError(this.id, error)
-    }
-    assertResponseSize(this.id, rawBody, this.#maxResponseBytes)
+    const rawBody = await readBoundedText(
+      this.id,
+      response,
+      this.#maxResponseBytes,
+      signal
+    )
 
     let parsedJson: unknown
     try {

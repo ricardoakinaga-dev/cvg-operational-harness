@@ -6,12 +6,14 @@ import type {
   ClaimValidation,
   CompletionEvaluation,
   CompletionEvaluator,
+  ContextBuildInput,
   ContextEngine,
   DecisionValidationResult,
   ExecutionCheckpoint,
   ExecutionStep,
   ExecutionStepStore,
   IterativeOrchestrator,
+  IterativeOrchestratorTurn,
   LoopDecision,
   ModelUsage,
   Observation,
@@ -40,6 +42,10 @@ import type {
   ToolDescriptor,
   ToolRegistry
 } from '@cvg/harness-contracts'
+import type {
+  DecisionModelGate,
+  GovernedDecisionInput
+} from '@cvg/harness-orchestrator'
 import { DefaultContextEngine } from './context-engine.ts'
 import { DeterministicCompletionEvaluator } from './completion.ts'
 import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
@@ -47,8 +53,10 @@ import { sealCheckpoint } from './step-store.ts'
 import { agentExposesTool } from './runtime.ts'
 import { KernelHost } from './kernel/host.ts'
 import {
+  CANCELLED,
   CANCELLED_RESPONSE,
   createTurnState,
+  race,
   runGate
 } from './kernel/pipeline.ts'
 import {
@@ -67,8 +75,10 @@ import {
 import {
   CONTROL_SERVICES,
   DEADLINE,
+  stop as kernelStop,
   type EffectLedger,
   type KernelLog,
+  type KernelStop,
   type PauseSwitch,
   type ServiceKey,
   type TurnState
@@ -127,6 +137,69 @@ const ITERATIVE_REQUIRED_SERVICES: readonly ServiceKey[] = [
 export const DEADLINE_EXCEEDED = Symbol('iterative-deadline-exceeded')
 
 const AUDIT_GRACE_MS = 200
+
+const INVALID_USAGE_RESPONSE = 'Orchestrator reported invalid model usage.'
+
+const USAGE_FIELDS = [
+  'modelCalls',
+  'inputTokens',
+  'outputTokens',
+  'costUsd'
+] as const
+
+/**
+ * Reads the four usage fields once into a plain copy and validates the copy
+ * (SPEC 0248 R4): every field present, finite and not negative, with a whole
+ * call count. Only the validated copy is ever added to the counters, so a
+ * getter is never read twice.
+ */
+function snapshotUsage(value: unknown): ModelUsage | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const copy: Record<(typeof USAGE_FIELDS)[number], unknown> = {
+    modelCalls: record.modelCalls,
+    inputTokens: record.inputTokens,
+    outputTokens: record.outputTokens,
+    costUsd: record.costUsd
+  }
+  const valid =
+    Number.isInteger(copy.modelCalls) &&
+    USAGE_FIELDS.every((field) => {
+      const entry = copy[field]
+      return typeof entry === 'number' && Number.isFinite(entry) && entry >= 0
+    })
+  return valid ? (copy as unknown as ModelUsage) : undefined
+}
+
+/**
+ * Usage an orchestrator attached to its failure, when it is readable and
+ * well formed; anything else is ignored, never trusted (SPEC 0248).
+ */
+function failureUsage(error: unknown): ModelUsage | undefined {
+  if (typeof error !== 'object' || error === null) return undefined
+  try {
+    return snapshotUsage((error as { usage?: unknown }).usage)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Runtime side of the decision budget port (SPEC 0248 §3.3): one handle per
+ * decision, closed when the decision settles.
+ */
+interface DecisionGate {
+  readonly port: DecisionModelGate
+  /** Usage already accounted through the port during this decision. */
+  readonly counted: {
+    modelCalls: number
+    inputTokens: number
+    outputTokens: number
+    costUsd: number
+  }
+  stopped(): KernelStop | undefined
+  close(): void
+}
 
 const TERMINAL_STOPS = new Set<StopReason>([
   'COMPLETED',
@@ -875,6 +948,11 @@ export class IterativeGovernedRuntime {
         tool: decision.toolId ?? null
       })
 
+      // R6 (SPEC 0248): a cancellation that arrived while the decision was
+      // being recorded stops here, before any dispatch or effect.
+      if (this.#turns.get(run)?.signal.aborted) {
+        return this.stop('CANCELLED', CANCELLED_RESPONSE)
+      }
       const dispatch = await this.dispatch(run, decision, stepNumber)
       if (dispatch.kind === 'pause') {
         return await this.pause(run, stepNumber, dispatch)
@@ -941,8 +1019,8 @@ export class IterativeGovernedRuntime {
     outcome?: Extract<DispatchOutcome, { kind: 'stop' }>
     decision?: LoopDecision
   }> {
-    const remaining = this.remainingDuration(run)
-    if (remaining <= 0) {
+    const turn = this.turnFor(run)
+    if (this.remainingDuration(run) <= 0) {
       return {
         outcome: this.stop(
           'MAX_DURATION',
@@ -955,7 +1033,7 @@ export class IterativeGovernedRuntime {
       ...run.state,
       observations: run.observations
     }
-    const context = await this.contextEngine.build({
+    const buildInput: ContextBuildInput = {
       runtime: {
         executionId: run.executionId,
         tenantId: run.input.tenantId,
@@ -979,7 +1057,9 @@ export class IterativeGovernedRuntime {
       allowedDecisionTypes: this.allowedDecisionTypes(run),
       budget: run.input.budget,
       budgetUsage: run.usage,
-      ...(run.usage.decisionRepairs > 0
+      // Only a decision the runtime rejected asks for a repair; repairs the
+      // orchestrator reserved through the port need no notice (SPEC 0248).
+      ...(run.lastDecisionErrors.length > 0
         ? {
             decisionRepair: {
               attempt: run.usage.decisionRepairs,
@@ -987,32 +1067,159 @@ export class IterativeGovernedRuntime {
             }
           }
         : {})
-    })
-    const decisionAbortController = new AbortController()
-    const decisionOrDeadline = await this.withDeadline(
-      this.options.orchestrator.decide({
-        context,
-        signal: decisionAbortController.signal
-      }),
-      remaining
-    )
-    if (decisionOrDeadline === DEADLINE_EXCEEDED) {
-      decisionAbortController.abort()
+    }
+    // F03: the context build races the absolute deadline and the caller's
+    // cancellation (a cancelled turn never starts it); an abandoned build is
+    // never awaited.
+    const context = await race(turn, () => this.contextEngine.build(buildInput))
+    if (context === CANCELLED) {
+      return { outcome: this.stop('CANCELLED', CANCELLED_RESPONSE) }
+    }
+    if (context === DEADLINE) {
       return {
         outcome: this.stop(
           'MAX_DURATION',
-          'Duration budget exhausted while deciding the next step.'
+          'Duration budget exhausted while building the decision context.'
         )
       }
     }
-    const turn = decisionOrDeadline
-    const usage = turn.usage ?? EMPTY_MODEL_USAGE
-    this.accountUsage(run, usage)
+
+    // F02/F04: every decision model call is reserved through the port, the
+    // orchestrator's signal follows the caller and the deadline, and the
+    // wait races both with the remaining time recomputed after the build.
+    const gate = this.decisionGate(run)
+    const decisionAbort = new AbortController()
+    const decisionInput: GovernedDecisionInput = {
+      context,
+      signal: AbortSignal.any([decisionAbort.signal, turn.signal]),
+      modelGate: gate.port
+    }
+    let decided: IterativeOrchestratorTurn | typeof DEADLINE | typeof CANCELLED
+    try {
+      decided = await race(turn, () =>
+        this.options.orchestrator.decide(decisionInput)
+      )
+    } catch (error) {
+      const reported = failureUsage(error)
+      if (reported) this.accountBeyondGate(run, reported, gate.counted)
+      const failureStop = gate.stopped()
+      if (failureStop) {
+        return {
+          outcome: this.stop(failureStop.stopReason, failureStop.response)
+        }
+      }
+      const overrun = this.checkAfterUsage(run)
+      if (overrun) {
+        return { outcome: this.stop(overrun.reason, overrun.response) }
+      }
+      throw error
+    } finally {
+      gate.close()
+    }
+    if (decided === DEADLINE || decided === CANCELLED) {
+      decisionAbort.abort()
+      return {
+        outcome:
+          decided === DEADLINE
+            ? this.stop(
+                'MAX_DURATION',
+                'Duration budget exhausted while deciding the next step.'
+              )
+            : this.stop('CANCELLED', CANCELLED_RESPONSE)
+      }
+    }
+    const reportedUsage = decided.usage
+    const usage =
+      reportedUsage === undefined
+        ? EMPTY_MODEL_USAGE
+        : snapshotUsage(reportedUsage)
+    if (!usage) {
+      return { outcome: this.stop('MODEL_FAILURE', INVALID_USAGE_RESPONSE) }
+    }
+    this.accountBeyondGate(run, usage, gate.counted)
+    const gateStop = gate.stopped()
+    if (gateStop) {
+      return { outcome: this.stop(gateStop.stopReason, gateStop.response) }
+    }
     const usageStop = this.checkAfterUsage(run)
     if (usageStop) {
       return { outcome: this.stop(usageStop.reason, usageStop.response) }
     }
-    return { decision: turn.decision }
+    return { decision: decided.decision }
+  }
+
+  /**
+   * Decision budget port (SPEC 0248 §3.3). Reservation and accounting use the
+   * kernel's own single sites (`beginModelRequest`/`recordModelResult`, I11);
+   * repairs share the execution's `decisionRepairs` counter. Closed, the port
+   * refuses everything, so an abandoned orchestrator cannot spend.
+   */
+  private decisionGate(run: LoopRun): DecisionGate {
+    const { budget, signal } = this.turnFor(run)
+    const counted = {
+      modelCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      costUsd: 0
+    }
+    let stopped: KernelStop | undefined
+    let open = true
+    return {
+      counted,
+      stopped: () => stopped,
+      close: () => {
+        open = false
+      },
+      port: {
+        beginCall: () => {
+          if (!open || stopped || signal.aborted) return false
+          stopped = budget.beginModelRequest()
+          if (stopped) return false
+          counted.modelCalls += 1
+          return true
+        },
+        recordCall: (reported) => {
+          if (!open) return false
+          const usage = snapshotUsage({ ...reported, modelCalls: 0 })
+          if (!usage) {
+            stopped ??= kernelStop('MODEL_FAILURE', INVALID_USAGE_RESPONSE)
+            return false
+          }
+          counted.inputTokens += usage.inputTokens
+          counted.outputTokens += usage.outputTokens
+          counted.costUsd += usage.costUsd
+          const exceeded = budget.recordModelResult(usage)
+          stopped ??= exceeded
+          // A call that already returned is counted even after a cancel (R4).
+          return stopped === undefined && !signal.aborted
+        },
+        beginRepair: () => {
+          if (!open || stopped || signal.aborted) return false
+          const repairBudget = run.input.budget.maxDecisionRepairs ?? 1
+          if (run.usage.decisionRepairs + 1 > repairBudget) return false
+          run.usage.decisionRepairs += 1
+          return true
+        }
+      }
+    }
+  }
+
+  /**
+   * Usage an orchestrator reports on top of what its port already accounted:
+   * an orchestrator that ignores the port is counted from its report, one that
+   * uses it is never counted twice (SPEC 0248 §3.2).
+   */
+  private accountBeyondGate(
+    run: LoopRun,
+    reported: ModelUsage,
+    counted: DecisionGate['counted']
+  ): void {
+    this.accountUsage(run, {
+      modelCalls: Math.max(0, reported.modelCalls - counted.modelCalls),
+      inputTokens: Math.max(0, reported.inputTokens - counted.inputTokens),
+      outputTokens: Math.max(0, reported.outputTokens - counted.outputTokens),
+      costUsd: Math.max(0, reported.costUsd - counted.costUsd)
+    })
   }
 
   /**
