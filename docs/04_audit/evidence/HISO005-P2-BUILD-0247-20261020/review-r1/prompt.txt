@@ -1,0 +1,90 @@
+Agente: tipo Plan, novo, não-fork. Texto enviado, byte a byte abaixo.
+
+Você é um crítico independente e novo, sem contexto anterior, do BUILD local HISO005-P2-BUILD-0247 no repositório
+/home/ricardo/Área de trabalho/cvg-operational-harness (checkout compartilhado com outros agentes; não mexa nele).
+Sua tarefa é REVISAR um delta de código já implementado numa candidata própria, testar e devolver um veredito em JSON.
+Esta é a PRIMEIRA de no máximo duas rodadas. Entre elas haverá um único reparo agrupado. Aponte como obrigatório só o
+que você confirmou e que impede a promoção ou induz erro; o resto vai como opcional P3.
+
+REGRAS (obrigatórias)
+- Somente leitura. Não edite, crie, mova nem apague nada no repositório (inclusive docs/04_audit/evidence), na
+  candidata /mnt/dados/cvg-work/cvg-hiso005-build0247-20261020, na raiz avaliada /mnt/dados/cvg-work/cvg-hiso005-eval-228e,
+  nas cópias tools-* do runtime nem em outras worktrees.
+- Se precisar de disco (fixtures físicos, saídas), use só /mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020/critic-R1/.
+- Sem commit, push, branch, PG, porta, rede, npm/npx install. Não use nada do Codex (cvg-codex100-*) nem as worktrees
+  cvg-d9ef-pr9-20261020, cvg-d9ef-pr10-20261020 e cvg-hiso005-build0245-20261020. Nunca use pkill -f; não mate processos.
+- Node 22: /home/ricardo/.nvm/versions/node/v22.23.2/bin/node (a engine recusa outro Node). Rode-o com env mínimo
+  (env -i PATH=<dir do node>:/usr/bin:/bin LANG=C LC_ALL=C TZ=UTC). Python sempre com -I.
+- Antes de rodar engines ou vitest, confira `uptime` NUM COMANDO SEPARADO; com load acima de 12, espere e confira de novo.
+- Vitest, se rodar: na candidata, com o Node 22 e node_modules/vitest/vitest.mjs, `--no-file-parallelism --maxWorkers=2`,
+  TMPDIR e HOME dentro de critic-R1/. A raiz real (eval-228e) leva ~3 min por passagem; não precisa remedir, os
+  relatórios estão gravados (abaixo).
+
+OBJETO
+- Contrato: docs/04_audit/evidence/HISO005-P2-CJS-SOUNDNESS-SPEC-20261020/materialized/0247_b6_cjs_export_soundness.md.txt
+  (sha256 082ad2f4985bb2e663b3f8882fe3902f6b00bcb352a45ab2f5122f94169f037f), aprovado pelo usuário para BUILD local
+  (user-decision-20261020.json na mesma pasta). Links do texto são relativos a docs/02_spec.
+- Delta congelado r1b: docs/04_audit/evidence/HISO005-P2-BUILD-0247-20261020/source-freeze-r1b.json e
+  source-freeze-r1b.patch.txt (sha256 0dd40b9d4574aaf16a6914a5be95e0dd38c424d58a3ba7d2399d90bcf4600b00). A candidata
+  (HEAD 1d40fe51, commit do BUILD0245, kernel v6) tem esse diff na árvore, sem commit. Oito caminhos: o engine
+  scripts/boundary-semantic-engine.mjs (C0–C3 e versão), o teste novo tests/b6-0247-cjs-export-value.test.js e a troca
+  do literal de versão em seis testes B6.
+- Pasta de evidência: docs/04_audit/evidence/HISO005-P2-BUILD-0247-20261020/ (operators/*.py mostram cada passo).
+  Principais: task-contract.json (aceites MC01–MC09, paradas, migração de literal registrada antes da edição),
+  candidate-preflight.json, fixtures-0247.json (71 fixtures do catálogo da SPEC + T1, T2, T2b, T3 e Q3 da revisão R2
+  da SPEC, normalizados para várias linhas porque o texto da R2 dava UNKNOWN_PARSE: ver probe-ref-r2-literal.json),
+  test-generation.json, probe-ref.json (v6 base e a variante de referência t3 da SPEC refeita sobre a v6),
+  first-red-0247-command.json, first-red-0247-version-literal-command.json, green-0247-a1-command.json,
+  frozen-r1-focal-b6-command.json, frozen-r1b-focal-b6-command.json (pode ainda estar rodando), frozen-r1-native-profile-command.json,
+  mutants-r1.json e mutants-r1b.json, probe-r1.json, probe-r1diag.json, fixture-table.json, conservation-r1.json,
+  epoch-r1.json, guarded-runs.json, b6-final-comparison.json, gates-r1.json (lint falhou: variável sem uso no teste) e
+  gates-r1b.json (correção), eval-root-check-*.json, references-scoped.json, npx-runs.json.
+- Relatórios reais (gz) da época r1: /mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020/reports/
+  real-{v6,v7r1}-{normal,strict}-report.json.gz e real-{v6diag,v7r1diag}-normal-report.json.gz; despejos diagnósticos
+  diag-v6diag-normal.json.gz e diag-v7r1diag-normal.json.gz na pasta de evidência.
+
+ENGINES PRIVADAS (só leitura; typescript pinado ao lado), em /mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020/:
+- tools-v6: base v6 (1d40fe51, engine bcbb49ab…).
+- tools-v7r1b: os bytes congelados r1b (engine 7f25da7d…; igual ao de tools-v7r1, usado na medição real).
+- tools-v6t3ref: a variante diagnóstica t3 da SPEC (operators/ref_cjs_patch_t3.py) aplicada sobre a v6, só referência.
+- tools-mc0-r1b, mc0r, mc1, mc1s, mc2, mc3: mutantes (operators/mutant_*.py).
+- Para rodar um fixture: crie a raiz física em critic-R1/ (realpath, package.json '{}' para CJS) e chame
+  runSemanticBoundary pelo node -e de operators/probe.py (origens léxicas com semanticOriginId). Confira seu harness
+  contra probe-r1.json antes de tirar conclusões.
+
+CONTEXTO MÍNIMO
+- O kernel B6 é uma interpretação abstrata que diz se o núcleo importa o produto (products/). Regra global: qualquer
+  tupla UNKNOWN impede todas as provas; sem UNKNOWN nem violação a execução sai PROVEN (K5 por arquivo, K7 por origem).
+- SPEC0247: C0 (alças do wrapper CJS por sintaxe, 9 categorias, raiz UNKNOWN_CJS_EXPORTS e U para todo importador,
+  inclusive pelo cache), C1 (valor inicial = objeto exports opaco por módulo; checkExport não emite tupla para ele),
+  C2 (if não decidido une os ramos, só em módulo CJS), C3 (checkExport segue sobre o valor rastreado), versão
+  semantic-kernel-v7-cjs-export-value. Conservação por causa na §3.6; regra 5 exige, na raiz real, tuplas iguais e payload
+  igual fora a telemetria e o literal de versão.
+- Precedentes de formato: docs/04_audit/evidence/HISO005-P2-BUILD-0245-20261020/ (BUILD anterior, mesmo processo).
+
+O QUE AVALIAR
+1. O diff do engine implementa exatamente C0–C3 e a versão da §3.7, e nada mais? Compare com a variante t3 da SPEC
+   (diferenças intencionais: a junção só roda em módulo CJS; nomes e comentários). ESM fica igual?
+2. Soundness da v7: procure PROVEN falso, valor CJS errado sem raiz no próprio módulo ou U que não chega ao importador
+   (primeira carga e cache). Procure posição de identificador que deveria contar e não conta (§3.1, lista fechada).
+3. Os testes discriminam? Primeira falha na v6, mutantes, MC01–MC07 cobertos, T1/T2/T2b/T3/Q3 presentes. O teste usa
+   as saídas da variante de referência como expectativa: isso esconde algum erro?
+4. Conservação: refaça de forma independente a regra 5 na raiz real (tuplas, payload fora telemetria e
+   semanticBoundary.kernelVersion, normal = strict, validation, provas) a partir dos .gz, e confira a tabela de fixtures
+   (regras 1–4, módulos tocados por causa, arquivos afetados, violações perdidas com classe e a nova de T3).
+5. Migração do literal: só o literal, nos arquivos registrados antes da edição, com a primeira falha preservada?
+6. Integridade: o patch r1b bate com a árvore da candidata? Os números do task-contract/fixture-table/conservation
+   batem com os arquivos? Algo fora do escopo concedido (push, PR, rede, lockfile, ledger)?
+
+SAÍDA
+Sua resposta final deve ser APENAS um objeto JSON (sem texto fora dele), no formato:
+{"round":"R1","task":"HISO005-P2-BUILD-0247","sourceFreezeSha256":"…","sourceFreezeCheck":"…",
+ "verdict":"APPROVE" ou "REVISE","summary":"…",
+ "required":[{"id":"R1-01","severity":"P1" ou "P2","where":"…","problem":"…","evidence":"…","fix":"…","needsCode":true|false}],
+ "optional":[{"id":"R1-P3-01","where":"…","problem":"…","fix":"…","needsCode":true|false}],
+ "checks":{"engineDiff":"…","soundness":"…","tests":"…","mutants":"…","realRootConservation":"…","fixtureTable":"…",
+           "literalMigration":"…","integrity":"…"},
+ "scenarios":[{"name":"…","files":{…},"engine":"…","status":"…","tuples":[…]}],
+ "commands":["…"],"notRun":["…"],"scratch":"/mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020/critic-R1"}
+Escreva em português claro. Nenhum PROVEN falso confirmado é P1. Diferença de tupla ou de payload na raiz real fora
+da regra 5 é P1.

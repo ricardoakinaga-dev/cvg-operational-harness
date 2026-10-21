@@ -1,0 +1,77 @@
+HISO005-P2-BUILD-0247 — BUILD local da SPEC0247 (sha256 082ad2f4…), Claude Code, CONT-20261018-D9EF
+
+COMMIT (só na candidata detached /mnt/dados/cvg-work/cvg-hiso005-build0247-20261020)
+  783ef6d00e79 feat(boundary): HISO-005 BUILD0247 CJS export value in the B6 kernel (C0 handles, opaque initial exports, branch join)
+  Pai 1d40fe51 (BUILD0245, kernel v6). Oito caminhos, iguais ao freeze r1b byte a byte:
+  - scripts/boundary-semantic-engine.mjs: C0 (9 categorias, UNKNOWN_CJS_EXPORTS, U ao importador na primeira carga e no
+    cache), C1 (objeto exports opaco por módulo), C2 (junção do if indecidido, só em CJS), C3 e a versão
+    semantic-kernel-v7-cjs-export-value;
+  - tests/b6-0247-cjs-export-value.test.js, novo, 98 casos (71 fixtures do catálogo + T1, T2, T2b, T3, Q3 da R2 da SPEC);
+  - literal de versão migrado em 6 testes B6 (0236, 0237, 0240, 0241, 0244, 0245), 7 ocorrências registradas antes.
+  Promoção preparada e não aplicada: promotion-783ef6d00e79.patch.txt (sha256 552e3bc7…) e .json (pré e pós-imagens).
+  Só aplica sobre uma main que já tenha o BUILD0245; senão vale a alternativa da SPEC0247 §3.7. Sem push, PR ou deploy.
+
+VEREDITO DO CRÍTICO (novo, não-fork, só leitura)
+  - R1: APPROVE, sem obrigatórios. Refez a regra 5 na raiz a partir dos .gz e conferiu v7 = referência t3 em 76/76.
+  - 5 P3 tratados só na evidência (r1-optionals.json). Nenhum byte de código mudou depois da R1. Sem R2.
+
+GATES (bytes congelados r1b)
+  - Teste novo 98/98. Primeira falha na v6: 75/98. Literal: 39/305 falhas, todas do literal.
+  - Mutantes C0, C0 só raiz, C1, C1 sem silêncio, C2, C3: todos morrem (44, 7, 17, 28, 23 e 8 falhas).
+  - Focal B6 (0228–0247) 988/988; nativo 79/79; prettier, lint, typecheck e docs:check-links PASS.
+    Na r1 o lint acusou variável sem uso no teste novo; a r1b corrigiu só a mensagem de uma asserção.
+  - Consumidor fresco PASS (207 exports, 76 de runtime).
+  - certify (Node22, PG próprio 56263, portas 3449/4449): NO_GO nas duas tentativas.
+    - r1 (load ~8 no início): 14/16. Unit 6225/6225. Coverage: 5 timeouts de 15 s em claude100 e channel-gateway.
+      Security: npm audit acusa vite 8.2.0–8.2.2 (GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm).
+    - r2 (após 85 min esperando load < 6; PG novo): 13/16. Unit 6224/6225: timeout de 60 s em
+      apps/api/src/__tests__/production-bootstrap-postgres-own.test.ts. Coverage: 5 falhas de tempo, duas em
+      tests/b6-0236-boundary-integration.test.js (spawnSync ETIMEDOUT de 30 s; timeout de 15 s) e três em claude100.
+      Security: o mesmo advisory.
+    - Nenhum FAIL é do delta (certify-r2-analysis.json, por FAIL, com trecho do log):
+      - security: lock da base com vite 8.2.2; a main já corrigiu no PR #11 (05d4a30a, vite 8.2.4);
+      - unit: nada em apps/api referencia o engine B6;
+      - coverage: tempo; os dois testes da 0236 levam 3,2–4,5 s nos outros quatro runs com os mesmos bytes.
+    - Requalificação com o lead: portar 783ef6d0 para a main atual e rodar o certify lá.
+    - Os logs dos gates foram lidos antes de certify_post restaurar certification/ da candidata; os trechos estão nas análises.
+  - Aceites: MC01–MC07 e MC09 PASS; MC08 FAIL só pelo certify (acceptance-status.json).
+
+B6 NA RAIZ 228e7918 (receita com escopo, mesmas referências, mesma época; normal = strict)
+  - Antes, v6: 11.723 diagnósticos, 10.833 tuplas (igual ao selado do BUILD0245).
+  - Depois, v7: 11.723 e 10.833. Multiset de tuplas igual; payload igual fora a telemetria e
+    semanticBoundary.kernelVersion (único caminho com o literal). 0 provas, 0 violações, validation true.
+  - Denominadores: 1.277 módulos import e 64 require (35 .ts, 29 .tsx; nenhum instalado); 64 tocados só por C1;
+    219 afetados; nenhum com escrita, categoria ou junção. Grafo 1.341 arquivos e 2.729 arestas, igual.
+  - Limites, perfil node22-linux-exact-metadata-v1, receita shared-contracts-fresh-force-v2 (121) iguais.
+  - Raiz avaliada conferida 1.410/1.410 antes, durante e depois.
+  - B6 continua INCOMPLETE.
+
+FIXTURES (76)
+  A 18 PROVEN falsos fechados; B 27 com as tuplas da base; C 11 PROVEN mantidos; D 9 PROVEN corretos perdidos (custo);
+  V: V-literal mantida, 5 somem (3 falsas em runtime, 2 verdadeiras pelo U da C0). R2: T1 tupla nova em n.js,
+  T2 e T2b perdem violação verdadeira (C1, C2), T3 ganha violação verdadeira pela junção, Q3 perde PROVEN (C1).
+  Nenhum PROVEN novo. Regras 1–4 da §3.6 ok em todos (fixture-table.json).
+  Os textos T1, T2b e T3 da R2 vinham numa linha e davam UNKNOWN_PARSE; o teste usa os mesmos comandos, um por linha.
+
+CONTEXTOS E FOLGA
+  - Contextos 229/256, antes e depois (folga 27). Estados 134.899/250.000.
+  - Worker ~115 s de 300 s (38,7%), com load ~3–4.
+
+ACHADO NOVO (pré-existente, fora do delta): finding-annexb-block-function.json
+  Em CJS sloppy, função declarada em bloco ou em if reatribui a ligação do wrapper (Annex B.3.3). O kernel resolve a
+  função externa e dá PROVEN falso (v6 = v7, três fixtures; runtime confirmado no Node 22 em memória). Precisa de
+  recon e decisão T3 antes da SPEC0246.
+
+REDE
+  - Sem npx. prettier, eslint e tsc rodaram com node direto.
+  - npm ci --offline da receita instalada: 222 logs, nenhum http fetch.
+  - O gate security do certify (npm audit) consulta o registry, como no certify do BUILD0245. Duas execuções, uma por
+    tentativa. O log do npm desse comando foi rotacionado (o npm guarda 10).
+
+RECURSOS
+  - PG cvg-hiso005-build0247-pg (r1 e r2) parado e removido por nome e label.
+  - Portas 56263, 3449 e 4449 livres.
+  - Runtime /mnt/dados/cvg-work/cvg-hiso005-build0247-runtime-20261020 removido, com o worktree prístino da receita
+    (1,1 GB).
+  - Mantidos: a candidata (âncora do commit 783ef6d0) e a raiz avaliada /mnt/dados/cvg-work/cvg-hiso005-eval-228e.
+  - Ledgers, coordenação, catálogo e docs/02_spec não foram editados; o texto está em ledger-delta-cont-d9ef.md.

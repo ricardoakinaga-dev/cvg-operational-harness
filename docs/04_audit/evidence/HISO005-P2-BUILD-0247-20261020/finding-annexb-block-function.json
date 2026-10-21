@@ -1,0 +1,145 @@
+{
+  "task": "HISO005-P2-BUILD-0247",
+  "observedAt": "2026-10-20T23:39:04.243800+00:00",
+  "id": "finding-annexb-block-function",
+  "source": "review-r1/review.json R1-P3-01 (crítico R1, previsto por leitura); confirmado aqui no engine",
+  "scope": "PRÉ-EXISTENTE (v6 1d40fe51; pela leitura do crítico também v5), FORA do delta da SPEC0247; o delta não muda o resultado (v6 = v7 nos quatro fixtures)",
+  "what": "Em CJS (código sloppy), uma FunctionDeclaration dentro de bloco ou de if reatribui, pelo Annex B.3.3, a ligação de mesmo nome do escopo do wrapper quando a declaração é avaliada. O kernel liga a função interna só no ambiente do bloco e segue resolvendo o nome para a função externa: o valor exportado (ou chamado) é errado, sem raiz em nenhum módulo, e sai PROVEN.",
+  "runtimeNode22InMemory": {
+    "exportedCalledWith": "./products/x.js",
+    "results": {
+      "block": "inner:./products/x.js",
+      "ifTrue": "inner:./products/x.js",
+      "strict": 1
+    },
+    "reading": "block e if(true): a função exportada é a interna (devolveria require('./products/x.js') no fixture real); strict: a externa (devolve 1)"
+  },
+  "kernel": {
+    "AnnexB-block-export": {
+      "v6": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v7r1b": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v6t3ref": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      }
+    },
+    "AnnexB-if-export": {
+      "v6": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v7r1b": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v6t3ref": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      }
+    },
+    "AnnexB-top-call": {
+      "v6": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v7r1b": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v6t3ref": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      }
+    },
+    "AnnexB-strict-control": {
+      "v6": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v7r1b": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      },
+      "v6t3ref": {
+        "status": "PROVEN",
+        "unknowns": [],
+        "violations": []
+      }
+    }
+  },
+  "fixtures": {
+    "AnnexB-block-export": {
+      "id": "AnnexB-block-export",
+      "group": "P3-01",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nm('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "function f() { return 1 }\n{ function f(s) { return require(s) } }\nmodule.exports = f\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "why": "R1-P3-01 (fixture do crítico): em CJS sloppy, a f do bloco reatribui a f do wrapper (Annex B.3.3); em runtime m é a f interna e carrega products/x.js"
+    },
+    "AnnexB-if-export": {
+      "id": "AnnexB-if-export",
+      "group": "P3-01",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nm('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "function f() { return 1 }\nif (true) { function f(s) { return require(s) } }\nmodule.exports = f\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "why": "R1-P3-01: mesma forma com if (true) { … }"
+    },
+    "AnnexB-top-call": {
+      "id": "AnnexB-top-call",
+      "group": "P3-01",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "require('./m.js')\nmodule.exports = 1\n",
+        "m.js": "function f() { return 1 }\n{ function f(s) { return require(s) } }\nf('./products/x.js')\nmodule.exports = 1\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "why": "R1-P3-01: sem export; chamada de f no topo depois do bloco"
+    },
+    "AnnexB-strict-control": {
+      "id": "AnnexB-strict-control",
+      "group": "P3-01",
+      "files": {
+        "package.json": "{}",
+        "entry.js": "const m = require('./m.js')\nm('./products/x.js')\nmodule.exports = 1\n",
+        "m.js": "'use strict'\nfunction f() { return 1 }\n{ function f(s) { return require(s) } }\nmodule.exports = f\n",
+        "products/x.js": "module.exports = 1\n"
+      },
+      "origins": [],
+      "why": "R1-P3-01, controle: em strict a f do bloco fica no bloco; em runtime m é a f externa"
+    }
+  },
+  "falseProven": [
+    "AnnexB-block-export",
+    "AnnexB-if-export",
+    "AnnexB-top-call"
+  ],
+  "impact": "Raiz real 228e7918: B6 segue com 0 provas (os 64 CJS da raiz são .ts/.tsx com sintaxe ESM e já têm raiz); a lacuna só dá prova falsa numa raiz limpa com o padrão.",
+  "stopRule": "não é parada da SPEC0247 §5 (fixture fora do catálogo, pré-existente, fora do delta; nenhuma tupla nem PROVEN muda entre v6 e v7)",
+  "proposal": "achado de recon para o lead antes da SPEC0246: recusar FunctionDeclaration fora do topo de função ou de arquivo em código não strict, ou aplicar a semântica B.3.3 (decisão T3 do usuário)"
+}
