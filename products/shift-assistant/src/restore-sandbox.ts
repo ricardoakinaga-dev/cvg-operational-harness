@@ -41,6 +41,8 @@ export interface SandboxReport {
   resumedInSandbox: boolean
   /** Whether the confirmed draft came from the backup or was made here. */
   draftSource: 'restored' | 'generated_in_sandbox'
+  /** `synthetic_due_draft` when nothing restored was due for the tick. */
+  reminderSource: 'volume' | 'synthetic_due_draft'
   helpReplies: number
   confirmedTasks: number[]
   remindedTasks: number[]
@@ -67,6 +69,7 @@ export async function sandboxCheck(
     kind: 'shift-assistant-restore-sandbox',
     resumedInSandbox: false,
     draftSource: 'restored',
+    reminderSource: 'volume',
     helpReplies: 0,
     confirmedTasks: [],
     remindedTasks: [],
@@ -133,7 +136,7 @@ export async function sandboxCheck(
             {
               descricao: 'Pendência sintética da sandbox de restore',
               paciente: SANDBOX_PATIENT,
-              quando: new Date(at.getTime() + 60_000).toISOString()
+              quando: new Date(now.getTime() + 60_000).toISOString()
             }
           ],
           duvidas: []
@@ -210,37 +213,49 @@ export async function sandboxCheck(
           isMember(note.authorPhone) &&
           store.tasksOfNote(note.id).some((task) => task.status === 'draft')
       )
+  const syntheticAuthor =
+    options.members.find((member) => !member.manager) ?? options.members[0]!
+  /** Confirms `note` by its author; returns the tasks it activated. */
+  const confirm = async (note: NonNullable<ReturnType<typeof findDraft>>) => {
+    const author = options.members.find((member) =>
+      samePhone(member.phone, note.authorPhone)
+    )!
+    const drafts = store
+      .tasksOfNote(note.id)
+      .filter((task) => task.status === 'draft')
+      .map((task) => task.number)
+    const before = sent.length
+    await say(author, `ok nota ${noteCode(note)}`)
+    const activated = drafts.filter(
+      (number) => store.task(number)?.status === 'open'
+    )
+    const ok =
+      store.note(note.id)?.confirmed === true &&
+      drafts.length > 0 &&
+      activated.length === drafts.length &&
+      sent.slice(before).length === 1
+    return { ok, activated, drafts: drafts.length }
+  }
+  /** A synthetic draft due one minute from the sandbox clock. */
+  const syntheticDraft = async () => {
+    await say(syntheticAuthor, SANDBOX_NOTE)
+    return findDraft()
+  }
+
   let draft = findDraft()
   let draftSource: SandboxReport['draftSource'] = 'restored'
   if (!draft) {
     draftSource = 'generated_in_sandbox'
-    const author =
-      options.members.find((member) => !member.manager) ?? options.members[0]!
-    await say(author, SANDBOX_NOTE)
-    draft = findDraft()
+    draft = await syntheticDraft()
   }
-  let confirmedTasks: number[] = []
+  const confirmedTasks: number[] = []
   if (draft) {
-    const target = draft
-    const author = options.members.find((member) =>
-      samePhone(member.phone, target.authorPhone)
-    )!
-    const drafts = store
-      .tasksOfNote(target.id)
-      .filter((task) => task.status === 'draft')
-      .map((task) => task.number)
-    const before = sent.length
-    await say(author, `ok nota ${noteCode(target)}`)
-    confirmedTasks = drafts.filter(
-      (number) => store.task(number)?.status === 'open'
-    )
+    const result = await confirm(draft)
+    confirmedTasks.push(...result.activated)
     check(
       'confirmation activates the draft tasks',
-      store.note(target.id)?.confirmed === true &&
-        drafts.length > 0 &&
-        confirmedTasks.length === drafts.length &&
-        sent.slice(before).length === 1,
-      `${draftSource}: ${confirmedTasks.length}/${drafts.length}`
+      result.ok,
+      `${draftSource}: ${result.activated.length}/${result.drafts}`
     )
   } else {
     check(
@@ -250,32 +265,54 @@ export async function sandboxCheck(
     )
   }
 
-  // Two minutes later every confirmed task above is due. Expected reminders
-  // are computed independently from the store before the tick.
-  now = new Date(at.getTime() + 2 * 60_000)
-  const tickAt = now.getTime()
+  // Expected reminders, computed independently from the store before the
+  // tick, two minutes after the sandbox time. When nothing restored is due
+  // then (a restored draft due later, every task reminded recently), a
+  // synthetic draft due in a minute is confirmed so the reminder path is
+  // always exercised.
   const uncertainTasks: number[] = []
-  const expected = new Set<number>()
-  for (const task of store.openTasks()) {
-    if (task.reminderUncertain || task.reminderSendFailed) {
-      uncertainTasks.push(task.number)
-      continue
+  const expectedAt = (tickAt: number) => {
+    uncertainTasks.length = 0
+    const expected = new Set<number>()
+    for (const task of store.openTasks()) {
+      if (task.reminderUncertain || task.reminderSendFailed) {
+        uncertainTasks.push(task.number)
+        continue
+      }
+      const note =
+        task.noteId === undefined ? undefined : store.note(task.noteId)
+      if (
+        task.noteId !== undefined &&
+        (!note?.confirmed || note.supersededBy)
+      ) {
+        continue
+      }
+      if (
+        Date.parse(task.dueAt) <= tickAt &&
+        task.reminderInFlight === undefined &&
+        task.remindedCount < 4 &&
+        (!task.lastRemindedAt ||
+          tickAt - Date.parse(task.lastRemindedAt) >= 30 * 60_000) &&
+        (!task.reminderRetryAt || Date.parse(task.reminderRetryAt) <= tickAt) &&
+        isMember(task.ownerPhone)
+      ) {
+        expected.add(task.number)
+      }
     }
-    const note = task.noteId === undefined ? undefined : store.note(task.noteId)
-    if (task.noteId !== undefined && (!note?.confirmed || note.supersededBy)) {
-      continue
+    return expected
+  }
+  now = new Date(now.getTime() + 2 * 60_000)
+  let expected = expectedAt(now.getTime())
+  let reminderSource: SandboxReport['reminderSource'] = 'volume'
+  if (expected.size === 0) {
+    reminderSource = 'synthetic_due_draft'
+    const extra = await syntheticDraft()
+    if (extra) {
+      const result = await confirm(extra)
+      confirmedTasks.push(...result.activated)
     }
-    if (
-      Date.parse(task.dueAt) <= tickAt &&
-      task.reminderInFlight === undefined &&
-      task.remindedCount < 4 &&
-      (!task.lastRemindedAt ||
-        tickAt - Date.parse(task.lastRemindedAt) >= 30 * 60_000) &&
-      (!task.reminderRetryAt || Date.parse(task.reminderRetryAt) <= tickAt) &&
-      isMember(task.ownerPhone)
-    ) {
-      expected.add(task.number)
-    }
+    now = new Date(now.getTime() + 2 * 60_000)
+    expected = expectedAt(now.getTime())
   }
 
   const firstTick = sent.length
@@ -291,8 +328,7 @@ export async function sandboxCheck(
     reminded.length > 0 &&
       reminded.length === expected.size &&
       new Set(reminded).size === reminded.length &&
-      reminded.every((number) => expected.has(number)) &&
-      confirmedTasks.every((number) => reminded.includes(number)),
+      reminded.every((number) => expected.has(number)),
     `${reminded.length} sent, ${expected.size} eligible`
   )
   check(
@@ -320,6 +356,7 @@ export async function sandboxCheck(
   return report({
     resumedInSandbox,
     draftSource,
+    reminderSource,
     helpReplies,
     confirmedTasks,
     remindedTasks: reminded,

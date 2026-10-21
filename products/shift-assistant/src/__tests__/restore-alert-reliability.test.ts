@@ -40,7 +40,14 @@ import {
   buildRestoreFixture,
   FIXTURE_MEMBERS
 } from './support/restore-fixture.ts'
-import { ANA, GESTOR, setup, tempDir, wahaPayload } from './support/harness.ts'
+import {
+  ANA,
+  GESTOR,
+  setup,
+  tempDir,
+  THOR,
+  wahaPayload
+} from './support/harness.ts'
 
 // PISO-008 (SPEC 0179 section 10; AUD-0621 F25): backup with inventory and
 // SHA-256 verified before `backup_verified`, restore that rejects unsafe or
@@ -616,6 +623,38 @@ describe('PISO-008: the sandbox exercises every check', () => {
       expect.arrayContaining(sandbox.confirmedTasks)
     )
     expect(sandbox.resentAfterSecondTick).toBe(0)
+  })
+
+  it('still exercises a reminder when the restored draft is due later and nothing else is due', async () => {
+    const target = await restored('sandbox-later', async (dir) => {
+      const env = setup({
+        dataDir: dir,
+        organize: async () => ({
+          ...THOR,
+          pendencias: [
+            {
+              descricao: 'Ligar para o tutor',
+              paciente: 'Thor',
+              quando: '2026-10-05T12:00:00-03:00'
+            }
+          ]
+        })
+      })
+      await env.deliver(
+        wahaPayload('m1', ANA, 'Thor leito 3 ligar tutor dia 5')
+      )
+    })
+    const sandbox = await sandboxCheck({
+      restoredDir: target,
+      sandboxDir: join(tempDir('sandbox-later-copy'), 'volume'),
+      members: parseMembers(`${ANA}=Dra Ana;${GESTOR}=Gestor*`),
+      at: new Date('2026-09-30T23:00:00.000Z')
+    })
+    expect(sandbox.verdict).toBe('PASS')
+    expect(sandbox.draftSource).toBe('restored')
+    expect(sandbox.reminderSource).toBe('synthetic_due_draft')
+    expect(sandbox.confirmedTasks).toHaveLength(2)
+    expect(sandbox.remindedTasks).toEqual([sandbox.confirmedTasks[1]])
   })
 
   it('fails instead of passing empty when there is no one to talk to', async () => {
