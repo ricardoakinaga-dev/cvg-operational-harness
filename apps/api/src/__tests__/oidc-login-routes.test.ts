@@ -326,6 +326,10 @@ describe('SPEC0254 O3 — OIDC login happy path in process', () => {
     expect(operational).toContain('HttpOnly')
     expect(operational).toContain('SameSite=Strict')
     expect(operational).toContain('Path=/')
+    // I8: at most 15 min and never beyond the ID token exp (300 s here).
+    const maxAge = Number(/Max-Age=(\d+)/.exec(operational)?.[1])
+    expect(maxAge).toBeGreaterThan(0)
+    expect(maxAge).toBeLessThanOrEqual(300)
     expect(h.idp.calls.token).toBe(1)
     expect(h.idp.calls.jwks).toBe(1)
 
@@ -439,11 +443,15 @@ describe('SPEC0254 O4 — POST /v1/auth/oidc/start', () => {
     'refuses %s with 403 before the body and without state',
     async (_name, headers) => {
       const h = await harness()
-      for (const payload of [undefined, { unexpected: true }]) {
+      // The last body is malformed JSON: the 403 comes before the parser.
+      for (const payload of [undefined, { unexpected: true }, '{']) {
         const response = await h.inject({
           method: 'POST',
           url: START,
-          headers: headers as Record<string, string>,
+          headers: {
+            ...(headers as Record<string, string>),
+            ...(payload === '{' ? { 'content-type': 'application/json' } : {})
+          },
           ...(payload ? { payload } : {})
         })
         expect(response.statusCode).toBe(403)

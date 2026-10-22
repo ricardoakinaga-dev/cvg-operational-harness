@@ -647,4 +647,26 @@ describe('SPEC0254 O1 — OIDC login configuration refuses the boot without I/O'
     )
     expect(message).toMatch(/CVG_OPERATOR_LOGIN=oidc/)
   })
+
+  it('refuses an injected OIDC login that does not match the configuration', async () => {
+    for (const patch of [
+      { authorityVersion: 'oidc-v1-'.padEnd(72, '0') },
+      { consoleOrigin: 'https://other.synthetic.test' }
+    ]) {
+      const message = await refusal(() =>
+        buildServerFromEnv(validEnv, {
+          operatorSessionStore: {} as never,
+          operatorLogin: {
+            kind: 'oidc',
+            authorityVersion: 'oidc-v1-'.padEnd(72, '0'),
+            consoleOrigin: CONSOLE,
+            authority: {} as never,
+            stateStore: {} as never,
+            ...patch
+          }
+        } as never)
+      )
+      expect(message).toMatch(/does not match the OIDC configuration/)
+    }
+  })
 })

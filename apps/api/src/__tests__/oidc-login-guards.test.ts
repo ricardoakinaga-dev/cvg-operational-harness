@@ -389,22 +389,24 @@ describe('SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10)', 
     'refuses x-cvg-operator-token on %s with and without a valid cookie, without Set-Cookie',
     async (url) => {
       const g = await guarded()
-      for (const cookie of [undefined, g.cookie]) {
-        const response = await g.app.inject({
-          method: 'GET',
-          url,
-          headers: {
-            'x-cvg-operator-token': 'synthetic.token.value',
-            ...(cookie ? { cookie } : {})
-          }
-        })
-        expect(response.statusCode).toBe(401)
-        expect(response.json().error.message).toBe(
-          'Bootstrap tokens are disabled'
-        )
-        expect(response.headers['set-cookie']).toBeUndefined()
-        expect(response.headers['cache-control']).toBe('no-store')
-      }
+      // D10: any value, the empty one included.
+      for (const token of ['synthetic.token.value', ''])
+        for (const cookie of [undefined, g.cookie]) {
+          const response = await g.app.inject({
+            method: 'GET',
+            url,
+            headers: {
+              'x-cvg-operator-token': token,
+              ...(cookie ? { cookie } : {})
+            }
+          })
+          expect(response.statusCode).toBe(401)
+          expect(response.json().error.message).toBe(
+            'Bootstrap tokens are disabled'
+          )
+          expect(response.headers['set-cookie']).toBeUndefined()
+          expect(response.headers['cache-control']).toBe('no-store')
+        }
       const alive = await g.app.inject({
         method: 'GET',
         url: '/v1/session',
@@ -413,6 +415,34 @@ describe('SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10)', 
       expect(alive.statusCode).toBe(200)
     }
   )
+
+  it('answers before the session hook: an unknown session cookie never turns the guards into a session 401 (§4.7 order)', async () => {
+    const g = await guarded()
+    const unknown = `cvg_operator_session=opsess_${'U'.repeat(43)}`
+    for (const url of ['/v1/tasks', '/v1/session/logout']) {
+      const response = await g.app.inject({
+        method: 'POST',
+        url,
+        headers: { cookie: unknown },
+        ...(url === '/v1/tasks' ? { payload: mutations[0].payload } : {})
+      })
+      expect(response.statusCode, url).toBe(403)
+      expect(response.json().error.message).toBe('Origin is not allowed')
+      expect(response.headers['set-cookie']).toBeUndefined()
+    }
+    for (const url of ['/v1/cases', '/v1/session']) {
+      const response = await g.app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: unknown, 'x-cvg-operator-token': 'synthetic' }
+      })
+      expect(response.statusCode, url).toBe(401)
+      expect(response.json().error.message).toBe(
+        'Bootstrap tokens are disabled'
+      )
+      expect(response.headers['set-cookie']).toBeUndefined()
+    }
+  })
 
   it('keeps the probes independent of the token header', async () => {
     const g = await guarded()

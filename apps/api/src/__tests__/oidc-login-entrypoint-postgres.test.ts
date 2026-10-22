@@ -403,6 +403,8 @@ describePg('SPEC0254 O10 — entrypoint with PostgreSQL and HTTPS IdP', () => {
       ]
     ]
     for (const [name, patch, expected] of cases) {
+      // Refused before discovery, pools and listen: the IdP is never called.
+      const discoveries = idp.calls.discovery
       const child = spawnApi(environment(patch))
       children.push(child)
       const timeout = new Promise<'timeout'>((resolve) =>
@@ -415,6 +417,7 @@ describePg('SPEC0254 O10 — entrypoint with PostgreSQL and HTTPS IdP', () => {
         expected
       )
       expect(child.output(), name).toContain('api.startup_failed')
+      expect(idp.calls.discovery, name).toBe(discoveries)
       for (const secret of [
         material.clientSecret,
         material.pendingCookieKey,

@@ -651,5 +651,31 @@ describePg(
         ).statusCode
       ).toBe(401)
     }, 90_000)
+
+    it('checks every tenant of the matrix at boot, not only the first', async () => {
+      const v7 = await open(fixture, idp, syntheticGroupMatrix(7))
+      apps.push(v7.app)
+      // Only tenant B (the last tenant of the matrix) holds a principal of
+      // N=7 with another digest.
+      await v7.app.caseAuthority.applyVerifiedPrincipalState({
+        tenantId: SYNTHETIC_TENANT_B as TenantId,
+        operatorId: 'oidc_tenant_b_only',
+        role: 'Operator',
+        active: true,
+        expectedRevision: 0,
+        authorityVersion: `oidc-v7-${'c'.repeat(64)}`,
+        proofRef: 'synthetic-seed-proof',
+        identitySource: 'verified_adapter'
+      })
+      const reboot = await open(fixture, idp, syntheticGroupMatrix(7)).then(
+        async (opened) => {
+          await opened.app.close()
+          return 'boot accepted the edited matrix'
+        },
+        (error: unknown) =>
+          error instanceof Error ? error.message : String(error)
+      )
+      expect(reboot).toMatch(/matrix changed without a higher version/)
+    }, 60_000)
   }
 )

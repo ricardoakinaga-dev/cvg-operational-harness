@@ -223,6 +223,15 @@ describe('SPEC0254 O6 — producer table (memory)', () => {
     [
       'an unversioned verified principal',
       { role: 'Supervisor', active: true, authorityVersion: 'legacy-version' }
+    ],
+    [
+      'a synthetic fixture principal already at the current version (origin clause)',
+      {
+        role: 'Supervisor',
+        active: true,
+        authorityVersion: v(3),
+        identitySource: 'synthetic_fixture'
+      }
     ]
   ] as const)(
     'row 7: updates %s to the current version',

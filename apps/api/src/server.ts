@@ -5411,16 +5411,20 @@ export async function buildServerFromEnv(
   }
   if (
     operatorLoginConfig &&
-    (!buildOptions.operatorLogin ||
-      !buildOptions.operatorSessionStore ||
-      buildOptions.operatorLogin.authorityVersion !==
-        operatorLoginConfig.authorityVersion ||
-      buildOptions.operatorLogin.consoleOrigin !==
-        operatorLoginConfig.consoleOrigin)
+    (!buildOptions.operatorLogin || !buildOptions.operatorSessionStore)
   ) {
     throw new Error(
       'OIDC login requires the durable operator session and login state stores'
     )
+  }
+  if (
+    operatorLoginConfig &&
+    (buildOptions.operatorLogin!.authorityVersion !==
+      operatorLoginConfig.authorityVersion ||
+      buildOptions.operatorLogin!.consoleOrigin !==
+        operatorLoginConfig.consoleOrigin)
+  ) {
+    throw new Error('operatorLogin does not match the OIDC configuration')
   }
   /**
    * The identity mode follows the explicit option, then `CVG_IDENTITY_MODE`,

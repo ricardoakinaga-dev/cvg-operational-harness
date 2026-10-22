@@ -35,7 +35,8 @@ const RESERVED_CLAIMS = new Set([
   'prototype'
 ])
 const PLACEHOLDER = /replace[_-]?me|change[_-]?me|example/i
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
+// Same loopback hosts as the login transaction (`oidc-login-transaction.ts`).
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost'])
 
 export type OidcMatrixRole = (typeof ROLES)[number]
 
