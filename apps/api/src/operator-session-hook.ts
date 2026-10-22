@@ -14,6 +14,9 @@ const sessionIndependentProbePaths = new Set([
   readyRoute,
   '/health/metrics'
 ])
+// SPEC0254 §4.6: the OIDC login routes apply their own operational-cookie
+// rules (start retires or clears it; the callback never reads it).
+const loginPaths = new Set(['/v1/auth/oidc/start', '/v1/auth/oidc/callback'])
 
 export interface OperatorSessionHookOptions {
   app: FastifyInstance
@@ -45,6 +48,7 @@ export function installOperatorSessionHook(
     const rawPath = request.url.split('?')[0]
     // A stale browser cookie must not turn public health probes into auth failures.
     if (sessionIndependentProbePaths.has(rawPath ?? '')) return
+    if (loginPaths.has(rawPath ?? '')) return
     const sessionId = parseOperatorSessionCookie(request.headers.cookie)
     if (!sessionId) return
 

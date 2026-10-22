@@ -165,6 +165,16 @@ import {
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
+import type { OidcTransport } from './oidc-authority.ts'
+import {
+  parseOperatorLoginConfig,
+  type OidcLoginConfig
+} from './oidc-config.ts'
+import {
+  installOperatorLoginGuards,
+  registerOperatorLoginRoutes,
+  type OperatorLoginComposition
+} from './oidc-routes.ts'
 import {
   CaseAuthorityError,
   InMemoryCaseAuthority,
@@ -349,9 +359,19 @@ export interface BuildServerOptions {
   caseAuthority?: CaseAuthorityPort
   /**
    * SPEC0176 trusted principal producer (SPEC0152 adapter). Trusted case
-   * reads require it; without it they fail closed with 503.
+   * reads require it; without it they fail closed with 503. Outside
+   * NODE_ENV=test it exists only with `operatorLogin` (SPEC0254 I3), whose
+   * authority version it must carry.
    */
   casePrincipalAuthority?: { authorityVersion: string }
+  /**
+   * SPEC0254 OIDC operator login: routes, verified principal producer,
+   * CSRF by exact `Origin` and HMAC token refusal. Composed only with
+   * NODE_ENV=test in this slice (synthetic IdP); never with an HMAC resolver.
+   */
+  operatorLogin?: OperatorLoginComposition
+  /** SPEC0254: injected OIDC transport, accepted only with NODE_ENV=test. */
+  oidcTransport?: OidcTransport
 }
 
 export type BuildServerFromEnvOptions = Omit<
@@ -376,6 +396,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       'Simulation identity mode requires the explicit controlled test profile'
     )
   }
+  assertOperatorLoginComposition(options, identityMode)
   const trustedOperatorIdentityResolver =
     createEffectiveOperatorIdentityResolver(
       identityMode,
@@ -531,6 +552,12 @@ export function buildServer(options: BuildServerOptions = {}) {
   })
   installHttpSecurityHooks(app, httpSecurity)
   installResponseCorrelationHook(app)
+  if (options.operatorLogin) {
+    // SPEC0254 §4.7: after the HTTP hook, before the session hook.
+    installOperatorLoginGuards(app, {
+      consoleOrigin: options.operatorLogin.consoleOrigin
+    })
+  }
   if (identityMode === 'trusted' && options.operatorSessionStore) {
     installOperatorSessionHook({
       app,
@@ -767,7 +794,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     caseAuthority,
     principalPolicy: {
       identityMode,
-      authorityVersion: options.casePrincipalAuthority?.authorityVersion ?? null
+      authorityVersion:
+        options.operatorLogin?.authorityVersion ??
+        options.casePrincipalAuthority?.authorityVersion ??
+        null
     },
     operationalExecution,
     ...(options.executionSteps
@@ -868,6 +898,23 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
 
       const existing = sessionRecordByHeaders.get(request.headers)
+      if (options.operatorLogin) {
+        // SPEC0254 §4.6: the OIDC mode only restores by cookie; the session
+        // is created by the callback, never here.
+        if (!existing) {
+          throw new DomainError(
+            'unauthorized',
+            'Operator session is missing or expired'
+          )
+        }
+        return ok(
+          {
+            identity: existing.identity,
+            expiresAt: new Date(existing.expiresAt).toISOString()
+          },
+          correlationId
+        )
+      }
       const rawToken = request.headers[TRUSTED_OPERATOR_TOKEN_HEADER]
       const hasBootstrapToken =
         typeof rawToken === 'string' && rawToken.trim().length > 0
@@ -990,6 +1037,34 @@ export function buildServer(options: BuildServerOptions = {}) {
       )
     }
   })
+
+  if (options.operatorLogin && options.operatorSessionStore) {
+    registerOperatorLoginRoutes(app, {
+      login: options.operatorLogin,
+      sessionStore: options.operatorSessionStore,
+      caseAuthority,
+      rateLimiter,
+      secureCookies: httpSecurity.enforceHttps,
+      log: (entry) => {
+        safeTelemetry(() =>
+          telemetry.log(entry.status === 'ok' ? 'info' : 'warn', entry.event, {
+            correlationId: entry.correlationId,
+            route: entry.route,
+            step: entry.step,
+            status: entry.status,
+            ...(entry.reasonCode ? { reasonCode: entry.reasonCode } : {})
+          })
+        )
+        options.runtimeLogger?.({
+          event: entry.event,
+          correlationId: entry.correlationId,
+          route: entry.route,
+          status: entry.status,
+          ...(entry.reasonCode ? { errorCode: entry.reasonCode } : {})
+        })
+      }
+    })
+  }
 
   app.post('/v1/executions', async (request, reply) => {
     const correlationId = createCorrelationId()
@@ -4490,6 +4565,78 @@ function resolveOperatorIdentity(
 }
 
 /**
+ * SPEC0254 §4.8 — composition refusals, read from `process.env` (I3, I4, I6).
+ * The OIDC login and an injected transport exist only with NODE_ENV=test in
+ * this slice; the principal authority outside test exists only with the
+ * login that produces its principals.
+ */
+function assertOperatorLoginComposition(
+  options: BuildServerOptions,
+  identityMode: IdentityMode
+): void {
+  const controlledTest = process.env.NODE_ENV === 'test'
+  if (options.oidcTransport !== undefined && !controlledTest) {
+    throw new Error('oidcTransport is accepted only with NODE_ENV=test')
+  }
+  const login = options.operatorLogin
+  if (!login) {
+    if (options.casePrincipalAuthority && !controlledTest) {
+      throw new Error(
+        'casePrincipalAuthority requires the OIDC operator login outside NODE_ENV=test'
+      )
+    }
+    return
+  }
+  if (!controlledTest) {
+    throw new Error('OIDC login is not qualified for this environment')
+  }
+  if (identityMode !== 'trusted') {
+    throw new Error('OIDC login requires the trusted identity mode')
+  }
+  if (!options.operatorSessionStore) {
+    throw new Error('OIDC login requires an operator session store')
+  }
+  if (options.operatorIdentityResolver) {
+    throw new Error(
+      'OIDC login refuses an HMAC operatorIdentityResolver in the same composition'
+    )
+  }
+  if (
+    options.casePrincipalAuthority &&
+    options.casePrincipalAuthority.authorityVersion !== login.authorityVersion
+  ) {
+    throw new Error(
+      'casePrincipalAuthority must carry the OIDC login authority version'
+    )
+  }
+}
+
+/**
+ * SPEC0254 §4.8 step 6 (P5): a principal recorded under the current matrix
+ * version N with another digest means the matrix was edited without raising
+ * N. Reads `case_principals` of each matrix tenant under its RLS context.
+ */
+async function assertPrincipalVersionsCurrent(
+  caseAuthority: CaseAuthorityPort,
+  config: OidcLoginConfig
+): Promise<void> {
+  const prefix = `oidc-v${config.groupMatrix.version}-`
+  const tenants = [
+    ...new Set(config.groupMatrix.entries.map((entry) => entry.tenantId))
+  ]
+  for (const tenantId of tenants) {
+    const mismatch = await caseAuthority.readSnapshot(tenantId, (snapshot) =>
+      snapshot.hasPrincipalVersionMismatch(prefix, config.authorityVersion)
+    )
+    if (mismatch) {
+      throw new Error(
+        'OIDC group matrix changed without a higher version; raise the matrix version'
+      )
+    }
+  }
+}
+
+/**
  * Trusted mode never falls back to simulation headers: without a resolver it
  * fails closed, and resolver identities must be tenant-bound so a
  * self-asserted tenant header can never widen scope. Simulation mode keeps the
@@ -5257,6 +5404,24 @@ export async function buildServerFromEnv(
     )
   }
   const { webhookReplayStore, ...buildOptions } = options
+  // SPEC0254 §4.1: validated without I/O, before any pool or listener.
+  const operatorLoginConfig = parseOperatorLoginConfig(env)
+  if (!operatorLoginConfig && buildOptions.operatorLogin) {
+    throw new Error('operatorLogin requires CVG_OPERATOR_LOGIN=oidc')
+  }
+  if (
+    operatorLoginConfig &&
+    (!buildOptions.operatorLogin ||
+      !buildOptions.operatorSessionStore ||
+      buildOptions.operatorLogin.authorityVersion !==
+        operatorLoginConfig.authorityVersion ||
+      buildOptions.operatorLogin.consoleOrigin !==
+        operatorLoginConfig.consoleOrigin)
+  ) {
+    throw new Error(
+      'OIDC login requires the durable operator session and login state stores'
+    )
+  }
   /**
    * The identity mode follows the explicit option, then `CVG_IDENTITY_MODE`,
    * then the process environment (the source `buildServer` itself reads).
@@ -5587,6 +5752,27 @@ export async function buildServerFromEnv(
     legacyClient?.release()
     await closePools()
   })
+  if (operatorLoginConfig) {
+    try {
+      await assertPrincipalVersionsCurrent(
+        app.caseAuthority,
+        operatorLoginConfig
+      )
+    } catch (error) {
+      await app.close()
+      throw error
+    }
+    // Secret-free boot summary (§4.1).
+    safeTelemetry(() =>
+      app.telemetry.log('info', 'operator_login.configured', {
+        mode: operatorLoginConfig.kind,
+        issuerOrigin: new URL(operatorLoginConfig.issuer).origin,
+        matrixVersion: operatorLoginConfig.groupMatrix.version,
+        authorityVersion: operatorLoginConfig.authorityVersion,
+        mfaPolicyVersion: operatorLoginConfig.mfaPolicy.version
+      })
+    )
+  }
   return app
 }
 

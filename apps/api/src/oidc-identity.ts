@@ -1,57 +1,94 @@
 import { createHash } from 'node:crypto'
 import { OperatorIdentitySchema, type OperatorIdentity } from '@cvg/shared'
+import type { OidcGroupMatrix } from './oidc-config.ts'
 
 const SESSION_LIFETIME_SECONDS = 15 * 60
-const DEFAULT_AUTHENTICATION_AGE_SECONDS = 5 * 60
+const AUTHENTICATION_AGE_SECONDS = 5 * 60
 const CLOCK_SKEW_SECONDS = 30
-const TENANT_GROUP =
-  /^\/(tenant_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(Operator|Approver|Supervisor|Admin)$/
+const MAX_GROUPS = 256
+const MAX_GROUP_LENGTH = 256
 
-export interface VerifiedOidcIdentityOptions {
+/** SPEC0254 §4.9 — log-only reason codes; responses never carry them. */
+export type OidcLoginReasonCode =
+  | 'origin_invalid'
+  | 'rate_limited'
+  | 'state_invalid'
+  | 'state_unavailable'
+  | 'idp_error'
+  | 'token_rejected'
+  | 'idp_unavailable'
+  | 'mfa_missing'
+  | 'groups_invalid'
+  | 'no_eligible_group'
+  | 'ambiguous_group'
+  | 'inactive_group'
+  | 'principal_inactive'
+  | 'principal_drift'
+  | 'principal_version_ahead'
+  | 'principal_conflict'
+  | 'principal_unavailable'
+  | 'session_unavailable'
+
+/** A login refusal (401); the message is generic, the reason is for logs. */
+export class OidcLoginRefusal extends Error {
+  constructor(readonly reasonCode: OidcLoginReasonCode) {
+    super('Operator login was refused')
+    this.name = 'OidcLoginRefusal'
+  }
+}
+
+export interface OidcIdentityPolicy {
   issuer: string
   clientId: string
+  requiredAmr: readonly string[]
+  matrix: OidcGroupMatrix
   now?: () => number
-  maxAuthenticationAgeSeconds?: number
 }
 
 export interface MappedOidcIdentity {
-  identity: OperatorIdentity
+  identity: OperatorIdentity & { tenantId: string }
+  /** Whether the matched matrix entry is active (the producer decides, §4.5). */
+  active: boolean
   expiresAt: number
+  /** Opaque, secret-free proof reference; only its digest is persisted. */
+  proofRef: string
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 /**
- * Accepts claims ONLY after an OIDC client has verified the ID token's
- * signature, issuer, audience, nonce and token response. This function adds
- * the local MFA, freshness and tenant-role authorization policy; it does not
- * decode or authenticate a browser-supplied token.
+ * SPEC0254 §4.4. Accepts claims ONLY after the OIDC client verified the ID
+ * token (signature against the issuer JWKS, issuer, audience, nonce, max_age
+ * and the token response). It repeats the identity checks and adds the MFA
+ * policy and the versioned group matrix; it never decodes a browser token.
  */
-export function mapVerifiedOidcClaims(
+export function mapVerifiedOidcIdentity(
   claims: unknown,
-  options: VerifiedOidcIdentityOptions
+  policy: OidcIdentityPolicy
 ): MappedOidcIdentity {
-  const nowSeconds = Math.floor((options.now ?? Date.now)() / 1_000)
-  const maxAge =
-    options.maxAuthenticationAgeSeconds ?? DEFAULT_AUTHENTICATION_AGE_SECONDS
+  const nowMs = (policy.now ?? Date.now)()
   if (
-    !Number.isInteger(nowSeconds) ||
-    !Number.isInteger(maxAge) ||
-    maxAge <= 0 ||
-    maxAge > SESSION_LIFETIME_SECONDS ||
-    !options.issuer ||
-    !options.clientId
+    !Number.isFinite(nowMs) ||
+    !policy.issuer ||
+    !policy.clientId ||
+    policy.requiredAmr.length === 0 ||
+    !policy.matrix?.claim
   ) {
     throw new Error('OIDC identity policy is invalid')
   }
+  const nowSeconds = Math.floor(nowMs / 1_000)
   if (!claims || typeof claims !== 'object' || Array.isArray(claims)) {
-    throw new Error('Verified OIDC claims are invalid')
+    throw new OidcLoginRefusal('token_rejected')
   }
   const value = claims as Record<string, unknown>
   if (
-    value.iss !== options.issuer ||
-    !hasExpectedAudience(value.aud, value.azp, options.clientId) ||
+    value.iss !== policy.issuer ||
+    !hasExpectedAudience(value.aud, value.azp, policy.clientId) ||
     typeof value.sub !== 'string' ||
     value.sub.length === 0 ||
-    Buffer.byteLength(value.sub, 'utf8') > 512 ||
+    Buffer.byteLength(value.sub, 'utf8') > 255 ||
     !isEpochSecond(value.iat) ||
     !isEpochSecond(value.exp) ||
     !isEpochSecond(value.auth_time) ||
@@ -59,46 +96,53 @@ export function mapVerifiedOidcClaims(
     value.exp <= nowSeconds ||
     value.exp <= value.iat ||
     value.auth_time > nowSeconds + CLOCK_SKEW_SECONDS ||
-    value.auth_time < nowSeconds - maxAge ||
+    value.auth_time < nowSeconds - AUTHENTICATION_AGE_SECONDS ||
     value.auth_time > value.iat + CLOCK_SKEW_SECONDS
   ) {
-    throw new Error('Verified OIDC claims do not meet identity policy')
+    throw new OidcLoginRefusal('token_rejected')
   }
+  const amr = value.amr
   if (
-    !Array.isArray(value.amr) ||
-    !value.amr.every((method) => typeof method === 'string') ||
-    !value.amr.includes('pwd') ||
-    !value.amr.includes('otp')
+    !Array.isArray(amr) ||
+    !amr.every((method) => typeof method === 'string') ||
+    !policy.requiredAmr.every((method) => amr.includes(method))
   ) {
-    throw new Error('Verified OIDC claims do not prove required MFA')
+    throw new OidcLoginRefusal('mfa_missing')
   }
+  // Own top-level member only: an inherited (polluted) property never counts.
+  const groups = Object.hasOwn(value, policy.matrix.claim)
+    ? value[policy.matrix.claim]
+    : undefined
   if (
-    !Array.isArray(value.groups) ||
-    !value.groups.every((group) => typeof group === 'string')
+    !Array.isArray(groups) ||
+    groups.length > MAX_GROUPS ||
+    !groups.every(
+      (group) => typeof group === 'string' && group.length <= MAX_GROUP_LENGTH
+    )
   ) {
-    throw new Error('Verified OIDC claims lack trusted groups')
+    throw new OidcLoginRefusal('groups_invalid')
   }
-  const tenantGroups = value.groups.filter((group: string) =>
-    group.startsWith('/tenant_')
+  // P2: groups outside the matrix are ignored; exactly one entry must match.
+  const eligible = policy.matrix.entries.filter((entry) =>
+    groups.includes(entry.group)
   )
-  if (tenantGroups.length !== 1) {
-    throw new Error('Operator must belong to exactly one tenant-role group')
-  }
-  const group = TENANT_GROUP.exec(tenantGroups[0] ?? '')
-  if (!group) {
-    throw new Error('Operator tenant-role group is malformed')
-  }
-  const operatorId = `oidc_${createHash('sha256')
-    .update(JSON.stringify([value.iss, value.sub]))
-    .digest('hex')}`
+  if (eligible.length === 0) throw new OidcLoginRefusal('no_eligible_group')
+  if (eligible.length > 1) throw new OidcLoginRefusal('ambiguous_group')
+  const entry = eligible[0]!
+  const operatorId = `oidc_${sha256(JSON.stringify([value.iss, value.sub]))}`
+  const identity = OperatorIdentitySchema.parse({
+    operatorId,
+    tenantId: entry.tenantId,
+    role: entry.role
+  })
   return {
-    identity: OperatorIdentitySchema.parse({
-      operatorId,
-      tenantId: group[1],
-      role: group[2]
-    }),
+    identity: { ...identity, tenantId: entry.tenantId },
+    active: entry.active,
     expiresAt:
-      Math.min(value.exp, nowSeconds + SESSION_LIFETIME_SECONDS) * 1_000
+      Math.min(value.exp, nowSeconds + SESSION_LIFETIME_SECONDS) * 1_000,
+    proofRef: `oidc-login:${sha256(
+      JSON.stringify([value.iss, value.sub, value.iat, value.auth_time])
+    )}`
   }
 }
 

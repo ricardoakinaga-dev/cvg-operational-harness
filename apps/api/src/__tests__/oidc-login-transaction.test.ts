@@ -181,6 +181,35 @@ describe('OIDC browser login transaction', () => {
     ).rejects.toThrow()
   })
 
+  it('seals the previous browser session in the pending cookie (SPEC0254 §4.3)', async () => {
+    const previousSessionId = `opsess_${'P'.repeat(43)}`
+    const started = await startOidcLogin(options, { previousSessionId })
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!
+    expect(started.setCookie).not.toContain(previousSessionId)
+    expect(started.authorizationUrl).not.toContain(previousSessionId)
+    expect(
+      await readOidcLoginCallback(
+        cookieValue(started.setCookie),
+        state,
+        options
+      )
+    ).toMatchObject({ previousSessionId })
+    const plain = await startOidcLogin(options)
+    const plainState = new URL(plain.authorizationUrl).searchParams.get(
+      'state'
+    )!
+    expect(
+      await readOidcLoginCallback(
+        cookieValue(plain.setCookie),
+        plainState,
+        options
+      )
+    ).not.toHaveProperty('previousSessionId')
+    await expect(
+      startOidcLogin(options, { previousSessionId: 'bad id;' })
+    ).rejects.toThrow('OIDC login previous session is invalid')
+  })
+
   it('marks the callback cookie Secure under HTTPS', async () => {
     const httpsOptions = {
       ...options,

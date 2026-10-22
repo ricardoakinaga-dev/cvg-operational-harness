@@ -121,6 +121,31 @@
 - Resposta: trilha consolidada.
 - Autorizacao: Supervisor ou Admin; Operator apenas quando associado ao caso.
 
+### Login OIDC de operador (adendo da SPEC0254, fatia A)
+
+Só existe quando o login OIDC está composto, o que nesta versão só acontece com `NODE_ENV=test` e IdP sintético ([SPEC0254](0254_oidc_login_case_principals.md) §4.11). Fora desse modo, as rotas abaixo não existem (404) e o modo HMAC não muda.
+
+#### `POST /v1/auth/oidc/start`
+
+- Caso de uso: iniciar o login (Authorization Code + PKCE) a partir do console.
+- Público, com `Origin` único e igual à origem do console (senão 403 `forbidden`, antes do corpo, sem state nem cookie).
+- Payload: ausente ou `{}`; outro corpo é 400 `validation_failed`.
+- Resposta: 200 `{ authorizationUrl }` e o cookie pendente (`SameSite=Lax`, 5 min). A `authorizationUrl` leva `state`, `nonce` e `code_challenge` por protocolo; é a única resposta que os contém.
+- Erros: 429 `rate_limited` (10 por minuto por IP, com `Retry-After`); 503 `configuration_error` com store de sessão, de state ou limitador indisponível. Respostas com `cache-control: no-store`.
+
+#### `GET /v1/auth/oidc/callback`
+
+- Caso de uso: retorno da navegação do IdP.
+- Sucesso: 303 para `<origem do console>/`, com o cookie operacional (`HttpOnly; SameSite=Strict`, validade ≤ 15 min e ≤ `exp` do ID token) e a limpeza do cookie pendente.
+- Erros: 401 `unauthorized` "Operator login failed", com o mesmo corpo para toda recusa (o motivo vai só ao log); 429 `rate_limited` (30 por minuto por IP); 503 `configuration_error` com IdP, JWKS, produtor de principal ou store indisponível. Falhas respondem JSON e não redirecionam. Respostas com `cache-control: no-store`.
+
+#### Regras do modo OIDC nas rotas existentes
+
+- `GET /v1/session` só restaura a sessão pelo cookie; sem cookie, 401 "Operator session is missing or expired". Nunca cria sessão.
+- Mutação (`POST`, `PUT`, `PATCH`, `DELETE`) com o cookie operacional exige `Origin` único e igual à origem do console; senão 403 `forbidden`, antes de qualquer efeito. Webhook sem cookie não muda.
+- O cabeçalho `x-cvg-operator-token` é recusado com 401 `unauthorized`, sem `Set-Cookie`, fora das probes.
+- DTOs existentes não mudam.
+
 ## Versionamento
 
 APIs externas devem iniciar em `/v1`. Mudancas incompatíveis exigem nova versao ou adaptador de compatibilidade.
