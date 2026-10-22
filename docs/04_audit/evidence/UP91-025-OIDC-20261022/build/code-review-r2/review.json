@@ -1,0 +1,115 @@
+{
+  "round": "r2",
+  "verdict": "APPROVE",
+  "checkedCommit": "aa91c86f89e10f7749adaa021e3640e83a15310a",
+  "base": "ad9b1aefa545269f39bfffaba34a69888357590d",
+  "spec": {
+    "path": "docs/02_spec/0254_oidc_login_case_principals.md",
+    "revision": "r2",
+    "sha256": "3c804dc22c34b736b6d0c6bb5d683b6144a1d7d34dd083d33926d34afef49694",
+    "sha256Verified": true
+  },
+  "reviewer": "Claude Code, contexto novo, independente do executor",
+  "date": "2026-10-22",
+  "evidenceCondition": "Sem PG nesta revisão. O executor deve anexar ao relatório do BUILD o verde de oidc-login-postgres (6 testes, inclusive o novo do O4 em :655) e de oidc-login-entrypoint-postgres (2 testes, inclusive a asserção de discovery do O10) sobre aa91c86f8. A morte do C4 só vale se o teste passar no código real.",
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "R2-O1",
+      "title": "O teste do O9 não isola a cláusula de consoleOrigin: a primeira variação repete o valor base, e o base nunca é o authorityVersion da configuração; um mutante que tire a comparação de consoleOrigin (C10) sobrevive",
+      "where": "apps/api/src/__tests__/oidc-login-config.test.ts:651-671; apps/api/src/server.ts:5420-5428",
+      "fix": "Usar como base authorityVersion: parseOperatorLoginConfig(validEnv)!.authorityVersion, para cada variação mudar um único campo; opcionalmente registrar o C10 no mutants.json"
+    },
+    {
+      "id": "R2-O2",
+      "title": "O alinhamento do O11 ([::1] fora de LOOPBACK_HOSTS) não tem prova; um mutante que devolva '[::1]' (C11) sobrevive, mas a falha continua fechada (recusa depois do discovery)",
+      "where": "apps/api/src/oidc-config.ts:38-39; apps/api/src/__tests__/oidc-login-config.test.ts:326-338",
+      "fix": "Acrescentar à tabela do O1 o caso CVG_OIDC_REDIRECT_URI 'http://[::1]/v1/auth/oidc/callback', com o esperado /CVG_OIDC_REDIRECT_URI/"
+    },
+    {
+      "id": "R2-O3",
+      "title": "O relatório do BUILD também deve registrar a r2",
+      "where": "docs/04_audit/evidence/UP91-025-OIDC-20261022/build/",
+      "fix": "Incluir: O7 (RFC 9207) na lista de resíduos da 0254-C, junto do O11 e do O12 da spec-review-r1; a variação aceita do O4 (mesmo fixture com N=7); o teto de 300 do O12; os resultados PG sobre aa91c86f8; e a decisão sobre R2-O1 e R2-O2 (com C10 e C11, se aplicados)"
+    }
+  ],
+  "r1Optionals": [
+    {
+      "id": "O1",
+      "status": "incorporated",
+      "note": "oidc-login-guards.test.ts:419-445. Cookie opsess_ de formato válido e sessão inexistente. Exige 403 'Origin is not allowed' sem Set-Cookie em POST /v1/tasks e /v1/session/logout, e 401 'Bootstrap tokens are disabled' sem Set-Cookie em GET /v1/cases e /v1/session. O C2 (troca exata dos blocos) morre."
+    },
+    {
+      "id": "O2",
+      "status": "recorded",
+      "note": "mutants.json registra o C1 como SURVIVED (EQUIVALENT), com o motivo. Equivalência reconferida no oauth4webapi 3.8.8: a biblioteca recusa se auth_time + 300 < agora − 30 (index.js:1425; tolerância padrão de 30 s, :435-440). O mapeador recusa se auth_time < agora − 300 e exige auth_time (oidc-identity.ts:94,99). O mapeador é mais forte, e as duas recusas dão o mesmo 401."
+    },
+    {
+      "id": "O3",
+      "status": "incorporated",
+      "note": "oidc-login-guards.test.ts:392-409. Testa os valores 'synthetic.token.value' e '', com e sem cookie, mantendo todas as asserções. O C3 morre em 2 testes."
+    },
+    {
+      "id": "O4",
+      "status": "incorporated-with-accepted-variation",
+      "note": "oidc-login-postgres.test.ts:655-679. Mesmo fixture com N=7, em vez de um fixture novo com N=3. É robusto: sozinho, o tenant A não tem principal; na ordem do arquivo, o tenant A está em oidc-v4- (< 7). Nos dois casos, só o tenant B decide. A ordem [A, B] vem de new Set(entries) (server.ts:4624-4626). O C4 morre. Falta o verde PG no código real."
+    },
+    {
+      "id": "O5",
+      "status": "incorporated",
+      "note": "case-principal-producer.test.ts:227-235. synthetic_fixture, ativo, v(3) com o mesmo digest e a mesma role. Sem a cláusula, a decisão cai na linha 8 (revisão 1). O C5 morre."
+    },
+    {
+      "id": "O6",
+      "status": "incorporated",
+      "note": "oidc-login-routes.test.ts:446-455. Corpo '{' com application/json. O C6 morre nos 2 casos em que o 403 vem do onRequest da rota; nos 3 casos em que o 403 vem do hook HTTP, ele continua passando, o que é coerente."
+    },
+    {
+      "id": "O7",
+      "status": "pending-record",
+      "note": "Sem registro fora da r1 (grep 9207 em docs/ e build/). Não muda código na fatia A. O registro é adequado se entrar no relatório do BUILD e nos resíduos da 0254-C (R2-O3)."
+    },
+    {
+      "id": "O8",
+      "status": "in-progress",
+      "note": "O que existe está consistente: mutants.json com checkedCommit aa91c86f8 e M1–M30 mortos. Os restoredSha256 batem com os blobs de HEAD. O C1 é equivalente, e C7–C9 estão anotados. certification/skip-inventory.json não está em nenhum dos commits. Falta o relatório do BUILD."
+    },
+    {
+      "id": "O9",
+      "status": "incorporated",
+      "note": "server.ts:5412-5428. Condição dividida, com a mesma lógica. A mensagem própria não leva valores sensíveis, e o '!' é seguro. O teste novo só prova a cláusula da versão (R2-O1)."
+    },
+    {
+      "id": "O10",
+      "status": "incorporated",
+      "note": "oidc-login-entrypoint-postgres.test.ts:406-420. Exige que idp.calls.discovery não aumente. O contador está vivo no transporte HTTPS (o mesmo handle). Todas as recusas da tabela saem de parseOperatorLoginConfig, antes de qualquer I/O. Falta o verde PG."
+    },
+    {
+      "id": "O11",
+      "status": "incorporated",
+      "note": "oidc-config.ts:38-39, alinhado com oidc-login-transaction.ts:247. O resultado no sistema não muda: [::1] já era recusado no boot, depois do discovery; agora a recusa vem antes do I/O (§4.1). A sonda confirma que [::1] é recusado e que 127.0.0.1 e localhost são aceitos. Sem prova (R2-O2)."
+    },
+    {
+      "id": "O12",
+      "status": "incorporated-stronger",
+      "note": "oidc-login-routes.test.ts:329-332 exige 0 < Max-Age ≤ 300, que é o exp do harness. Não é instável: exp = floor(agora/1000) + 300 e Max-Age = ceil(Δ/1000). Prova ≤ exp em processo e mataria o C8 sem PG. O teto de 900 segue provado em oidc-identity.test.ts:76."
+    }
+  ],
+  "questions": {
+    "q1_r1OptionalsIncorporated": "sim, sem afrouxar asserção; ressalvas de prova em R2-O1 e R2-O2",
+    "q2_O2_O7_O8": "O2 adequado; O7 ainda sem registro, esperado no relatório do BUILD; O8 consistente no que existe",
+    "q3_regressionSecurity": "nenhuma regressão, contradição com a SPEC ou com a r1, nem falha de segurança",
+    "q4_writeSet": "dentro do §6: 9 arquivos, todos já no conjunto de 31 da r1; o total acumulado continua 31; nada em caminho proibido"
+  },
+  "checks": {
+    "typecheck": "exit 0",
+    "eslint": "exit 0 (8 arquivos .ts tocados)",
+    "prettier": "OK (9 arquivos tocados)",
+    "focalTestsNoPg": "10 arquivos e 316 testes verdes, 8 pulados (PG)",
+    "buildServerFromEnvTestsNoPg": "4 arquivos, 38 verdes e 2 pulados",
+    "skipCatalog": "sha256 b4418d27… (6 pulados) e 5ea5c17d… (2 pulados) batem com os arquivos",
+    "probe": "<scratch>/critic-r2-probe/probe.mts, só leitura via tsx, com URLs de banco em 127.0.0.1:1",
+    "mutantsApplied": "nenhum (regra desta rodada)",
+    "postgres": "não rodado (reservado ao executor)"
+  }
+}

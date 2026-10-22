@@ -1,0 +1,29 @@
+// Temporary first-red probe (not committed): base behavior for O3–O5, O9.
+import { describe, expect, it } from 'vitest'
+import { buildServer } from '../server.ts'
+import { buildApiWithProductionSessions } from '../production-bootstrap.ts'
+import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
+import { createOidcPostgresFixture } from './support/oidc-postgres-fixture.ts'
+import { syntheticClientMaterial, syntheticOidcEnv } from './support/synthetic-oidc-issuer.ts'
+
+describe('first-red probe', () => {
+  it('base in-process: OIDC routes do not exist', async () => {
+    const app = buildServer({ identityMode: 'trusted', operatorSessionStore: createInMemoryOperatorSessionStore(), httpSecurity: { allowedOrigins: ['https://console.synthetic.test'] } })
+    const start = await app.inject({ method: 'POST', url: '/v1/auth/oidc/start', headers: { origin: 'https://console.synthetic.test' } })
+    const callback = await app.inject({ method: 'GET', url: '/v1/auth/oidc/callback?code=x&state=y' })
+    console.log('PROBE in-process start', start.statusCode, 'callback', callback.statusCode)
+    expect(start.statusCode).toBe(404)
+    await app.close()
+  })
+  it('base PG: buildApiWithProductionSessions ignores the OIDC configuration and the start route is 404', async () => {
+    const fixture = await createOidcPostgresFixture(process.env.TEST_DATABASE_URL!)
+    const m = syntheticClientMaterial()
+    try {
+      const app = await buildApiWithProductionSessions({ NODE_ENV: 'test', CVG_IDENTITY_MODE: 'trusted', API_ALLOWED_ORIGINS: 'https://console.synthetic.test', ...fixture.env, ...syntheticOidcEnv({ issuer: 'https://idp.synthetic.test', clientSecret: m.clientSecret, pendingCookieKey: m.pendingCookieKey, redirectUri: 'https://api.synthetic.test/v1/auth/oidc/callback', consoleOrigin: 'https://console.synthetic.test' }) })
+      const start = await app.inject({ method: 'POST', url: '/v1/auth/oidc/start', headers: { origin: 'https://console.synthetic.test' } })
+      const cases = await app.inject({ method: 'GET', url: '/v1/cases' })
+      console.log('PROBE PG boot accepted; start', start.statusCode, 'cases (no cookie)', cases.statusCode)
+      await app.close()
+    } finally { await fixture.close() }
+  }, 60000)
+})

@@ -1,0 +1,158 @@
+{
+  "round": "r1",
+  "verdict": "APPROVE",
+  "checkedCommit": "ad9b1aefa545269f39bfffaba34a69888357590d",
+  "base": "693fec0ef",
+  "spec": {
+    "path": "docs/02_spec/0254_oidc_login_case_principals.md",
+    "revision": "r2",
+    "sha256": "3c804dc22c34b736b6d0c6bb5d683b6144a1d7d34dd083d33926d34afef49694",
+    "sha256Verified": true
+  },
+  "reviewer": "Claude Code, contexto novo, independente do executor",
+  "date": "2026-10-22",
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "Ordem dos hooks da §4.7 (token/CSRF antes do hook de sessão) sem prova; mutante C2 sobrevive",
+      "where": "apps/api/src/server.ts:555-571; apps/api/src/__tests__/oidc-login-guards.test.ts:307-334,387-415",
+      "fix": "No O8, usar cookie de formato válido e sessão inexistente (cvg_operator_session=opsess_<43 caracteres>): POST /v1/session/logout sem Origin → 403 'Origin is not allowed'; GET /v1/session com x-cvg-operator-token → 401 'Bootstrap tokens are disabled' sem Set-Cookie"
+    },
+    {
+      "id": "O2",
+      "title": "maxAge: 300 no authorizationCodeGrant é mutante equivalente (C1); o mapeador repete auth_time",
+      "where": "apps/api/src/oidc-authority.ts:219; apps/api/src/oidc-identity.ts:94,99",
+      "fix": "Registrar C1 como equivalente no mutants.json do BUILD; sem mudança de código"
+    },
+    {
+      "id": "O3",
+      "title": "D10 'qualquer valor': falta o caso de x-cvg-operator-token vazio; mutante C3 sobrevive",
+      "where": "apps/api/src/oidc-routes.ts:121; apps/api/src/__tests__/oidc-login-guards.test.ts:392-407",
+      "fix": "Acrescentar x-cvg-operator-token: '' ao it.each do O8"
+    },
+    {
+      "id": "O4",
+      "title": "Checagem de versão no boot por tenant da matriz sem prova multi-tenant; mutante C4 (só o primeiro tenant) sobrevive",
+      "where": "apps/api/src/server.ts:4618-4636; apps/api/src/__tests__/oidc-login-postgres.test.ts:574-653",
+      "fix": "Fixture novo com um único principal no tenant B em oidc-v3-<outro digest>; o boot com a matriz N=3 deve recusar"
+    },
+    {
+      "id": "O5",
+      "title": "Cláusula 'origem ≠ verified_adapter' da linha 7 sem prova; mutante C5 sobrevive",
+      "where": "apps/api/src/case-principal-producer.ts:87; apps/api/src/__tests__/case-principal-producer.test.ts:205-246",
+      "fix": "Caso da linha 7 com synthetic_fixture ativo e authorityVersion = V corrente (Np = N, Dp = D): espera revisão 2 e verified_adapter"
+    },
+    {
+      "id": "O6",
+      "title": "'Antes do parse do corpo' (§4.3, passo 2) sem prova; mutante C6 (preHandler) sobrevive",
+      "where": "apps/api/src/oidc-routes.ts:235; apps/api/src/__tests__/oidc-login-routes.test.ts:432-457",
+      "fix": "No O4, corpo JSON malformado ('{', content-type application/json) sem Origin deve dar 403, não o 400 do parser"
+    },
+    {
+      "id": "O7",
+      "title": "RFC 9207: complete() remonta o callback sem iss; um IdP que anuncie authorization_response_iss_parameter_supported falharia todo login (falha fechada)",
+      "where": "apps/api/src/oidc-authority.ts:208-210",
+      "fix": "Registrar como resíduo da 0254-C; repassar o iss recebido (único) e deixar a biblioteca validar"
+    },
+    {
+      "id": "O8",
+      "title": "Evidência do BUILD a completar e cuidado com o skip-inventory",
+      "where": "docs/04_audit/evidence/UP91-025-OIDC-20261022/build/; certification/skip-inventory.json",
+      "fix": "Versionar o relatório do BUILD com a lista final de testes ajustados, as versões pinadas e a API reconferida, os 7 desvios com estas decisões e C1–C9; não commitar o certification/skip-inventory.json que skip:governance reescreve"
+    },
+    {
+      "id": "O9",
+      "title": "Mensagem enganosa quando operatorLogin diverge da configuração do env",
+      "where": "apps/api/src/server.ts:5410-5424",
+      "fix": "Mensagem própria, por exemplo 'operatorLogin does not match the OIDC configuration'"
+    },
+    {
+      "id": "O10",
+      "title": "'Antes de listen' no O10 provado só por portFree() depois da saída do processo",
+      "where": "apps/api/src/__tests__/oidc-login-entrypoint-postgres.test.ts:405-426",
+      "fix": "Exigir também que idp.calls.discovery não aumente nos casos de configuração inválida"
+    },
+    {
+      "id": "O11",
+      "title": "[::1] aceito no redirect pela configuração e recusado pela transação",
+      "where": "apps/api/src/oidc-config.ts:38; apps/api/src/oidc-login-transaction.ts:247",
+      "fix": "Alinhar as listas; o mais simples é tirar [::1] de LOOPBACK_HOSTS"
+    },
+    {
+      "id": "O12",
+      "title": "Validade do cookie operacional (≤ 15 min e ≤ exp) provada só no O10 (C8)",
+      "where": "apps/api/src/__tests__/oidc-login-routes.test.ts:323-328",
+      "fix": "No O3, exigir Max-Age ≤ 900 no cookie operacional"
+    }
+  ],
+  "deviations": [
+    {
+      "id": "1",
+      "decision": "accepted",
+      "why": "jose 6.2.12 satisfaz o ^6.2.12; o lockfile governa o npm ci e só toca openid-client, jose e oauth4webapi; npm audit --omit=dev não acusa nenhum dos três; openid-client fica fixo em 6.8.8 no package.json. Registrar no relatório do BUILD."
+    },
+    {
+      "id": "2",
+      "decision": "accepted",
+      "why": "O conjunto de nomes visto pela guarda é superconjunto do de parseOperatorSessionCookie (o nome não tem vírgula). O mutante C7 (só ';') morre, porque o inject junta o array com ','. O corte extra só pode exigir Origin a mais, nunca a menos."
+    },
+    {
+      "id": "3",
+      "decision": "accepted",
+      "why": "case-routes.ts:887 chama requireCaseManager('case:registry_read') antes de resolveCaseReadScope, e o arquivo não está no diff, então a base responde igual. Continua falha fechada para as quatro roles."
+    },
+    {
+      "id": "4",
+      "decision": "accepted",
+      "why": "Segue exatamente os passos 2, 3 e 5 da §4.8. A chamada direta de buildServerFromEnv no modo OIDC sem stores recusa antes do pool (O1). Mensagem melhorável (O9)."
+    },
+    {
+      "id": "5",
+      "decision": "accepted",
+      "why": "A §4.7 põe o hook de CSRF depois do hook HTTP, que já recusa Origin nula, http: ou repetida, sem mudança. 403 não é cacheável por heurística. No start, o onSend da rota garante no-store também nessas respostas (O4)."
+    },
+    {
+      "id": "6",
+      "decision": "accepted",
+      "why": "npm audit --omit=dev: low 1, high 0, critical 0 (fastify GHSA-389g-gv7q-r4x8). O lockfile não toca o fastify. O gate da §10 é sem high/critical."
+    },
+    {
+      "id": "7",
+      "decision": "accepted",
+      "why": "O consumo do state mora em readOidcLoginCallback, então os mutantes fiéis à §8 precisam mexer em transação e rotas. Reaplicados: M13 morre por 'expected 2 to be 1' (token no replay) e M24 por 'expected 1 to be +0'."
+    }
+  ],
+  "mutants": {
+    "specReapplied": {
+      "ids": ["M11", "M13", "M19", "M20", "M23", "M24", "M25", "M27", "M28", "M30"],
+      "result": "todos KILLED, arquivos restaurados e sha256 conferido"
+    },
+    "critic": [
+      { "id": "C1", "mutant": "authorizationCodeGrant sem maxAge: 300", "result": "SURVIVED (equivalente)", "optional": "O2" },
+      { "id": "C2", "mutant": "hooks de token/CSRF depois do hook de sessão", "result": "SURVIVED", "optional": "O1" },
+      { "id": "C3", "mutant": "token recusado só com valor não vazio", "result": "SURVIVED", "optional": "O3" },
+      { "id": "C4", "mutant": "checagem de versão no boot só no primeiro tenant", "result": "SURVIVED", "optional": "O4" },
+      { "id": "C5", "mutant": "linha 7 sem a cláusula de origem", "result": "SURVIVED", "optional": "O5" },
+      { "id": "C6", "mutant": "Origin do start em preHandler", "result": "SURVIVED", "optional": "O6" },
+      { "id": "C7", "mutant": "tokenizador do CSRF só por ';'", "result": "KILLED (O8)" },
+      { "id": "C8", "mutant": "sessão com 15 min fixos ignorando exp", "result": "KILLED (O10)" },
+      { "id": "C9", "mutant": "M20 no caminho PG (create no lugar de switchIdentity)", "result": "KILLED (O10)" }
+    ]
+  },
+  "checks": {
+    "typecheck": "exit 0",
+    "lint": "exit 0",
+    "prettierTouched": "OK",
+    "skipGovernance": "PASS (certification/skip-inventory.json reescrito e restaurado para o blob de HEAD 056ffae64ba4)",
+    "docsCheckLinks": "sem erros",
+    "repositoryStructure": "2/2",
+    "npmAuditOmitDev": "low 1 (fastify), high 0, critical 0",
+    "focalNoPg": "10 arquivos, 313/313",
+    "postgresO6O9O10": "7/7 (TEST_DATABASE_URL 127.0.0.1:56270, OIDC0254_PG_REQUIRED=1, O10 na porta 3456)",
+    "postgresRegression": "postgres-persistence-mode, case-assignment-authorization-postgres, case-scope-tasks-approvals-postgres, production-bootstrap-postgres-own: 96/96",
+    "suitesApiPersistence": "116 arquivos verdes e 17 pulados; 969 testes verdes e 185 pulados",
+    "notRun": ["E2E critical-flows/rem21-014", "certify", "sbom", "licenses:check", "test:core --coverage", "coverage:critical", "mutation:guard"]
+  },
+  "writeSet": "exatamente o §6 da SPEC (31 arquivos); nada em migrations, apps/web, apps/worker, deploy, products, legacy, main.ts, ledgers, cartões ou coordenação; lockfile só openid-client, jose e oauth4webapi"
+}
