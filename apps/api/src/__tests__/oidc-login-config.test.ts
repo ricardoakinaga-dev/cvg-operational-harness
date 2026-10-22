@@ -9,6 +9,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { parseOperatorLoginConfig } from '../oidc-config.ts'
 import { buildApiWithProductionSessions } from '../production-bootstrap.ts'
 import { buildServerFromEnv } from '../server.ts'
 import {
@@ -332,6 +333,14 @@ const cases: Case[] = [
     /CVG_OIDC_REDIRECT_URI/
   ],
   [
+    'redirect http: on [::1] (the login transaction accepts only 127.0.0.1 and localhost)',
+    {
+      ...validEnv,
+      CVG_OIDC_REDIRECT_URI: 'http://[::1]/v1/auth/oidc/callback'
+    },
+    /CVG_OIDC_REDIRECT_URI/
+  ],
+  [
     'redirect relative',
     { ...validEnv, CVG_OIDC_REDIRECT_URI: '/v1/auth/oidc/callback' },
     /CVG_OIDC_REDIRECT_URI/
@@ -649,6 +658,8 @@ describe('SPEC0254 O1 — OIDC login configuration refuses the boot without I/O'
   })
 
   it('refuses an injected OIDC login that does not match the configuration', async () => {
+    const current = parseOperatorLoginConfig(validEnv)!
+    // Each variation changes exactly one field of a matching composition.
     for (const patch of [
       { authorityVersion: 'oidc-v1-'.padEnd(72, '0') },
       { consoleOrigin: 'https://other.synthetic.test' }
@@ -658,8 +669,8 @@ describe('SPEC0254 O1 — OIDC login configuration refuses the boot without I/O'
           operatorSessionStore: {} as never,
           operatorLogin: {
             kind: 'oidc',
-            authorityVersion: 'oidc-v1-'.padEnd(72, '0'),
-            consoleOrigin: CONSOLE,
+            authorityVersion: current.authorityVersion,
+            consoleOrigin: current.consoleOrigin,
             authority: {} as never,
             stateStore: {} as never,
             ...patch
