@@ -1,0 +1,69 @@
+#!/usr/sbin/nft -f
+# 0393 — firewall do host do servidor do hospital (exemplo; preencher os
+# define com os endereços reais antes de aplicar). Endereços abaixo são de
+# documentação (RFC 5737), nunca reais.
+# Derivado de deploy/harness/compose.production.yaml + compose.onprem.yaml:
+#   entrada: só 80/443 do proxy (CVG_HARNESS_PUBLIC_BIND) e SSH de admin;
+#   PostgreSQL, Vault, alert-relay e API sem porta publicada;
+#   saída de contêiner: só alert-relay (Telegram, 443) e tunnel (Cloudflare);
+#   saída do host: DNS, NTP, NFS do TrueNAS e HTTPS (GHCR, Docker Hub,
+#   repositórios do SO, Docker e HashiCorp).
+
+define server_lan   = 192.0.2.5           # = CVG_HARNESS_PUBLIC_BIND
+define console_nets = { 192.0.2.0/24, 198.51.100.0/24 }  # VLAN interna e VPN
+define admin_nets   = { 192.0.2.10 }      # estações que administram por SSH
+define dns_servers  = { 192.0.2.1 }
+define ntp_servers  = { 192.0.2.1 }
+define truenas      = 192.0.2.20
+define harness_net  = 172.31.250.0/24     # = CVG_HARNESS_NET_SUBNET
+define tunnel_ports = { 7844 }            # cloudflared: conferir na documentação da Cloudflare
+
+# Recarregável sem 'flush ruleset' (que apagaria as regras do Docker):
+# cria a tabela se faltar, apaga só ela e a recria.
+table inet cvg_host
+delete table inet cvg_host
+
+table inet cvg_host {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif "lo" accept
+    ct state established,related counter accept
+    ct state invalid counter drop
+    ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded } counter accept
+    ip saddr $admin_nets tcp dport 22 counter accept
+    counter drop
+  }
+
+  # 80/443 publicados pelo Docker sofrem DNAT em prerouting (prioridade -100);
+  # este filtro roda antes e aceita só a VLAN interna e a VPN (decisão C5).
+  chain published_guard {
+    type filter hook prerouting priority -150; policy accept;
+    ip daddr $server_lan tcp dport { 80, 443 } ip saddr != $console_nets counter drop
+  }
+
+  # Saída dos contêineres da rede do núcleo (antes das regras do Docker).
+  chain container_egress {
+    type filter hook forward priority -10; policy accept;
+    ct state established,related counter accept
+    ip saddr $harness_net ip daddr $harness_net counter accept
+    # Como na prova de egress do produto: nada de redes internas, metadados
+    # de nuvem ou IPv6 a partir dos contêineres.
+    ip saddr $harness_net ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16 } counter drop
+    ip saddr $harness_net tcp dport 443 counter accept
+    ip saddr $harness_net meta l4proto { tcp, udp } th dport $tunnel_ports counter accept
+    ip saddr $harness_net counter drop
+    meta nfproto ipv6 counter drop
+  }
+
+  chain output {
+    type filter hook output priority 0; policy drop;
+    oif "lo" accept
+    ct state established,related counter accept
+    ip daddr $harness_net counter accept
+    ip daddr $dns_servers meta l4proto { tcp, udp } th dport 53 counter accept
+    ip daddr $ntp_servers udp dport 123 counter accept
+    ip daddr $truenas tcp dport 2049 counter accept
+    tcp dport { 80, 443 } counter accept
+    counter drop
+  }
+}

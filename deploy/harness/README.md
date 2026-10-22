@@ -30,7 +30,7 @@
 
 O usuário escolheu o servidor do próprio hospital em vez da VM em nuvem
 descrita na seção seguinte, que fica como alternativa documentada. Subir sempre
-com os dois arquivos:
+com os dois arquivos, dentro da janela de `GRANT`/`REVOKE` de C3:
 
 ```bash
 docker compose -f deploy/harness/compose.production.yaml \
@@ -163,7 +163,14 @@ Saída esperada: `migrate` em `Exited (0)` com
 `{"event":"migration.operator_auth_applied",...}`; `api`, `worker` e `proxy`
 `(healthy)`; a execução de recusa termina com `exit=1` e
 `{"event":"api.startup_failed","code":"startup_failed","message":"Production serving must not receive DATABASE_MIGRATION_URL"}`.
-Um `up -d` fora da janela falha fechado no `migrate` e não recria a API.
+Fora da janela, `hc start <serviço>` e `hc up -d <serviço>` rodam o `migrate`
+de novo (`api` e `worker` dependem dele com `service_completed_successfully`),
+que falha com `permission denied for database cvg`: sem mudança de
+configuração a API que já roda continua, mas uma API recriada (configuração
+alterada ou `--force-recreate`) fica parada em `Created`
+([registro](../../docs/04_audit/evidence/HOSPITAL-SERVER-0393-20261021/raw/single-service-up.txt)).
+Para mexer num serviço só, use `hc up -d --no-deps <serviço>` e, depois de
+recriar a `api`, `hc restart proxy` (o nginx só resolve a `api` ao iniciar).
 Q3 do `verify-roles.sql` confirma os donos dos schemas.
 
 **Aceite 0374:** API recusa `DATABASE_MIGRATION_URL`; catálogo confirma o dono
@@ -265,11 +272,15 @@ relatório do ensaio, que não tem segredo nem dado pessoal, para
 hc logs api | grep -c stop_alert.disabled     # esperado: 0
 hc stop worker
 # aguardar CVG_STOP_ALERT_WORKER_STALE_MS + CVG_STOP_ALERT_INTERVAL_MS (padrão 150 s)
-hc start worker
+hc up -d --no-deps worker                     # não "hc start worker" (ver abaixo)
 # pausa/retomada (0802) com o script do checkout montado na imagem:
 hc run --rm --no-deps -v /opt/cvg-harness/scripts/ops-kernel-pause.mjs:/app/scripts/ops-kernel-pause.mjs:ro \
   api node scripts/ops-kernel-pause.mjs --tenant <tenant_id> --status
 ```
+
+O worker volta com `hc up -d --no-deps worker` porque, fora da janela de C3,
+`hc start worker` roda o `migrate` de novo, que falha, e o worker fica em
+`Exited` ([registro](../../docs/04_audit/evidence/HOSPITAL-SERVER-0393-20261021/raw/single-service-up.txt)).
 
 Saída esperada: o receptor real recebe `worker_down` `firing` e depois
 `resolved`, com `x-cvg-alert-signature` válida (HMAC-SHA256 de
