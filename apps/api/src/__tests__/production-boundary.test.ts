@@ -46,9 +46,12 @@ describe('production boundary authentication', () => {
         'tenant_00000000-0000-4000-8000-000000000061',
       operatorSessionStore: createInMemoryOperatorSessionStore()
     })
+    // SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503
+    // without a trusted principal authority; the trusted-resolver probe uses
+    // a protected route without case scope permitted to the Supervisor.
     const tasks = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: '/v1/observability/audit-evidence',
       headers: { 'x-operator-role': 'forged' }
     })
     const health = await app.inject({ method: 'GET', url: '/health' })

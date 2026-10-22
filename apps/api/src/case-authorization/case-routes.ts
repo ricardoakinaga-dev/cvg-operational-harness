@@ -1,6 +1,8 @@
 /**
  * SPEC0176 — case-scoped readers, case registry routes and the execution
- * projection used by mutation responses.
+ * projection used by mutation responses. SPEC0251 adds the case
+ * precondition of task and approval mutations (`authorizeCaseMutation`) and
+ * the error branch those routes put ahead of their mapping.
  *
  * Every reader resolves the trusted identity first (401/403 as before), then
  * runs ONE case read unit: principal currency, object relationship, grant and
@@ -248,6 +250,22 @@ export function toSafeCaseError(error: unknown): SafeCaseError {
   }
 }
 
+/**
+ * SPEC0251 I7 — the case branch placed ahead of a route's existing error
+ * mapping, never replacing it: a `CaseAuthorityError` becomes its safe case
+ * error (404 for a case not found, 503 for an unavailable authority), so a
+ * case failure never leaves as 500; anything else keeps the mapping the
+ * route already had.
+ */
+export function mapCaseMutationError(
+  error: unknown,
+  existing: (error: unknown) => SafeCaseError
+): SafeCaseError {
+  return error instanceof CaseAuthorityError
+    ? toSafeCaseError(error)
+    : existing(error)
+}
+
 export interface CaseRouteDependencies {
   readonly caseAuthority: CaseAuthorityPort
   readonly principalPolicy: CasePrincipalPolicy
@@ -368,6 +386,53 @@ export async function readExecutionForCaller(
     )
     if (!record) throw notFound()
     return record
+  })
+}
+
+/** SPEC0251 §4.2 — the resource whose case a mutation must authorize. */
+export type CaseMutationTarget =
+  | { readonly kind: 'task'; readonly taskId: string }
+  | { readonly kind: 'approval_request'; readonly approvalRequestId: string }
+  | { readonly kind: 'core_session'; readonly sessionId: string }
+  | { readonly kind: 'execution'; readonly executionId: string }
+
+/**
+ * SPEC0251 §4.2 — precondition of the task and approval mutations, run in
+ * one case read unit after identity, tenant and body validation and before
+ * any write. Operator/Approver need an ACTIVE grant on the target's case;
+ * Supervisor/Admin act on the active tenant. A missing target, another
+ * tenant, a session without a case root and a missing grant share the
+ * static 404. The grant is a precondition, never a role permission: the
+ * route checks the role first. Nothing from the unit is reused by the
+ * write except this decision.
+ */
+export async function authorizeCaseMutation(
+  deps: CaseRouteDependencies,
+  identity: OperatorIdentity,
+  tenantId: TenantId,
+  target: CaseMutationTarget
+): Promise<void> {
+  if (target.kind === 'execution') {
+    // Same algorithm as the execution reader: link + grant in the assigned
+    // scope, existence through the execution store for every role.
+    await readExecutionForCaller(deps, identity, tenantId, target.executionId)
+    return
+  }
+  await deps.caseAuthority.readSnapshot(tenantId, async (snapshot) => {
+    const scope = await resolveCaseReadScope(
+      snapshot,
+      identity,
+      deps.principalPolicy
+    )
+    const located =
+      target.kind === 'task'
+        ? await snapshot.taskCase(target.taskId)
+        : target.kind === 'approval_request'
+          ? await snapshot.approvalRequestCase(target.approvalRequestId)
+          : await snapshot.coreSessionCase(target.sessionId)
+    if (!located || !(await canReadCase(snapshot, scope, located.caseId))) {
+      throw new CaseAuthorityError('case_not_found', CASE_NOT_FOUND_MESSAGE)
+    }
   })
 }
 

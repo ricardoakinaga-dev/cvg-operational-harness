@@ -1,0 +1,103 @@
+{
+  "verdict": "APPROVE",
+  "specSha256": "ef409b124e505310083bffa060e11b248905973ea8b7480989f77e1eb0c2d50e",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "revision": "r4",
+  "base": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "reviewer": "independent critic (fresh context), round 4, 2026-10-21",
+  "method": "leitura e grep; sem servidor, PostgreSQL ou testes",
+  "r3MandatoryStatus": {
+    "R3-M1": {
+      "status": "RESOLVED",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:118",
+        "packages/persistence/src/case-authority.ts:284,984-1020",
+        "packages/persistence/src/case-authority-postgres.ts:423-428,1241-1281",
+        "packages/persistence/src/case-root-sql.ts:26-48",
+        "apps/api/src/__tests__/task-approval-postgres.test.ts:77-81,118-143",
+        "packages/persistence/src/tenant-schema.ts:79"
+      ],
+      "note": "O ajuste (a) manda criar o root antes do grant quando a conversa/sessao foi semeada direto no banco, por backfillCoreRoots ou ensureCoreConversationRootInTransaction; os dois existem, sao exportados e a role de runtime do teste tem INSERT em case_roots. Faltou a dica de provision:false (R4-O3), que o BUILD descobre pela fixture."
+    },
+    "R3-M2": {
+      "status": "RESOLVED",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:130,137",
+        "packages/shared/src/auth.ts:4-46",
+        "packages/persistence/src/repositories/approval-repository.ts:63",
+        "packages/persistence/src/case-authority.ts:588-594,651-659"
+      ],
+      "note": "A linha do Supervisor no tenant B ficou restrita a decisao e criacao de approval (rotas de task dao 403 antes); o teste direto do snapshot mata o mutante de tenant em memoria. Ressalva PostgreSQL sob RLS em R4-O5."
+    }
+  },
+  "r3OptionalStatus": {
+    "reflected": ["R3-O1", "R3-O2", "R3-O3", "R3-O4", "R3-O5", "R3-O6", "R3-O7", "R3-O8"],
+    "caveats": [
+      "R3-O2 aplicado a S6 inteira: a criacao de approval pelo Supervisor nao se cumpre a letra em 0000-0028 com o cliente legado (R4-O1).",
+      "R3-O3 parcial: S5/S6 ainda dizem 200 para a decisao de runtime approval (202 em APPROVED) (R4-O2).",
+      "R3-O5: decidido onde fica o SQL, mas sem prova de paridade do DTO (R4-O7)."
+    ]
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "R4-O1",
+      "point": "S6: o 'legado ate 0028' nao serve para POST /v1/approvals do Supervisor; o PostgresRuntimeRepository sem tenantIsolation grava approval_requests/tasks/sessions sem tenant_id e o CHECK *_tenant_id_not_null (NOT VALID, aplicado a linhas novas) de 0001 rejeita (500 anterior a SPEC). Dizer: criacao no esquema 0000; listas, decisao e runtime approval em 0000-0028; semente por SQL com tenant_id.",
+      "evidence": [
+        "apps/api/src/server.ts:4902",
+        "packages/persistence/src/postgres.ts:252,924,1260",
+        "packages/persistence/src/postgres-inbound.ts:277",
+        "packages/persistence/migrations/0001_tenant_isolation.sql:699-712",
+        "packages/persistence/src/postgres-audit.ts:120",
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:133"
+      ]
+    },
+    {
+      "id": "R4-O2",
+      "point": "S5/S6: escrever 2xx (202 para APPROVED, 200 para REJECTED) na decisao de runtime approval.",
+      "evidence": ["apps/api/src/server.ts:1378", "docs/02_spec/0251_case_scope_tasks_approvals.md:132-133"]
+    },
+    {
+      "id": "R4-O3",
+      "point": "Ajuste (a) em task-approval-postgres: provision:false a partir do segundo grant do mesmo operador no mesmo tenant (P2/P4 compartilham operator.aud0621.pg; grantCase provisiona com expectedRevision 0 e daria principal_conflict); seedSession devolve tambem conversationId; preferir ensureCoreConversationRootInTransaction na semente (backfill pega ate 100 por id).",
+      "evidence": [
+        "apps/api/src/__tests__/case-authorization-fixtures.ts:89-121",
+        "packages/persistence/src/case-authority.ts:526-534",
+        "apps/api/src/__tests__/task-approval-postgres.test.ts:37-43,118-143,206-330"
+      ]
+    },
+    {
+      "id": "R4-O4",
+      "point": "§6: acrescentar as quatro situacoes 'leitura de GET /v1/tasks|approvals por Operator/Approver sem vinculo ou no legado'; nenhum teste atual cai nela, mas a regra fechada fica completa (ajustes a e d ja servem).",
+      "evidence": ["docs/02_spec/0251_case_scope_tasks_approvals.md:118"]
+    },
+    {
+      "id": "R4-O5",
+      "point": "Mutante de tenant so no SQL PostgreSQL fica equivalente sob RLS (role NOBYPASSRLS, tenant local no snapshot); rodar a metade PostgreSQL do teste direto do snapshot tambem em conexao que ignora RLS ou no cliente legado, e cita-la na S5 (S3 e memoria).",
+      "evidence": [
+        "packages/persistence/migrations/0001_tenant_isolation.sql:859-860,878-931",
+        "packages/persistence/src/case-authority-postgres.ts:497-500",
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:130,137"
+      ]
+    },
+    {
+      "id": "R4-O6",
+      "point": "I7: 'todas as respostas das oito rotas' inclui respostas fora do handler (onRequest 414/404, hook de seguranca 403, error handler 400/413/415) sem no-store; restringir a 'toda resposta produzida pelo handler' ou prever onSend por rota.",
+      "evidence": ["apps/api/src/server.ts:500-506,522-529", "docs/02_spec/0251_case_scope_tasks_approvals.md:39,134"]
+    },
+    {
+      "id": "R4-O7",
+      "point": "S2: comparar os itens do escopo tenant com PostgresRuntimeRepository.listTaskPage/listApprovalPage (mapTask/mapApproval privados sao duplicados em case-authority-postgres.ts).",
+      "evidence": ["packages/persistence/src/postgres.ts:1584-1630", "docs/02_spec/0251_case_scope_tasks_approvals.md:38,55,129"]
+    },
+    {
+      "id": "R4-O8",
+      "point": "§4.4/§6: citar apps/web/src/features/tasks/index.tsx e renderizar a mensagem condicionalmente, como approvals.",
+      "evidence": ["apps/web/src/features/tasks/index.tsx:30-45", "apps/web/src/features/approvals/index.tsx:67"]
+    }
+  ],
+  "newPremise": {
+    "answer": "no",
+    "reason": "A r4 so altera regras de prova e de ajuste de teste (root na semente, linha do Supervisor restrita a approval, teste direto do snapshot), sem efeito de produto. Runtime approval como 'decidir approval', 400->404, 503 em trusted ate a UP91-025 e ausencia de autoatribuicao em execucao independente seguem das decisoes de 21/10 e da SPEC0176 ('mesma regra'). Nenhuma migracao: tabelas, indices e grants existentes bastam."
+  }
+}

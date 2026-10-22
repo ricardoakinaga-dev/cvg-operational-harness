@@ -8,9 +8,12 @@
  */
 import { randomUUID } from 'node:crypto'
 import {
+  ApprovalStatusSchema,
   DomainError,
+  TaskStatusSchema,
   redactSensitiveText,
-  sanitizeAuditEvidencePayload
+  sanitizeAuditEvidencePayload,
+  type TaskPriority
 } from '@cvg/shared'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
@@ -38,17 +41,30 @@ import {
   type CaseRootRecord,
   type CoreParentClassification,
   type CoreParentPlan,
+  type SessionCaseLookup,
   type VerifiedPrincipalStateInput
 } from './case-authority.ts'
+import type {
+  ApprovalListQuery,
+  ApprovalPage
+} from './repositories/approval-repository.ts'
+import {
+  assertStatusPageQuery,
+  pageInfoFor,
+  type TaskListQuery,
+  type TaskPage
+} from './repositories/task-repository.ts'
 import {
   PostgresRuntimeRepository,
   type PostgresQueryable
 } from './postgres.ts'
 import type {
+  ApprovalRequestRecord,
   AuditEventRecord,
   ConversationListItem,
   ConversationPage,
-  PaginationInput
+  PaginationInput,
+  TaskRecord
 } from './schema.ts'
 import {
   CVG_TENANT_CONTEXT_SETTING,
@@ -107,6 +123,140 @@ interface AuditRow {
   policy_version: string
   payload: unknown
   created_at: Date
+}
+
+/**
+ * SPEC0251 §4.1 — case of a task or approval request. The tenant is the one
+ * of the session's conversation (`conversations.tenant_id`), so the same
+ * statement serves the legacy schema, whose tasks and sessions have no
+ * tenant column; RLS is never the only filter.
+ */
+const RESOURCE_CASE_SQL = {
+  tasks: `SELECT t.session_id, r.case_id
+            FROM tasks t
+            JOIN sessions s ON s.id = t.session_id
+            JOIN conversations c ON c.id = s.conversation_id
+            LEFT JOIN case_roots r
+              ON r.tenant_id = c.tenant_id AND r.core_conversation_id = c.id
+           WHERE c.tenant_id = $1 AND t.id = $2`,
+  approval_requests: `SELECT t.session_id, r.case_id
+            FROM approval_requests t
+            JOIN sessions s ON s.id = t.session_id
+            JOIN conversations c ON c.id = s.conversation_id
+            LEFT JOIN case_roots r
+              ON r.tenant_id = c.tenant_id AND r.core_conversation_id = c.id
+           WHERE c.tenant_id = $1 AND t.id = $2`
+} as const
+
+/** Legacy schema without 0029: existence in the tenant only, no case. */
+const LEGACY_RESOURCE_CASE_SQL = {
+  tasks: `SELECT t.session_id, NULL::text AS case_id
+            FROM tasks t
+            JOIN sessions s ON s.id = t.session_id
+            JOIN conversations c ON c.id = s.conversation_id
+           WHERE c.tenant_id = $1 AND t.id = $2`,
+  approval_requests: `SELECT t.session_id, NULL::text AS case_id
+            FROM approval_requests t
+            JOIN sessions s ON s.id = t.session_id
+            JOIN conversations c ON c.id = s.conversation_id
+           WHERE c.tenant_id = $1 AND t.id = $2`
+} as const
+
+/**
+ * SPEC0251 §4.1 — visibility of a task/approval row for the `assigned`
+ * scope: the predicate of `listConversations`, bound through the row's
+ * session conversation.
+ */
+function assignedSessionVisibility(operatorPlaceholder: string): string {
+  return `EXISTS (
+    SELECT 1 FROM case_roots r
+      JOIN case_assignments a
+        ON a.tenant_id = r.tenant_id AND a.case_id = r.case_id
+     WHERE r.tenant_id = conversations.tenant_id
+       AND r.core_conversation_id = sessions.conversation_id
+       AND a.operator_id = ${operatorPlaceholder} AND a.status = 'ACTIVE')`
+}
+
+interface TaskRow {
+  total: number
+  id: string | null
+  session_id: string
+  title: string
+  description: string
+  priority: TaskPriority
+  source: string
+  status: TaskRecord['status']
+  idempotency_key: string
+  created_at: Date
+}
+
+interface ApprovalRow {
+  total: number
+  id: string | null
+  session_id: string
+  proposed_action: string
+  summary: string
+  risk_level: ApprovalRequestRecord['riskLevel']
+  status: ApprovalRequestRecord['status']
+  decided_by: string | null
+  decided_at: Date | null
+  created_at: Date
+}
+
+/** Same DTO as `PostgresRuntimeRepository.mapTask` (SPEC0251 I6). */
+function mapTaskRow(row: TaskRow & { id: string }): TaskRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    title: row.title,
+    description: row.description,
+    priority: row.priority,
+    source: row.source,
+    status: row.status,
+    idempotencyKey: row.idempotency_key,
+    createdAt: row.created_at
+  }
+}
+
+/** Same DTO as `PostgresRuntimeRepository.mapApproval` (SPEC0251 I6). */
+function mapApprovalRow(
+  row: ApprovalRow & { id: string }
+): ApprovalRequestRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    proposedAction: row.proposed_action,
+    summary: row.summary,
+    riskLevel: row.risk_level,
+    status: row.status,
+    decidedBy: row.decided_by,
+    decidedAt: row.decided_at,
+    createdAt: row.created_at
+  }
+}
+
+/**
+ * SPEC0251 §4.1 — WHERE of the task/approval page: tenant of the session's
+ * conversation, optional status filter and, for the `assigned` scope, the
+ * grant predicate. Values start at $3 ($1/$2 are LIMIT/OFFSET).
+ */
+function statusPageWhere(
+  table: 'tasks' | 'approval_requests',
+  tenantId: TenantId,
+  scope: CaseListScope,
+  statuses: readonly string[] | undefined
+): { where: string; values: unknown[] } {
+  const values: unknown[] = [tenantId]
+  const conditions = [`conversations.tenant_id = $3`]
+  if (statuses) {
+    values.push([...statuses])
+    conditions.push(`${table}.status = ANY($${values.length + 2}::text[])`)
+  }
+  if (scope.kind === 'assigned') {
+    values.push(scope.operatorId)
+    conditions.push(assignedSessionVisibility(`$${values.length + 2}`))
+  }
+  return { where: `WHERE ${conditions.join(' AND ')}`, values }
 }
 
 const ROOT_COLUMNS = `r.case_id, r.kind,
@@ -772,6 +922,25 @@ export class PostgresCaseAuthority implements CaseAuthorityPort {
           const row = result.rows[0]
           return row ? { caseId: row.case_id } : null
         }),
+      taskCase: (taskId) =>
+        plain(() => this.resourceCase(client, tenantId, 'tasks', taskId)),
+      approvalRequestCase: (approvalRequestId) =>
+        plain(() =>
+          this.resourceCase(
+            client,
+            tenantId,
+            'approval_requests',
+            approvalRequestId
+          )
+        ),
+      listTasks: (scope, query) =>
+        scope.kind === 'tenant'
+          ? plain(() => this.listTaskPage(client, tenantId, scope, query))
+          : scoped(() => this.listTaskPage(client, tenantId, scope, query)),
+      listApprovalRequests: (scope, query) =>
+        scope.kind === 'tenant'
+          ? plain(() => this.listApprovalPage(client, tenantId, scope, query))
+          : scoped(() => this.listApprovalPage(client, tenantId, scope, query)),
       hasActiveGrant: (caseId, operatorId) =>
         scoped(async () => {
           const result = await client.query(
@@ -798,6 +967,130 @@ export class PostgresCaseAuthority implements CaseAuthorityPort {
         scoped(() =>
           this.listAssignments(client, tenantId, assertRegistryQuery(rawQuery))
         )
+    }
+  }
+
+  private async resourceCase(
+    client: PostgresQueryable,
+    tenantId: TenantId,
+    table: 'tasks' | 'approval_requests',
+    id: string
+  ): Promise<SessionCaseLookup | null> {
+    const sql = (await this.hasCaseTables(client))
+      ? RESOURCE_CASE_SQL[table]
+      : LEGACY_RESOURCE_CASE_SQL[table]
+    const result = await client.query<{
+      session_id: string
+      case_id: string | null
+    }>(sql, [tenantId, id])
+    if (result.rows.length > 1) {
+      throw new CaseAuthorityError(
+        'case_integrity',
+        'Resource lineage is ambiguous'
+      )
+    }
+    const row = result.rows[0]
+    return row ? { caseId: row.case_id, sessionId: row.session_id } : null
+  }
+
+  /**
+   * SPEC0251 §4.1 — the SPEC0250 single statement (COUNT + LATERAL page),
+   * so `total` and the page share one snapshot even on the legacy single
+   * connection; the case predicate filters before COUNT, OFFSET and LIMIT.
+   */
+  private async listTaskPage(
+    client: PostgresQueryable,
+    tenantId: TenantId,
+    scope: CaseListScope,
+    query: TaskListQuery
+  ): Promise<TaskPage> {
+    const { limit, offset, statuses } = assertStatusPageQuery(
+      query,
+      TaskStatusSchema.options
+    )
+    const { where, values } = statusPageWhere(
+      'tasks',
+      tenantId,
+      scope,
+      statuses
+    )
+    const from = `FROM tasks
+         INNER JOIN sessions ON sessions.id = tasks.session_id
+         INNER JOIN conversations ON conversations.id = sessions.conversation_id
+         ${where}`
+    const result = await client.query<TaskRow>(
+      `SELECT counted.total, page.id, page.session_id, page.title, page.description,
+              page.priority, page.source, page.status, page.idempotency_key, page.created_at
+       FROM (
+         SELECT COUNT(*)::integer AS total
+         ${from}
+       ) counted
+       LEFT JOIN LATERAL (
+         SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority,
+                tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at
+         ${from}
+         ORDER BY tasks.created_at ASC, tasks.id ASC
+         LIMIT $1 OFFSET $2
+       ) page ON true
+       ORDER BY page.created_at ASC, page.id ASC`,
+      [limit, offset, ...values]
+    )
+    const items = result.rows
+      .filter((row): row is TaskRow & { id: string } => row.id !== null)
+      .map(mapTaskRow)
+    const total = result.rows[0]?.total ?? 0
+    return {
+      items,
+      pageInfo: pageInfoFor({ limit, offset }, items.length, total)
+    }
+  }
+
+  /** SPEC0251 §4.1 — same single statement as `listTaskPage`. */
+  private async listApprovalPage(
+    client: PostgresQueryable,
+    tenantId: TenantId,
+    scope: CaseListScope,
+    query: ApprovalListQuery
+  ): Promise<ApprovalPage> {
+    const { limit, offset, statuses } = assertStatusPageQuery(
+      query,
+      ApprovalStatusSchema.options
+    )
+    const { where, values } = statusPageWhere(
+      'approval_requests',
+      tenantId,
+      scope,
+      statuses
+    )
+    const from = `FROM approval_requests
+         INNER JOIN sessions ON sessions.id = approval_requests.session_id
+         INNER JOIN conversations ON conversations.id = sessions.conversation_id
+         ${where}`
+    const result = await client.query<ApprovalRow>(
+      `SELECT counted.total, page.id, page.session_id, page.proposed_action, page.summary,
+              page.risk_level, page.status, page.decided_by, page.decided_at, page.created_at
+       FROM (
+         SELECT COUNT(*)::integer AS total
+         ${from}
+       ) counted
+       LEFT JOIN LATERAL (
+         SELECT approval_requests.id, approval_requests.session_id, approval_requests.proposed_action,
+                approval_requests.summary, approval_requests.risk_level, approval_requests.status,
+                approval_requests.decided_by, approval_requests.decided_at, approval_requests.created_at
+         ${from}
+         ORDER BY approval_requests.created_at ASC, approval_requests.id ASC
+         LIMIT $1 OFFSET $2
+       ) page ON true
+       ORDER BY page.created_at ASC, page.id ASC`,
+      [limit, offset, ...values]
+    )
+    const items = result.rows
+      .filter((row): row is ApprovalRow & { id: string } => row.id !== null)
+      .map(mapApprovalRow)
+    const total = result.rows[0]?.total ?? 0
+    return {
+      items,
+      pageInfo: pageInfoFor({ limit, offset }, items.length, total)
     }
   }
 

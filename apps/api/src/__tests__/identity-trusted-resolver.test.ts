@@ -108,14 +108,17 @@ describe('trusted identity mode', () => {
       },
       operatorSessionStore: createInMemoryOperatorSessionStore()
     })
+    // SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503
+    // in trusted mode without a principal authority; the identity probe uses
+    // a protected route without case scope permitted to the Supervisor.
     const denied = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: '/v1/observability/audit-evidence',
       headers: simulationHeaders
     })
     const allowed = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: '/v1/observability/audit-evidence',
       headers: {
         'x-cvg-operator-token': 'trusted-synthetic-token',
         'x-operator-id': 'attacker.simulation',

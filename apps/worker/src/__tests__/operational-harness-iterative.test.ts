@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { RuntimeInput } from '@cvg/harness-contracts'
 import { buildServer } from '../../../api/src/server.ts'
+import { grantCase } from '../../../api/src/__tests__/case-authorization-fixtures.ts'
 import { createOperationalHarnessWorker } from '../operational-harness-worker.ts'
 import {
   PHASE3_TOOL_AVAILABILITY,
@@ -251,6 +252,15 @@ describe('P3-WORKER — iterative governed loop through the durable spine', () =
       expect(observed).toHaveLength(0)
 
       const approvalId = paused.record.approvalId as string
+      // SPEC0251 (§6 adjustment a): the Approver decides a runtime approval
+      // only on an assigned case; the submission created the independent root.
+      await grantCase(app, {
+        kind: 'independent_execution',
+        resourceId: executionId,
+        operatorId: 'approver.phase3',
+        role: 'Approver',
+        tenantId: tenantId as never
+      })
       const decision = await app.inject({
         method: 'POST',
         url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,

@@ -1,0 +1,118 @@
+{
+  "task": "UP91-018-CASE-SCOPE-20261021",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "specSha256": "ef409b124e505310083bffa060e11b248905973ea8b7480989f77e1eb0c2d50e",
+  "base": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "productionCodeChanged": false,
+  "at": "2026-10-21",
+  "node": "v22.23.2",
+  "postgres": "docker postgres:16, container cvg-d9ef-casescope-pg, 127.0.0.1:56270 (descartável)",
+  "testFilesAtFirstRed": {
+    "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts": "a6a3b621a4ac9b49e24110b409aa8d6582c211b04be59ea5ed08db00c699c211",
+    "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts": "1bdd2661c6c4ef5c5bad8ae1a06879fe6d2d6bbff836819e20ebc11e7df25ee4",
+    "apps/web/src/__tests__/case-scope-unavailable-item.test.tsx": "f37ef486b8771ea17bb605b43a49caefb9e21f4a85611d2af2c529f1df9ef7b5"
+  },
+  "commands": [
+    "env -i HOME=$HOME PATH=<node22>:/usr/bin:/bin NODE_ENV=test npx vitest run apps/api/src/__tests__/case-scope-tasks-approvals.test.ts apps/web/src/__tests__/case-scope-unavailable-item.test.tsx --reporter=verbose",
+    "env -i HOME=$HOME PATH=<node22>:/usr/bin:/bin NODE_ENV=test TEST_DATABASE_URL=postgres://postgres:***@127.0.0.1:56270/cvg_casescope CASE0251_PG_REQUIRED=1 npx vitest run --testTimeout=60000 apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts --reporter=verbose"
+  ],
+  "logs": [
+    "logs/first-red-memory-web.log",
+    "logs/first-red-postgres.log"
+  ],
+  "summary": {
+    "memoryAndWeb": "14 failed / 14",
+    "postgres": "5 failed / 5"
+  },
+  "results": [
+    {
+      "proof": "S1",
+      "test": "case-scope-tasks-approvals.test.ts › S1 filters before COUNT/offset/limit …",
+      "expectedFirstRed": "OperatorA recebe 65",
+      "observed": "pageInfo de OperatorA em /v1/tasks?limit=7: total 65 (esperado 30)",
+      "asExpected": true
+    },
+    {
+      "proof": "S2",
+      "test": "case-scope-tasks-approvals-postgres.test.ts › S2 lists filter in one statement …",
+      "expectedFirstRed": "idem (OperatorA recebe 65)",
+      "observed": "pageInfo de OperatorA: total 65 (esperado 30) sob role NOSUPERUSER NOBYPASSRLS",
+      "asExpected": true
+    },
+    {
+      "proof": "S3",
+      "test": "case-scope-tasks-approvals.test.ts › S3 PATCH / POST /v1/tasks / POST /v1/journeys/tasks / POST /v1/approvals / decision",
+      "expectedFirstRed": "200 e efeito persistido",
+      "observed": "OperatorB/ApproverB sem vínculo recebem 200 (expected 200 to be 404) nas cinco rotas; a ausência (sessão/tarefa/approval inexistente) ainda responde 400 invalid_action",
+      "asExpected": true
+    },
+    {
+      "proof": "S3 (snapshot direto)",
+      "test": "case-scope-tasks-approvals.test.ts › S3 resolves task and approval cases only inside the snapshot tenant; case-scope-tasks-approvals-postgres.test.ts › S3/S5 snapshot lookups …",
+      "expectedFirstRed": "métodos taskCase/approvalRequestCase inexistentes",
+      "observed": "memória: TypeError snapshot.taskCase is not a function; PostgreSQL: o mesmo TypeError convertido por guard() em CaseAuthorityError 'Case authority is unavailable'",
+      "asExpected": true
+    },
+    {
+      "proof": "S4",
+      "test": "case-scope-tasks-approvals.test.ts › S4 requires the execution case for Approver …",
+      "expectedFirstRed": "200 com decisão aplicada",
+      "observed": "ApproverB sem vínculo recebe 202 (código atual de APPROVED) com a decisão aplicada (expected 202 to be 404)",
+      "asExpected": true
+    },
+    {
+      "proof": "S5",
+      "test": "case-scope-tasks-approvals-postgres.test.ts › S5 the six mutations require the case under RLS …",
+      "expectedFirstRed": "200 e efeito",
+      "observed": "PATCH de OperatorB na task de X: 200 (expected 200 to be 404)",
+      "asExpected": true
+    },
+    {
+      "proof": "S6",
+      "test": "case-scope-tasks-approvals.test.ts › S6 revocation/deactivation; trusted sem casePrincipalAuthority; case-scope-tasks-approvals-postgres.test.ts › S6 legado 0000 e 0000–0027",
+      "expectedFirstRed": "200",
+      "observed": "grant revogado: 200 (esperado 404); trusted sem autoridade: GET /v1/tasks como Operator 200 (esperado 503); legado 0000 e 0000–0027: GET /v1/tasks como Operator 200 (esperado 503)",
+      "asExpected": true
+    },
+    {
+      "proof": "S6/S7 (outage)",
+      "test": "case-scope-tasks-approvals.test.ts › S6/S7 a snapshot outage is a redacted 503 …",
+      "expectedFirstRed": "2xx (a base não consulta a autoridade nessas rotas)",
+      "observed": "GET /v1/tasks 200 com autoridade de caso indisponível (esperado 503)",
+      "asExpected": true
+    },
+    {
+      "proof": "S7",
+      "test": "case-scope-tasks-approvals.test.ts › S6/S7 every handler response carries no-store …",
+      "expectedFirstRed": "2xx sem no-store",
+      "observed": "GET /v1/tasks 200 sem cache-control (expected undefined to be 'no-store')",
+      "asExpected": true
+    },
+    {
+      "proof": "S8",
+      "test": "case-scope-unavailable-item.test.tsx › approvals e tasks",
+      "expectedFirstRed": "estado de falha",
+      "observed": "painéis de Aprovacoes e Tarefas em role=alert 'Erro ao carregar dados operacionais.'; mensagem de item indisponível ausente",
+      "asExpected": true
+    }
+  ],
+  "fixtureNotes": [
+    "Durante a preparação do first red foram corrigidos só defeitos do próprio teste novo: identificador duplicado (plan) e o esquema legado da S6, que usa 0000–0027 porque 0028_session_events é migração opt-in de schema dedicado e recusa o schema de runtime (mesma lista do AUTH12 da SPEC0176); o cliente legado da S6 0000–0027 é a visão query-only da conexão única, porque PostgresOperationalExecutionStore trata um pg.Client (que tem connect) como pool.",
+    "As asserções da S3/S5 verificam primeiro as negações sem vínculo e só depois o recurso ausente, para o first red registrar o motivo da SPEC (200 e efeito)."
+  ],
+  "finalTestsReconfirmation": {
+    "what": "testes finais (HEAD 1937337dd, após as revisões r1/r2) executados contra o código de produção da base: diff de produção 24cdb463..HEAD aplicado ao contrário só nos 7 arquivos de produção, testes rodados, diff reaplicado e conferido limpo",
+    "productionFiles": [
+      "packages/persistence/src/case-authority.ts",
+      "packages/persistence/src/case-authority-postgres.ts",
+      "apps/api/src/case-authorization/case-routes.ts",
+      "apps/api/src/server.ts",
+      "legacy/packages/secretary-journeys/src/api-routes.ts",
+      "apps/web/src/App.tsx",
+      "apps/web/src/features/tasks/index.tsx"
+    ],
+    "log": "logs/first-red-final-tests.log",
+    "result": "19 failed / 19 (12 memória, 5 PostgreSQL, 2 web), pelos mesmos motivos do first red original",
+    "asExpected": true
+  }
+}

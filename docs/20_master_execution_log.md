@@ -1,3 +1,10 @@
+# UP91-018-CASE-SCOPE-20261021 — escopo por caso em tasks e approvals (SPEC0251) — 21–22/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- SPEC0251: quatro revisões do crítico independente (r1–r3 REVISE, r4 APPROVE sem obrigatórios); nenhuma premissa nova além da decisão do usuário sobre mutações; sem migração. [Revisões](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/spec-review-r4/review.md).
+- BUILD local (`acbec9f4`, `0fd6307e`, `1937337d`, `bb6a4e17`): snapshot de caso com `taskCase`, `approvalRequestCase`, `listTasks` e `listApprovalRequests` (memória e PostgreSQL, filtro `EXISTS` antes do COUNT numa instrução); helper `authorizeCaseMutation`; oito rotas com ramo de erro de caso à frente do mapeamento existente e `no-store`; web trata 404 como item indisponível; adendo na SPEC0107.
+- Provas: S1–S8, 19 testes novos com first red; mutantes 24/24; 22 testes existentes ajustados pelas regras (a)–(d) da §6, sem afrouxar asserção ([lista](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/adjusted-tests.json)). Gates Node 22: prettier, lint, typecheck, docs, `skip:governance` (SKIP-PG-040), `test:postgres` 40/330, cobertura 490/6407, `coverage:critical`, `mutation:guard`, E2E `critical-flows` e `rem21-014` 18/18. O `certify` integrado fica com o CI do PR.
+- Efeito registrado: em trusted sem `casePrincipalAuthority`, `/v1/tasks` e `/v1/approvals` respondem 503 para todas as roles, como conversas.
+
 # AUD0621-REMEDIATION-20261020 — remediação dos 26 achados da auditoria 0621 — 20–21/10/2026 (Claude Code)
 
 - Frentes e commits de candidata: produto `8cb00604` (F07–F11, F18, F21 produto, F24, F25), F01 `a9861469` (SPEC0176, migração 0029), runtime `92004871` (SPEC0248: F02–F04, F13, F14, F21 núcleo), persistência `0e91b96b` (SPEC0249, sem migração: F05, F06, F17, F19, F20, F26) e API/web `3a4f4b9d` + `b912b348` (SPEC0250: F12, F15, F16, F22, F23). Cada uma com first red na base, mutantes e crítico independente; detalhes na evidência de cada frente.

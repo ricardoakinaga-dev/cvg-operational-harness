@@ -1,0 +1,138 @@
+{
+  "statementsPerRequest": {
+    "tasks operatorA limit=7": 7,
+    "tasks operatorA limit=30": 7,
+    "tasks supervisor limit=100": 7,
+    "approvals approverA limit=7": 7,
+    "approvals supervisor limit=100": 7
+  },
+  "statements": {
+    "tasks operatorA limit=7": [
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT set_config($1, $2, true)",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT tenant_id, operator_id, role, active, revision, identity_source, authorit",
+      "SELECT counted.total, page.id, page.session_id, page.title, page.description, pa",
+      "COMMIT"
+    ],
+    "tasks operatorA limit=30": [
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT set_config($1, $2, true)",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT tenant_id, operator_id, role, active, revision, identity_source, authorit",
+      "SELECT counted.total, page.id, page.session_id, page.title, page.description, pa",
+      "COMMIT"
+    ],
+    "tasks supervisor limit=100": [
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT set_config($1, $2, true)",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT tenant_id, operator_id, role, active, revision, identity_source, authorit",
+      "SELECT counted.total, page.id, page.session_id, page.title, page.description, pa",
+      "COMMIT"
+    ],
+    "approvals approverA limit=7": [
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT set_config($1, $2, true)",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT tenant_id, operator_id, role, active, revision, identity_source, authorit",
+      "SELECT counted.total, page.id, page.session_id, page.proposed_action, page.summa",
+      "COMMIT"
+    ],
+    "approvals supervisor limit=100": [
+      "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT set_config($1, $2, true)",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT set_config(name, $2, true) FROM pg_settings WHERE name = $1 AND (setting:",
+      "SELECT tenant_id, operator_id, role, active, revision, identity_source, authorit",
+      "SELECT counted.total, page.id, page.session_id, page.proposed_action, page.summa",
+      "COMMIT"
+    ]
+  },
+  "scopedPageSql": "SELECT counted.total, page.id, page.session_id, page.title, page.description, page.priority, page.source, page.status, page.idempotency_key, page.created_at FROM ( SELECT COUNT(*)::integer AS total FROM tasks INNER JOIN sessions ON sessions.id = tasks.session_id INNER JOIN conversations ON conversations.id = sessions.conversation_id WHERE conversations.tenant_id = $3 AND EXISTS ( SELECT 1 FROM case_roots r JOIN case_assignments a ON a.tenant_id = r.tenant_id AND a.case_id = r.case_id WHERE r.tenant_id = conversations.tenant_id AND r.core_conversation_id = sessions.conversation_id AND a.operator_id = $4 AND a.status = 'ACTIVE') ) counted LEFT JOIN LATERAL ( SELECT tasks.id, tasks.session_id, tasks.title, tasks.description, tasks.priority, tasks.source, tasks.status, tasks.idempotency_key, tasks.created_at FROM tasks INNER JOIN sessions ON sessions.id = tasks.session_id INNER JOIN conversations ON conversations.id = sessions.conversation_id WHERE conversations.tenant_id = $3 AND EXISTS ( SELECT 1 FROM case_roots r JOIN case_assignments a ON a.tenant_id = r.tenant_id AND a.case_id = r.case_id WHERE r.tenant_id = conversations.tenant_id AND r.core_conversation_id = sessions.conversation_id AND a.operator_id = $4 AND a.status = 'ACTIVE') ORDER BY tasks.created_at ASC, tasks.id ASC LIMIT $1 OFFSET $2 ) page ON true ORDER BY page.created_at ASC, page.id ASC",
+  "explain": [
+    "Sort",
+    "  Sort Key: tasks_1.created_at, tasks_1.id",
+    "  ->  Nested Loop Left Join",
+    "        ->  Aggregate",
+    "              ->  Result",
+    "                    One-Time Filter: (NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text) = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                    ->  Nested Loop",
+    "                          Join Filter: (tasks.session_id = sessions.id)",
+    "                          ->  Nested Loop Semi Join",
+    "                                ->  Nested Loop",
+    "                                      ->  Bitmap Heap Scan on conversations",
+    "                                            Recheck Cond: (tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                                            Filter: (NOT tenant_isolation_quarantined)",
+    "                                            ->  Bitmap Index Scan on conversations_tenant_id_id_key",
+    "                                                  Index Cond: (tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                                      ->  Index Scan using idx_sessions_tenant_conversation on sessions",
+    "                                            Index Cond: ((tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text) AND (conversation_id = conversations.id))",
+    "                                            Filter: (NOT tenant_isolation_quarantined)",
+    "                                ->  Nested Loop",
+    "                                      Join Filter: (r.case_id = a.case_id)",
+    "                                      ->  Index Scan using case_roots_core_conversation_key on case_roots r",
+    "                                            Index Cond: ((tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text) AND (core_conversation_id = conversations.id))",
+    "                                      ->  Index Only Scan using idx_case_assignments_operator_active on case_assignments a",
+    "                                            Index Cond: ((tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text) AND (operator_id = 'operator.a'::text))",
+    "                          ->  Index Scan using idx_tasks_tenant_session on tasks",
+    "                                Index Cond: (tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                                Filter: (NOT tenant_isolation_quarantined)",
+    "        ->  Limit",
+    "              ->  Sort",
+    "                    Sort Key: tasks_1.created_at, tasks_1.id",
+    "                    ->  Result",
+    "                          One-Time Filter: (NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text) = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                          ->  Nested Loop",
+    "                                Join Filter: (tasks_1.session_id = sessions_1.id)",
+    "                                ->  Nested Loop Semi Join",
+    "                                      ->  Nested Loop",
+    "                                            ->  Bitmap Heap Scan on conversations conversations_1",
+    "                                                  Recheck Cond: (tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                                                  Filter: (NOT tenant_isolation_quarantined)",
+    "                                                  ->  Bitmap Index Scan on conversations_tenant_id_id_key",
+    "                                                        Index Cond: (tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                                            ->  Index Scan using idx_sessions_tenant_conversation on sessions sessions_1",
+    "                                                  Index Cond: ((tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text) AND (conversation_id = conversations_1.id))",
+    "                                                  Filter: (NOT tenant_isolation_quarantined)",
+    "                                      ->  Nested Loop",
+    "                                            Join Filter: (r_1.case_id = a_1.case_id)",
+    "                                            ->  Index Scan using case_roots_core_conversation_key on case_roots r_1",
+    "                                                  Index Cond: ((tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text) AND (core_conversation_id = conversations_1.id))",
+    "                                            ->  Index Only Scan using idx_case_assignments_operator_active on case_assignments a_1",
+    "                                                  Index Cond: ((tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text) AND (operator_id = 'operator.a'::text))",
+    "                                ->  Index Scan using idx_tasks_tenant_session on tasks tasks_1",
+    "                                      Index Cond: (tenant_id = 'tenant_00000000-0000-4000-8000-000000002511'::text)",
+    "                                      Filter: (NOT tenant_isolation_quarantined)"
+  ],
+  "dtoParity": {
+    "tasks": {
+      "limit": 100,
+      "offset": 0,
+      "total": 65,
+      "hasNextPage": false
+    },
+    "tasks:in_progress": {
+      "limit": 100,
+      "offset": 0,
+      "total": 10,
+      "hasNextPage": false
+    },
+    "approvals": {
+      "limit": 100,
+      "offset": 0,
+      "total": 65,
+      "hasNextPage": false
+    },
+    "approvals:approved": {
+      "limit": 100,
+      "offset": 0,
+      "total": 10,
+      "hasNextPage": false
+    }
+  }
+}

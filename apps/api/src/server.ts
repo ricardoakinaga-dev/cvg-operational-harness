@@ -4,6 +4,7 @@ import {
   ApprovalStatusSchema,
   auditEvidenceGovernance,
   createCorrelationId,
+  CreateInternalTaskSchema,
   DomainError,
   fail,
   IDENTITY_MODE_ENV,
@@ -114,12 +115,8 @@ import {
   runPostgresMigrations,
   guardPostgresPoolErrors,
   TaskRepository,
-  type ApprovalListQuery,
-  type ApprovalPage,
   type PageInfo,
   type PostgresQueryable,
-  type TaskListQuery,
-  type TaskPage,
   type TaskRecord,
   type TaskStatusTransitionCommand,
   withTenantContext
@@ -175,11 +172,15 @@ import {
   type CaseAuthorityPort
 } from '@cvg/persistence'
 import {
+  authorizeCaseMutation,
+  mapCaseMutationError,
   presentExecutionForCaller,
   registerCaseAuthorizationRoutes,
+  resolveCaseReadScope,
   submitExecutionWithCase,
   toSafeCaseError,
-  type CaseRouteDependencies
+  type CaseRouteDependencies,
+  type SafeCaseError
 } from './case-authorization/case-routes.ts'
 import { ControlledRequestMetrics } from './request-metrics.ts'
 import { installResponseCorrelationHook } from './response-correlation.ts'
@@ -779,6 +780,36 @@ export function buildServer(options: BuildServerOptions = {}) {
     paginationErrorMessage: PAGINATION_OFFSET_ERROR_MESSAGE,
     log: emitRuntimeLog
   }
+  // SPEC0251 I7: tasks and approvals put the case branch ahead of their
+  // existing mapping (`toSafeError` + `statusCodeForError`), as takeover does.
+  const toSafeRouteError = (error: unknown): SafeCaseError =>
+    mapCaseMutationError(error, (other) => {
+      const safe = toSafeError(other)
+      return { status: statusCodeForError(safe.code), ...safe }
+    })
+  // SPEC0251 I7: every response of the eight case-scoped task and approval
+  // routes is `no-store`, including the answers produced before their
+  // handler (body parsing, media type, size and origin refusals).
+  const caseScopedTaskApprovalRoutes = new Set([
+    'GET /v1/tasks',
+    'POST /v1/tasks',
+    'PATCH /v1/tasks/:taskId/status',
+    'POST /v1/journeys/tasks',
+    'GET /v1/approvals',
+    'POST /v1/approvals',
+    'POST /v1/approvals/:approvalRequestId/decision',
+    'POST /v1/executions/:executionId/approvals/:approvalId/decision'
+  ])
+  app.addHook('onSend', async (request, reply, payload) => {
+    if (
+      caseScopedTaskApprovalRoutes.has(
+        `${request.method} ${request.routeOptions.url}`
+      )
+    ) {
+      reply.header('cache-control', 'no-store')
+    }
+    return payload
+  })
 
   app.get(healthRoute, async () =>
     ok({ status: 'ok', runtime: 'api' }, createCorrelationId())
@@ -1215,6 +1246,13 @@ export function buildServer(options: BuildServerOptions = {}) {
         }
         const body = OperationalApprovalDecisionSchema.parse(request.body)
         const commandKey = readIdempotencyKey(request.headers)
+        // SPEC0251 §4.3: the execution case is authorized before the
+        // approval is touched (Operator/Approver need the grant; Supervisor
+        // decides tenant-wide). The rate-limit budget above is not an effect.
+        await authorizeCaseMutation(caseRouteDeps, identity, tenantId, {
+          kind: 'execution',
+          executionId: params.executionId
+        })
         const execution = await operationalExecution.get(
           tenantId,
           params.executionId
@@ -1375,7 +1413,9 @@ export function buildServer(options: BuildServerOptions = {}) {
           },
           tenantId
         )
-        reply.code(decision === 'APPROVED' ? 202 : 200)
+        reply
+          .code(decision === 'APPROVED' ? 202 : 200)
+          .header('cache-control', 'no-store')
         return reply.send(
           ok(
             {
@@ -1393,13 +1433,21 @@ export function buildServer(options: BuildServerOptions = {}) {
           )
         )
       } catch (error) {
-        const safeError =
-          error instanceof ApprovalError
-            ? operationalApprovalError(error)
-            : error instanceof OperationalExecutionError
-              ? error
-              : toSafeError(error)
-        reply.code(statusCodeForError(safeError.code))
+        // SPEC0251 I7: case branch ahead of the unchanged chain of this route.
+        const safeError = mapCaseMutationError(error, (other) => {
+          const mapped =
+            other instanceof ApprovalError
+              ? operationalApprovalError(other)
+              : other instanceof OperationalExecutionError
+                ? other
+                : toSafeError(other)
+          return {
+            status: statusCodeForError(mapped.code),
+            code: mapped.code,
+            message: mapped.message
+          }
+        })
+        reply.code(safeError.status).header('cache-control', 'no-store')
         emitRuntimeLog({
           event: 'execution.approval_decision_failed',
           correlationId,
@@ -1681,7 +1729,15 @@ export function buildServer(options: BuildServerOptions = {}) {
     requireAuthenticatedMutations,
     resolveDataPlaneTenant,
     resolveOptionalRequestTenant,
-    statusCodeForError
+    statusCodeForError,
+    // SPEC0251 §4.3: the journey task route authorizes the session's case and
+    // maps errors with the same I7 branch as POST /v1/tasks.
+    authorizeTaskSession: (identity, tenantId, sessionId) =>
+      authorizeCaseMutation(caseRouteDeps, identity, tenantId, {
+        kind: 'core_session',
+        sessionId
+      }),
+    toSafeTaskError: toSafeRouteError
   })
 
   app.post('/v1/tasks', async (request, reply) => {
@@ -1693,7 +1749,16 @@ export function buildServer(options: BuildServerOptions = {}) {
       const tenantId = identity
         ? resolveDataPlaneTenant(request.headers, identity)
         : resolveOptionalRequestTenant(request.headers)
-      const task = await createInternalTask({ tasks }, request.body, tenantId)
+      const input = CreateInternalTaskSchema.parse(request.body)
+      // SPEC0251 §4.3: the session's case before the task (and before an
+      // idempotent replay could return an existing task).
+      if (identity) {
+        await authorizeCaseMutation(caseRouteDeps, identity, tenantId, {
+          kind: 'core_session',
+          sessionId: input.sessionId
+        })
+      }
+      const task = await createInternalTask({ tasks }, input, tenantId)
       await audit.append(
         {
           type: 'integration_event',
@@ -1718,10 +1783,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         sessionId: task.sessionId,
         resourceId: task.id
       })
+      reply.header('cache-control', 'no-store')
       return ok(task, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
+      const safeError = toSafeRouteError(error)
+      reply.code(safeError.status).header('cache-control', 'no-store')
       emitRuntimeLog({
         event: 'task.failed',
         correlationId,
@@ -1744,10 +1810,25 @@ export function buildServer(options: BuildServerOptions = {}) {
         request.query,
         TaskStatusSchema.options
       )
-      return okPage(await tasks.listPage(tenantId, query), correlationId)
+      // SPEC0251 §4.3: Operator/Approver page only their assigned cases,
+      // filtered in the snapshot before COUNT/offset/limit.
+      const page = await caseAuthority.readSnapshot(
+        tenantId,
+        async (snapshot) =>
+          snapshot.listTasks(
+            await resolveCaseReadScope(
+              snapshot,
+              identity,
+              caseRouteDeps.principalPolicy
+            ),
+            query
+          )
+      )
+      reply.header('cache-control', 'no-store')
+      return okPage(page, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
+      const safeError = toSafeRouteError(error)
+      reply.code(safeError.status).header('cache-control', 'no-store')
       return fail(safeError.code, safeError.message, correlationId)
     }
   })
@@ -1763,6 +1844,11 @@ export function buildServer(options: BuildServerOptions = {}) {
       if (!status.success) {
         throw new DomainError('validation_failed', 'Task status is required')
       }
+      // SPEC0251 §4.3: the task's case is authorized before the transition.
+      await authorizeCaseMutation(caseRouteDeps, identity, tenantId, {
+        kind: 'task',
+        taskId: params.taskId
+      })
       // SPEC0250 §3.1 (AUD0621 F15/F16): one atomic port call validates the
       // transition against the committed status, writes it with a CAS and
       // records the audit event in the same unit; a failure changes nothing.
@@ -1784,10 +1870,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         sessionId: updated.sessionId,
         resourceId: updated.id
       })
+      reply.header('cache-control', 'no-store')
       return ok(updated, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
+      const safeError = toSafeRouteError(error)
+      reply.code(safeError.status).header('cache-control', 'no-store')
       emitRuntimeLog({
         event: 'task.status_failed',
         correlationId,
@@ -1813,6 +1900,13 @@ export function buildServer(options: BuildServerOptions = {}) {
         requestedApproval.proposedAction === 'audit_evidence_export_review'
           ? requireIdentity(request.headers, 'audit:view_full')
           : null
+      // SPEC0251 §4.3: the session's case before the approval is created.
+      if (identity) {
+        await authorizeCaseMutation(caseRouteDeps, identity, tenantId, {
+          kind: 'core_session',
+          sessionId: requestedApproval.sessionId
+        })
+      }
       const approval = await approvals.save(requestedApproval, tenantId)
       await audit.append(
         {
@@ -1838,10 +1932,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         sessionId: approval.sessionId,
         resourceId: approval.id
       })
+      reply.header('cache-control', 'no-store')
       return ok(approval, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
+      const safeError = toSafeRouteError(error)
+      reply.code(safeError.status).header('cache-control', 'no-store')
       emitRuntimeLog({
         event: 'approval.create_failed',
         correlationId,
@@ -1866,6 +1961,12 @@ export function buildServer(options: BuildServerOptions = {}) {
           approvalRequestId: params.approvalRequestId,
           operatorId: identity.operatorId
         })
+        // SPEC0251 §4.3: approved, rejected and assumed all require the
+        // approval's case for Approver; Supervisor decides tenant-wide.
+        await authorizeCaseMutation(caseRouteDeps, identity, tenantId, {
+          kind: 'approval_request',
+          approvalRequestId: parsedBody.approvalRequestId
+        })
         const decided = await approvals.decideWithAudit(
           {
             approvalRequestId: parsedBody.approvalRequestId,
@@ -1889,10 +1990,11 @@ export function buildServer(options: BuildServerOptions = {}) {
           sessionId: decided.sessionId,
           resourceId: decided.id
         })
+        reply.header('cache-control', 'no-store')
         return ok(decided, correlationId)
       } catch (error) {
-        const safeError = toSafeError(error)
-        reply.code(statusCodeForError(safeError.code))
+        const safeError = toSafeRouteError(error)
+        reply.code(safeError.status).header('cache-control', 'no-store')
         emitRuntimeLog({
           event: 'approval.decision_failed',
           correlationId,
@@ -1915,10 +2017,24 @@ export function buildServer(options: BuildServerOptions = {}) {
         request.query,
         ApprovalStatusSchema.options
       )
-      return okPage(await approvals.listPage(tenantId, query), correlationId)
+      // SPEC0251 §4.3: same case scope as GET /v1/tasks.
+      const page = await caseAuthority.readSnapshot(
+        tenantId,
+        async (snapshot) =>
+          snapshot.listApprovalRequests(
+            await resolveCaseReadScope(
+              snapshot,
+              identity,
+              caseRouteDeps.principalPolicy
+            ),
+            query
+          )
+      )
+      reply.header('cache-control', 'no-store')
+      return okPage(page, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
+      const safeError = toSafeRouteError(error)
+      reply.code(safeError.status).header('cache-control', 'no-store')
       return fail(safeError.code, safeError.message, correlationId)
     }
   })
@@ -4633,10 +4749,6 @@ interface RuntimePersistence {
     findById:
       | TaskRepository['findById']
       | PostgresRuntimeRepository['findTaskById']
-    listPage: (
-      tenantId: TenantId | undefined,
-      query: TaskListQuery
-    ) => TaskPage | Promise<TaskPage>
     transitionStatusWithAudit: (
       command: TaskStatusTransitionCommand,
       tenantId?: TenantId
@@ -4653,10 +4765,6 @@ interface RuntimePersistence {
     list:
       | ApprovalRepository['list']
       | PostgresRuntimeRepository['listApprovals']
-    listPage: (
-      tenantId: TenantId | undefined,
-      query: ApprovalListQuery
-    ) => ApprovalPage | Promise<ApprovalPage>
   }
   audit: {
     append: (
@@ -4766,8 +4874,9 @@ function okPage<T>(
 }
 
 /**
- * SPEC0250 §3.3 — the paged reads and the atomic task transition are not on
- * `TenantScopedPostgresRuntimeRepository`; in pool mode this applies the same
+ * SPEC0250 §3.3 — the atomic task transition is not on
+ * `TenantScopedPostgresRuntimeRepository` (the paged reads moved to the case
+ * snapshot in SPEC0251 §4.1); in pool mode this applies the same
  * tenant context per operation that its `run` does. The single-client mode is
  * not production and shares one connection across requests (SPEC0250 §8).
  */
@@ -4919,10 +5028,6 @@ function createPersistence(
         ) => postgres.createTask(input, tenantId),
         list: (tenantId) => postgres.listTasks(tenantId),
         findById: (id, tenantId) => postgres.findTaskById(id, tenantId),
-        listPage: (tenantId, query) =>
-          runTaskApprovalOperation(config, direct, tenantId, (repository) =>
-            repository.listTaskPage(query, tenantId)
-          ),
         transitionStatusWithAudit: (command, tenantId) =>
           runTaskApprovalOperation(config, direct, tenantId, (repository) =>
             repository.transitionTaskStatusWithAudit(command, tenantId)
@@ -4933,11 +5038,7 @@ function createPersistence(
           postgres.decideApprovalWithAudit(input, tenantId),
         save: (request, tenantId) => postgres.saveApproval(request, tenantId),
         findById: (id, tenantId) => postgres.findApprovalById(id, tenantId),
-        list: (tenantId) => postgres.listApprovals(tenantId),
-        listPage: (tenantId, query) =>
-          runTaskApprovalOperation(config, direct, tenantId, (repository) =>
-            repository.listApprovalPage(query, tenantId)
-          )
+        list: (tenantId) => postgres.listApprovals(tenantId)
       },
       audit: {
         append: (input, tenantId) =>

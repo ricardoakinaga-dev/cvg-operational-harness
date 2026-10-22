@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AuditRepository } from '@cvg/persistence'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 const tenant = 'tenant_00000000-0000-4000-8000-000000000093'
 const headers = {
   'x-tenant-id': tenant,
@@ -9,12 +10,21 @@ const headers = {
 }
 async function setup() {
   const app = buildServer()
-  const { session } = await app.persistence.conversations.createWithSession({
-    tenantId: tenant,
-    channel: 'internal',
-    senderRef: 'synthetic-attendance',
-    externalMessageId: crypto.randomUUID(),
-    body: 'Synthetic fixture'
+  const { conversation, session } =
+    await app.persistence.conversations.createWithSession({
+      tenantId: tenant,
+      channel: 'internal',
+      senderRef: 'synthetic-attendance',
+      externalMessageId: crypto.randomUUID(),
+      body: 'Synthetic fixture'
+    })
+  // SPEC0251: the Approver decides only on an assigned case.
+  await grantCase(app, {
+    kind: 'core_conversation',
+    resourceId: conversation.id,
+    operatorId: headers['x-operator-id'],
+    role: 'Approver',
+    tenantId: tenant as never
   })
   const response = await app.inject({
     method: 'POST',

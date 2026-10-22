@@ -120,6 +120,13 @@ describe('api runtime', () => {
       }
     })
     const approvalBody = approval.json() as Envelope<ApprovalResult>
+    // SPEC0251: the Approver decides only on an assigned case.
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: inboundBody.data.conversationId,
+      operatorId: 'approver.shift-a',
+      role: 'Approver'
+    })
     const forbiddenDecision = await app.inject({
       method: 'POST',
       url: `/v1/approvals/${approvalBody.data.id}/decision`,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer, type RuntimeLogEntry } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 import {
   CompositeTelemetry,
   InMemoryObservationExporter,
@@ -45,6 +46,13 @@ describe('api observability', () => {
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>
 
+    // SPEC0251: the Approver decides only on an assigned case.
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: inboundBody.data.conversationId,
+      operatorId: 'approver.observability',
+      role: 'Approver'
+    })
     await app.inject({
       method: 'POST',
       url: `/v1/approvals/${approvalBody.data.id}/decision`,

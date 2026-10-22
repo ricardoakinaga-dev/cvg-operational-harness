@@ -10,7 +10,9 @@
  */
 import { createHash, randomUUID } from 'node:crypto'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
+import { ApprovalStatusSchema, TaskStatusSchema } from '@cvg/shared'
 import type { InMemoryDatabase } from './db.ts'
+import { cloneAttendanceApproval } from './attendance-approval.ts'
 import {
   createCaseId,
   memoryCaseKey as key,
@@ -21,7 +23,17 @@ import {
   type MemoryRoot
 } from './case-authority-memory-state.ts'
 import { AuditRepository } from './repositories/audit-repository.ts'
+import type {
+  ApprovalListQuery,
+  ApprovalPage
+} from './repositories/approval-repository.ts'
 import { ConversationRepository } from './repositories/conversation-repository.ts'
+import {
+  assertStatusPageQuery,
+  pageInfoFor,
+  type TaskListQuery,
+  type TaskPage
+} from './repositories/task-repository.ts'
 import type {
   AuditEventRecord,
   ConversationPage,
@@ -172,6 +184,9 @@ export interface CaseLookup {
   readonly caseId: string | null
 }
 
+/** SPEC0251: case of a task or approval request through its core session. */
+export type SessionCaseLookup = CaseLookup & { readonly sessionId: string }
+
 export type AuditSessionRef =
   | { readonly kind: 'core'; readonly sessionId: string }
   | {
@@ -230,11 +245,32 @@ export interface CaseReadSnapshot {
     sessionId: string
   ): Promise<CaseLookup | null>
   executionCase(executionId: string): Promise<CaseLookup | null>
+  /**
+   * SPEC0251 §4.1: `null` when the task does not exist in the snapshot
+   * tenant (tenant of the session's conversation); otherwise the case of the
+   * core root of that conversation, `null` when it has no root.
+   */
+  taskCase(taskId: string): Promise<SessionCaseLookup | null>
+  /** SPEC0251 §4.1: same contract as `taskCase` for approval requests. */
+  approvalRequestCase(
+    approvalRequestId: string
+  ): Promise<SessionCaseLookup | null>
   hasActiveGrant(caseId: string, operatorId: string): Promise<boolean>
   listCoreConversations(
     scope: CaseListScope,
     page: PaginationInput
   ): Promise<ConversationPage>
+  /**
+   * SPEC0251 §4.1: the SPEC0250 page of tasks (bounds, status filter, order
+   * and `pageInfo`) restricted, for the `assigned` scope, to sessions whose
+   * core case has an ACTIVE grant of the operator, before COUNT and paging.
+   */
+  listTasks(scope: CaseListScope, query: TaskListQuery): Promise<TaskPage>
+  /** SPEC0251 §4.1: same contract as `listTasks` for approval requests. */
+  listApprovalRequests(
+    scope: CaseListScope,
+    query: ApprovalListQuery
+  ): Promise<ApprovalPage>
   coreTimeline(
     conversationId: string
   ): Promise<{ messages: MessageRecord[]; sessions: SessionRecord[] }>
@@ -613,6 +649,35 @@ export class InMemoryCaseAuthority implements CaseAuthorityPort {
     )
   }
 
+  /** Case of a persisted core session of the tenant; root absent → null. */
+  private sessionCase(
+    tenantId: TenantId,
+    sessionId: string
+  ): SessionCaseLookup | null {
+    const session = this.session(tenantId, sessionId)
+    if (!session) return null
+    return {
+      caseId: this.coreRoot(tenantId, session.conversationId)?.caseId ?? null,
+      sessionId: session.id
+    }
+  }
+
+  /** SPEC0251 list visibility: tenant of the session, then the grant. */
+  private sessionVisible(
+    tenantId: TenantId,
+    scope: CaseListScope,
+    sessionId: string
+  ): boolean {
+    const session = this.session(tenantId, sessionId)
+    if (!session) return false
+    if (scope.kind === 'tenant') return true
+    const root = this.coreRoot(tenantId, session.conversationId)
+    return (
+      root !== undefined &&
+      this.activeGrant(tenantId, root.caseId, scope.operatorId)
+    )
+  }
+
   private filteredRoots(tenantId: TenantId, query: CaseRegistryQuery) {
     return this.state.roots
       .filter(
@@ -664,6 +729,16 @@ export class InMemoryCaseAuthority implements CaseAuthorityPort {
         const link = this.state.executionLinks.get(key(tenantId, executionId))
         return link ? { caseId: link.caseId } : null
       },
+      taskCase: async (taskId) => {
+        const task = this.db.state.tasks.find((item) => item.id === taskId)
+        return task ? this.sessionCase(tenantId, task.sessionId) : null
+      },
+      approvalRequestCase: async (approvalRequestId) => {
+        const approval = this.db.state.approvals.find(
+          (item) => item.id === approvalRequestId
+        )
+        return approval ? this.sessionCase(tenantId, approval.sessionId) : null
+      },
       hasActiveGrant: async (caseId, operatorId) =>
         this.activeGrant(tenantId, caseId, operatorId),
       listCoreConversations: async (scope, pagination) =>
@@ -675,6 +750,48 @@ export class InMemoryCaseAuthority implements CaseAuthorityPort {
             this.activeGrant(tenantId, root.caseId, scope.operatorId)
           )
         }),
+      listTasks: async (scope, query) => {
+        const { limit, offset, statuses } = assertStatusPageQuery(
+          query,
+          TaskStatusSchema.options
+        )
+        const matching = this.db.state.tasks.filter(
+          (task) =>
+            this.sessionVisible(tenantId, scope, task.sessionId) &&
+            (!statuses || statuses.includes(task.status))
+        )
+        const items = matching.slice(offset, offset + limit)
+        return {
+          items,
+          pageInfo: pageInfoFor(
+            { limit, offset },
+            items.length,
+            matching.length
+          )
+        }
+      },
+      listApprovalRequests: async (scope, query) => {
+        const { limit, offset, statuses } = assertStatusPageQuery(
+          query,
+          ApprovalStatusSchema.options
+        )
+        const matching = this.db.state.approvals.filter(
+          (approval) =>
+            this.sessionVisible(tenantId, scope, approval.sessionId) &&
+            (!statuses || statuses.includes(approval.status))
+        )
+        const items = matching
+          .slice(offset, offset + limit)
+          .map(cloneAttendanceApproval)
+        return {
+          items,
+          pageInfo: pageInfoFor(
+            { limit, offset },
+            items.length,
+            matching.length
+          )
+        }
+      },
       coreTimeline: async (conversationId) =>
         conversations.timeline(tenantId, conversationId),
       linkedAuditEvents: async (ref) => {

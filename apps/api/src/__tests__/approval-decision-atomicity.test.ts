@@ -18,6 +18,7 @@ import {
 } from '@cvg/harness'
 import { reconcileApprovalDecision } from '@cvg/agent-core'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000701'
 
@@ -104,6 +105,37 @@ async function waitingFixture(
   return { executionId: accepted.record.id, approvalId: requested.approvalId }
 }
 
+/**
+ * SPEC0251 (§6 adjustment a): the fixture execution is created directly in
+ * the store, so its independent case link is registered through the port and
+ * the deciding Approver receives the grant before deciding.
+ */
+async function grantExecution(
+  app: ReturnType<typeof buildServer>,
+  executionId: string,
+  approvers: readonly string[] = ['approver.synthetic']
+) {
+  await app.caseAuthority.registerExecutionLink(
+    tenantA as never,
+    executionId,
+    {
+      kind: 'independent',
+      conversationId: 'conversation_atomic_synthetic',
+      sessionId: 'session_atomic_synthetic'
+    },
+    true
+  )
+  for (const operatorId of approvers) {
+    await grantCase(app, {
+      kind: 'independent_execution',
+      resourceId: executionId,
+      operatorId,
+      role: 'Approver',
+      tenantId: tenantA as never
+    })
+  }
+}
+
 function decisionHeaders(commandKey: string) {
   return {
     'x-tenant-id': tenantA,
@@ -145,6 +177,7 @@ describe('approval decision causal atomicity (AUD19-003)', () => {
       operationalExecution: flakyStore as never,
       operationalApprovalAuthority: authority
     })
+    await grantExecution(app, executionId)
     const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
     const first = await app.inject({
       method: 'POST',
@@ -201,6 +234,7 @@ describe('approval decision causal atomicity (AUD19-003)', () => {
       operationalExecution: flakyStore as never,
       operationalApprovalAuthority: authority
     })
+    await grantExecution(app, executionId)
     const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
     const first = await app.inject({
       method: 'POST',
@@ -234,6 +268,7 @@ describe('approval decision causal atomicity (AUD19-003)', () => {
       operationalExecution: store,
       operationalApprovalAuthority: authority
     })
+    await grantExecution(app, executionId)
     const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
     const [first, second] = await Promise.all([
       app.inject({
@@ -268,6 +303,10 @@ describe('approval decision causal atomicity (AUD19-003)', () => {
       operationalExecution: store,
       operationalApprovalAuthority: authority
     })
+    await grantExecution(app, executionId, [
+      'approver.synthetic',
+      'approver.other'
+    ])
     const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
     const first = await app.inject({
       method: 'POST',
@@ -307,6 +346,7 @@ describe('approval decision causal atomicity (AUD19-003)', () => {
       operationalExecution: store,
       operationalApprovalAuthority: authority
     })
+    await grantExecution(app, executionId)
     const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
     const first = await app.inject({
       method: 'POST',

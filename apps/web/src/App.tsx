@@ -74,6 +74,16 @@ function isSessionUnavailable(error: unknown): boolean {
   )
 }
 
+/**
+ * SPEC0251 §4.4 — a 404 on a decision or a task transition: the item is no
+ * longer available to this operator (case not assigned, revoked or gone).
+ */
+function isUnavailableItem(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.status === 404
+}
+
+const unavailableItemMessage = 'Este item não está mais disponível para você.'
+
 function canReviewAuditEvidence(role: OperatorRole): boolean {
   return role === 'Supervisor' || role === 'Admin'
 }
@@ -155,6 +165,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
   )
   const [approvalMessage, setApprovalMessage] = useState<string | null>(null)
   const [approvalActionId, setApprovalActionId] = useState<string | null>(null)
+  const [taskMessage, setTaskMessage] = useState<string | null>(null)
   const [taskActionId, setTaskActionId] = useState<string | null>(null)
   const [operatorIdentity, setOperatorIdentity] = useState<OperatorIdentity>({
     operatorId: '',
@@ -375,6 +386,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       setSelectedSessionId(null)
       setApprovalActionId(null)
       setApprovalMessage(null)
+      setTaskMessage(null)
       setTaskActionId(null)
       setIsManagingAuditEvidenceCheckpoint(false)
       setIsRequestingAuditEvidenceExport(false)
@@ -398,6 +410,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     setSelectedSessionId(null)
     setApprovalActionId(null)
     setApprovalMessage(null)
+    setTaskMessage(null)
     setTaskActionId(null)
     setIsManagingAuditEvidenceCheckpoint(false)
     setIsRequestingAuditEvidenceExport(false)
@@ -886,13 +899,18 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       await refreshAuditEvidence(scope)
     } catch (error) {
       if (!isCurrentViewScope(scope)) return
-      if (isApiConflict(error)) {
+      // SPEC0251 §4.4: 404 means the item is no longer available to this
+      // operator (case not assigned or revoked); same reload as the 409.
+      const unavailable = isUnavailableItem(error)
+      if (isApiConflict(error) || unavailable) {
         try {
           await refreshApprovals(scope)
           await refreshAudit(scope)
           if (isCurrentViewScope(scope))
             setApprovalMessage(
-              'Esta aprovacao ja foi decidida. A fila foi atualizada.'
+              unavailable
+                ? unavailableItemMessage
+                : 'Esta aprovacao ja foi decidida. A fila foi atualizada.'
             )
         } catch {
           if (isCurrentViewScope(scope)) setApprovals(failed(approvals.data))
@@ -913,6 +931,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       setTasks(failed(tasks.data))
       return
     }
+    setTaskMessage(null)
     setTaskActionId(taskId)
     try {
       await apiClient.updateTaskStatus({ taskId, status, identity })
@@ -923,12 +942,18 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       if (!isCurrentViewScope(scope)) return
       // SPEC0250 §3.6: a transition rejected because the task already moved
       // (conflict or invalid transition) reloads the current page.
+      // SPEC0251 §4.4: a 404 (task no longer available to this operator)
+      // reloads it too and says so in the task panel.
+      const unavailable = isUnavailableItem(error)
       if (
         isApiConflict(error) ||
+        unavailable ||
         (error instanceof ApiRequestError && error.code === 'invalid_action')
       ) {
         try {
           await refreshTasks(scope)
+          if (unavailable && isCurrentViewScope(scope))
+            setTaskMessage(unavailableItemMessage)
           return
         } catch {
           // fall through to the failed state below
@@ -1168,6 +1193,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           }
         />
         <TasksPanel
+          message={taskMessage}
           tasks={tasks.data}
           pageInfo={taskPageInfo}
           onPreviousPage={() =>

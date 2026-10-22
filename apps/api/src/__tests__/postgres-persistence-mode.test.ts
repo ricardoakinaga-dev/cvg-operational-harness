@@ -1996,12 +1996,24 @@ describe('api PostgreSQL persistence mode', () => {
           }
         })
         const approvalBody = approval.json() as Envelope<{ id: string }>
-        const decision = await app.inject({
+        // SPEC0251 (§6 adjustment d): without the 0029 tables an Approver
+        // cannot be scoped (503 before any write); the persisted decision is
+        // proven with the tenant-wide Supervisor.
+        const scopedDecision = await app.inject({
           method: 'POST',
           url: `/v1/approvals/${approvalBody.data.id}/decision`,
           headers: {
             'x-operator-id': 'approver.postgres',
             'x-operator-role': 'Approver'
+          },
+          payload: { decision: 'approved' }
+        })
+        const decision = await app.inject({
+          method: 'POST',
+          url: `/v1/approvals/${approvalBody.data.id}/decision`,
+          headers: {
+            'x-operator-id': 'supervisor.postgres',
+            'x-operator-role': 'Supervisor'
           },
           payload: { decision: 'approved' }
         })
@@ -2095,13 +2107,22 @@ describe('api PostgreSQL persistence mode', () => {
         expect(
           (timeline.json() as Envelope<{ messages: unknown[] }>).data.messages
         ).toHaveLength(1)
+        expect(scopedDecision.statusCode).toBe(503)
+        expect((scopedDecision.json() as Envelope<never>).error?.code).toBe(
+          'configuration_error'
+        )
         expect(
           (decision.json() as Envelope<{ status: string }>).data.status
         ).toBe('approved')
         expect(taskBody.data.status).toBe('open')
-        expect(
-          (taskStatus.json() as Envelope<{ status: string }>).data.status
-        ).toBe('in_progress')
+        // SPEC0251 (§6 adjustment d): only the Operator changes task status,
+        // and it cannot be scoped without 0029 (503 before any write); the
+        // persisted transition is proven on the 0029 schema
+        // (task-approval-postgres P2/P4 and case-scope S5).
+        expect(taskStatus.statusCode).toBe(503)
+        expect((taskStatus.json() as Envelope<never>).error?.code).toBe(
+          'configuration_error'
+        )
         expect(scopedList.statusCode).toBe(503)
         // SPEC0176 §5: the session reader needs the 0029 lineage tables
         // (absent here → 503); the approval decision stays on the full reader.
