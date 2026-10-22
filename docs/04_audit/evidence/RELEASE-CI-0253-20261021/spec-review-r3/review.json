@@ -1,0 +1,136 @@
+{
+  "schemaVersion": 1,
+  "kind": "spec-review",
+  "task": "RELEASE-CI-0253-20261021",
+  "round": 3,
+  "date": "2026-10-22",
+  "reviewer": "crítico independente, contexto novo (Claude Code)",
+  "target": "docs/02_spec/0253_release_image_ghcr.md",
+  "specRevision": "r3",
+  "specSha256": "6af7012ad72b98fdd6a56493cc51acfca97411f6f065570dd5947df54c17c820",
+  "baseSha": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "verdict": "REVISE",
+  "r2MandatoryStatus": {
+    "R2-M1": {
+      "status": "RESOLVED",
+      "evidence": [
+        "§3.3 tabela e passos 7-11: tarball em bind readonly (0444); banco em volume nomeado que o host não lê; relatórios e SBOM pelo stdout para evidence/ (0700, nunca montado); sem --output",
+        "§3.5 readEvidenceFile: lista exata, lstat de arquivo regular, nlink=1, tamanho máximo, O_NOFOLLOW e fstat do mesmo inode",
+        "passos 19 e 22: sbom-path e upload só de evidence/, lista explícita sem glob nem diretório",
+        "passo 7 com rede e sem /in; passos 8-11 com --network none --skip-db-update --offline-scan; login no passo 15, depois de toda a Trivy",
+        "push sai do daemon (passo 16), fora do alcance do contêiner; passo 17 confere config.digest contra a âncora do passo 5",
+        "docker run sem -e/--env-file; /proc do contêiner é do próprio namespace; ~/.docker/config.json só nasce no passo 15",
+        "actions/attest@1e69f48a src/main.ts:99,234-241: bundle em mkdtemp($RUNNER_TEMP), fora de qualquer montagem",
+        "::set-output emitido pela Trivy no stderr só afeta o próprio passo; ::set-env e ::add-path desligados no runner",
+        "imagem 0.75.0 sem User na config: roda como uid 0 sem capabilities; readonly é imposto pelo kernel"
+      ]
+    },
+    "R2-M2": {
+      "status": "RESOLVED",
+      "evidence": [
+        "§3.2 passo 4: DOCKER_CONFIG temporário, docker login de leitura, quatro verificações (proveniência e cyclonedx, API e --bundle-from-oci), sonda anônima, limpeza com if: always()",
+        "regra 8: already_published só com as quatro verificações exit=0, subject igual ao digest e DENIED",
+        "§3.4: release-verify com login de leitura e os dois predicados pelos dois caminhos",
+        "§6 L5: CLI do gate sobre o layout de $RUNNER_TEMP/release-gate/ dá already_published, com variantes refuse",
+        "gh lê a credencial pelo DefaultKeychain, que respeita DOCKER_CONFIG"
+      ]
+    }
+  },
+  "mandatory": [
+    {
+      "id": "R3-M1",
+      "title": "O primeiro run cria o pacote, que nasce público pela documentação oficial e não volta a ser privado",
+      "evidence": [
+        "GitHub Docs, 'Publishing and installing a package with GitHub Actions', seção 'Default permissions and access settings for packages modified through workflows': pacote criado por workflow com GITHUB_TOKEN 'inherits the visibility and permissions model of the repository where the workflow is run'; vale para registros com permissões granulares, entre eles o Container registry ('About permissions for GitHub Packages')",
+        "GitHub Docs, 'Configuring a package's access control and visibility': 'Once you make a package public, you cannot make it private again.'",
+        "repositório público (SPEC §1.7; snapshot visibility: public)",
+        "SPEC §3.2 regra 8 (linhas 274-287): token DENIED vale absent e segue para o push; o passo 16 cria o pacote",
+        "SPEC §3.4 linha 425, §8 linha 669 e §9 linha 693 contam com a recuperação 'tornar o pacote privado e reexecutar', impossível pela documentação",
+        "sonda anônima só depois do push e das attestations; antes do push não distingue privado de inexistente (§1.7)",
+        "G6 (production-0374.json): 'GitHub Container Registry privado'; decisão de 21/10: notGranted inclui 'publicação fora da main'"
+      ],
+      "why": "O BUILD implementaria um fluxo que provavelmente torna públicos, de forma irreversível, os bytes da imagem de produção, contra G6 e R8, com uma recuperação que não existe. Depois disso, todo release fica vermelho.",
+      "correction": [
+        "nova invariante em R8/R5: o release nunca cria o pacote; só publica em pacote existente e privado",
+        "no gate (regra 8) e no passo 14 do release, antes do push: GET /v2/<nome>/tags/list autenticado igual a 200; token DENIED autenticado, 401/403 ou NAME_UNKNOWN dão refuse (package_missing_or_inaccessible); sonda anônima DENIED, e token emitido dá refuse (package_public); só manifesto 404 MANIFEST_UNKNOWN de sha-S vale absent",
+        "classifyTagProbe, P1, P3 e L4 com esses casos; mutantes: push com pacote inexistente, DENIED autenticado tratado como absent, push sem sonda anônima prévia",
+        "§3.4, §8 e §9: tirar a recuperação 'tornar privado e reexecutar' e registrar os dois trechos da documentação",
+        "levar ao usuário antes do BUILD: (a) criar o pacote privado fora do CI, com credencial própria (imagem mínima com tag bootstrap e label source; Manage Actions access com Write; Private), que é publicação fora da main e precisa de autorização explícita; (b) aceitar pacote público, mudando G6; ou (c) outro registro, que é premissa nova"
+      ],
+      "returnsToUser": true
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "trivy version não aceita --skip-version-check/--disable-telemetry",
+      "detail": "Na v0.75.0, os flags são de trivy image (trivy_image.md:55,163). O version só tem --format mais os globais e não dispara checagem de atualização (pkg/commands/app.go:1448-1475). P1 (linha 526) exige os dois em toda chamada, e o passo 8 não os usa. Limitar a regra às chamadas image; L2 pegaria a contradição."
+    },
+    {
+      "id": "O2",
+      "title": "Exatamente um contêiner da Trivy com rede",
+      "detail": "O volume é canal entre contêineres. P1 exige uma única chamada sem --network none, a de --download-db-only, antes de todas as outras. Mutante: chamada com rede depois das varreduras."
+    },
+    {
+      "id": "O3",
+      "title": "Resíduos de rede e de recurso em §8",
+      "detail": "O contêiner do banco, na rede bridge, alcança serviços da máquina host e os endpoints de metadados da nuvem do runner, sem token do repositório. Considerar --pids-limit, --memory e limite do stdout na escrita (head -c com pipefail)."
+    },
+    {
+      "id": "O4",
+      "title": "Usuário do contêiner",
+      "detail": "Trocar 'usuário padrão da imagem' (linha 337) por root (uid 0) sem capabilities; a config da 0.75.0 não declara User."
+    },
+    {
+      "id": "O5",
+      "title": "Assinatura da imagem da Trivy",
+      "detail": "Registrar o bundle Sigstore do índice af6acf9a… (signer aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.75.0, commit 591e9799…) e, se possível, verificar uma vez com gh recente, sem cosign no CI."
+    },
+    {
+      "id": "O6",
+      "title": "v0.76.1 e a CA eMudhra",
+      "detail": "A v0.76.1 (21/10) traz Go 1.27.3 com distrust de certificado. Registrar por que a 0.75.0 basta (efeito só no TLS do download do banco) e pôr no cartão SEC-TRIVY."
+    },
+    {
+      "id": "O7",
+      "title": "Publicação incompleta depois das duas attestations",
+      "detail": "Falha só no registro ou no upload leva o próximo gate a already_published, não a refuse (§8, linhas 671-674). Ajustar o texto e citar o digest do resumo do gate (§3.7)."
+    },
+    {
+      "id": "O8",
+      "title": "Passos da Trivy sem id",
+      "detail": "Os passos que rodam $TRIVY_IMAGE não têm id, ou ninguém consome as saídas deles; P1 confere."
+    },
+    {
+      "id": "O9",
+      "title": "Ciência dos metadados públicos como pré-condição do merge",
+      "detail": "A publicação é automática depois do merge. A ciência explícita deve vir antes do merge, de preferência na mesma pergunta de R3-M1. Citar que a attestation do SBOM também vai ao Rekor."
+    },
+    {
+      "id": "O10",
+      "title": "Âncoras de linha",
+      "detail": "O smoke está em scripts/ci-bar.mjs:614, não em :615 (linha 321). GHSA-q3fv é alto no banco global e médio no repositório (linha 77)."
+    },
+    {
+      "id": "O11",
+      "title": "Token da sondagem fora do argv",
+      "detail": "Passar o token por cabeçalho lido do stdin ou por --config -, em vez de -u usuário:token."
+    }
+  ],
+  "newPremise": {
+    "answer": "YES",
+    "reason": "Por R3-M1: pela documentação oficial, um pacote criado por GITHUB_TOKEN num repositório público nasce público, sem volta para privado. Manter G6 exige que o usuário crie o pacote privado fora do CI, com credencial própria, o que é publicação fora da main não concedida em 21/10. A alternativa é aceitar pacote público, mudando G6. A troca para a Trivy 0.75.0, sozinha, não é premissa nova: mesma ferramenta, mesmo publicador, release imutável pinada por digest e assinada pelo workflow de release da Aqua."
+  },
+  "verifiedFacts": [
+    "SHA-256 da SPEC r3 = 6af7012a…c820",
+    "aquasecurity/trivy v0.75.0: published_at 2026-10-01T13:34:13Z, immutable true, tag -> 591e9799316a602e703f0b484f6c6d7b234ec8f3",
+    "ghcr.io/aquasecurity/trivy:0.75.0 = índice sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa (SHA-256 dos bytes brutos confere); amd64 sha256:9db099105405c648166e6b94155eb32f8da12673cf1f455207f7385cc9a77283; revision label 591e9799; User vazio",
+    "referrer Sigstore do índice: predicateType https://sigstore.dev/cosign/sign/v1; SAN https://github.com/aquasecurity/trivy/.github/workflows/reusable-release.yaml@refs/tags/v0.75.0 (só o certificado foi lido)",
+    "advisories: GHSA-69fq-xp46-6x23 (crítico), GHSA-mcj4-mphf-j9ff (<0.71.1), GHSA-q3fv-x8vg-qqm4 (<0.71.0), GHSA-8rc5-4fr6-64pw (<0.72.0); nenhum contra 0.75.0",
+    "v0.75.0 pkg/flag/options.go:504-523: --format cyclonedx sem --scanners zera os scanners e liga só o SBOM",
+    "v0.75.0 trivy_version.md: version aceita só --format mais os globais (sem --skip-version-check/--disable-telemetry)",
+    "docker/dockerfile:1.7 = sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e",
+    "actions/setup-node 49933ea5 = v4.4.0, sem cache automático",
+    "sonda anônima de token para ricardoakinaga-dev/cvg-operational-harness: HTTP 403 DENIED (22/10)"
+  ]
+}

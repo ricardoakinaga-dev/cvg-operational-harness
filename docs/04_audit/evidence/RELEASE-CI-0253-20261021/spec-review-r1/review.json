@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "kind": "spec-review",
+  "task": "RELEASE-CI-0253-20261021",
+  "round": 1,
+  "reviewedAt": "2026-10-22",
+  "spec": "docs/02_spec/0253_release_image_ghcr.md",
+  "specSha256": "c3cd75e470522fd2254ed9cbb0fd1bbba9695fad67c4f247191c6a33aa951ca0",
+  "base": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "Tarball da imagem como artefato de workflow em repositório público expõe os bytes por pelo menos 24 h e contradiz G6 e a §8",
+      "evidence": [
+        "§3.3 passo 8 sobe image.tar como artefato release-image-tar-<run>-<attempt> com retention-days 1; §3.4 o baixa",
+        "snapshot: visibility public; GET anônimo /actions/artifacts lista 253 artefatos (cyclonedx-sbom, cvg-ci-bar-...); download anônimo dá 401, e qualquer conta autenticada tem leitura em repositório público",
+        "production-0374.json G6_registro: 'GitHub Container Registry privado'",
+        "SPEC §8: 'Os bytes da imagem ficam privados'"
+      ],
+      "fix": "Escolher e registrar: (a) redesenhar o transporte sem artefato da imagem, por exemplo um job privilegiado único que faz build, smoke e save, roda a Trivy como contêiner pinado por digest (tarball só leitura, sem socket, sem env, sem token) e só depois faz login, push e attest, com R4/§3.1/§3.3/§3.4/P1/§8 ajustados; ou (b) levar ao usuário a janela pública do tarball como decisão explícita e corrigir a §8"
+    },
+    {
+      "id": "M2",
+      "title": "Âncora de integridade (tarball_sha256, config_digest) não fixada antes do código de terceiro no job build",
+      "evidence": [
+        "§3.3 não diz qual passo emite as saídas; o passo 7 (registro) roda depois da trivy-action",
+        "trivy-action@ed142fd0 action.yaml:148-152 prefixa GITHUB_PATH; setup-trivy linhas 90-92 prefixa trivy-bin; grava trivy_envs.txt e .cache/trivy no workspace (action.yaml:56-59,156-160); o job tem acesso ao daemon Docker",
+        "R5: 'os bytes publicados vêm do tarball cujo SHA-256 foi registrado no build'"
+      ],
+      "fix": "tarball_sha256 e config_digest saem de um passo com id logo após docker save e antes de qualquer uses de terceiro, sem redefinição posterior; o publish confere só contra essas saídas e revalida o build-record pelo próprio checkout; P1 verifica a ordem e mata o mutante 'âncoras emitidas pelo passo de registro'; no desenho M1(a), o tarball é montado só leitura e hasheado antes do contêiner da Trivy"
+    },
+    {
+      "id": "M3",
+      "title": "already_published aceita publicação incompleta e a reexecução recomendada mascara a falha",
+      "evidence": [
+        "§3.2 passo 4 e regra 7 rodam um único gh attestation verify, com o predicado padrão SLSA",
+        "§3.4: push, proveniência (5), SBOM (6), release-image.json (7); §3.5 vem depois",
+        "§4: 'A reexecução do próprio run cobre falha transitória'; falha no passo 6 seguida de 'Re-run all jobs' dá already_published verde sem SBOM atestado (R6), sem release-image.json e sem release-verify (R7/R8)",
+        "§8 'Publicação parcial' só cobre falha da proveniência"
+      ],
+      "fix": "already_published exige proveniência verificada (signer, source-digest S, source-ref, deny-self-hosted), attestation https://cyclonedx.org/bom do mesmo signer para o mesmo digest e sonda anônima DENIED; senão, refuse. P3 ganha as variantes 'só proveniência' e 'pacote público'; §4 e §8 são ajustados"
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "Fato errado na §8: a proteção é legível",
+      "detail": "GET /repos/{repo}/branches/main devolve protection.required_status_checks.checks até sem autenticação (conferido em 22/10). O gate pode comparar com REQUIRED_CHECKS e dar refuse se divergirem"
+    },
+    {
+      "id": "O2",
+      "title": "Usar filter=all nos check-runs e registrar a colisão de concorrência do schedule",
+      "detail": "commits/S/check-runs usa filter=latest por padrão; use filter=all ou check-suites/{id}/check-runs. O schedule do Security divide o grupo com o push na main (security.yml:15-17) e pode cancelá-lo"
+    },
+    {
+      "id": "O3",
+      "title": "Classificar 'tag ausente' de forma estrita",
+      "detail": "Só respostas explícitas de inexistência contam como ausente; 5xx, timeout e outros erros falham. A resposta real do GHCR entra na lista do primeiro run"
+    },
+    {
+      "id": "O4",
+      "title": "Mutantes extras em P1",
+      "detail": "always()/!cancelled()/failure() em build/publish/verify; download-artifact com run-id ou github-token; ${{ github.event.workflow_run.* }} dentro de run:; docker tag/push além de sha-S; packages: write no gate"
+    },
+    {
+      "id": "O5",
+      "title": "Fixture real sem as execuções pull_request do head do PR",
+      "detail": "Verify 39561779898 (suíte 107209420265) e Security 39561779918 (suíte 107209420311), conferidas por GET; o BUILD precisa capturá-las"
+    },
+    {
+      "id": "O6",
+      "title": "Esclarecer 'exatamente um item em pulls'",
+      "detail": "Filtrar e depois contar, ou contar a resposta crua; dizer o que fazer com PR aberto que contém S"
+    },
+    {
+      "id": "O7",
+      "title": "Concorrência no topo do workflow",
+      "detail": "Execuções de PR ou schedule com o mesmo SHA entram no grupo antes do if; uma pendente mais nova cancela a pendente que publicaria. Registrar"
+    },
+    {
+      "id": "O8",
+      "title": "Trivy da action e Trivy de L3",
+      "detail": "O mapeamento input -> TRIVY_INPUT com alvo '.' só se prova no primeiro run; registrar o SHA-256 do binário trivy no build-record"
+    },
+    {
+      "id": "O9",
+      "title": "Tags do esquema de referrers",
+      "detail": "push-to-registry pode criar tags sha256-<hex> no GHCR; trocar R5 por 'única tag de imagem criada pelo release'"
+    },
+    {
+      "id": "O10",
+      "title": "Metadados públicos como risco aceito",
+      "detail": "SBOM, relatório, logs e attestations (API e Rekor) são públicos e ligam o digest de produção ao release; registrar com ciência do usuário"
+    },
+    {
+      "id": "O11",
+      "title": "Cota e custo do GHCR privado",
+      "detail": "Uma publicação por SHA que sobrevive na ponta da main; registrar o limite do plano e que o push falha fechado"
+    },
+    {
+      "id": "O12",
+      "title": "§3.8: verificar o SBOM e a versão do gh",
+      "detail": "Verificar a attestation CycloneDX no servidor; exigir gh com attestation verify --bundle-from-oci --source-ref (o gh local 2.45.0 não tem attestation)"
+    },
+    {
+      "id": "O13",
+      "title": "README C9: qual é o digest de CI",
+      "detail": "O digest de CI passa a ser o de release-image.json, não o de certification/runtime-image.json"
+    },
+    {
+      "id": "O14",
+      "title": "Nome de artefato com attempt",
+      "detail": "'Re-run failed jobs' do publish não acha release-image-tar da tentativa anterior; documentar (falha fechada)"
+    }
+  ],
+  "newPremise": {
+    "answer": "sim (implícita, enquanto M1 não for redesenhado)",
+    "reason": "O artefato image.tar em repositório público expõe os bytes da imagem por pelo menos 24 h a qualquer conta GitHub, contra G6 ('GHCR privado') e a §8. Fora isso, não há segredo, conta, mudança de proteção nem action nova: GITHUB_TOKEN, Sigstore keyless já usado, GHCR de G6 e pins já revisados"
+  }
+}

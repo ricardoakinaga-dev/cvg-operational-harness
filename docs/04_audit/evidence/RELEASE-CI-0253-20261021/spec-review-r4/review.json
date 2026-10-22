@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "kind": "spec-review",
+  "task": "RELEASE-CI-0253-20261021",
+  "round": 4,
+  "date": "2026-10-22",
+  "reviewer": "crítico independente, contexto novo (Claude Code)",
+  "target": "docs/02_spec/0253_release_image_ghcr.md",
+  "specRevision": "r4",
+  "specSha256": "e69dfe057ed4ce141f74ead3ac570837140e87a00948fbdeeecb23e3910c4109",
+  "baseSha": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "userScript": {
+    "name": "criar-pacote-ghcr.sh",
+    "sha256": "b23bb991a9b973ef056776e2fe166df6dc4671e41c07052b1aa83e561b718a06",
+    "lines": 27,
+    "readOnly": true
+  },
+  "verdict": "APPROVE",
+  "r3MandatoryStatus": {
+    "R3-M1": {
+      "status": "RESOLVED",
+      "evidence": [
+        "R8: o release nunca cria o pacote; antes do push, gate (regra 8) e release passo 14 exigem tags/list autenticado 200, sonda anônima DENIED e sha-S com 404 MANIFEST_UNKNOWN e fora da lista; qualquer outra resposta dá refuse sem push",
+        "regra 8: token autenticado DENIED ou tags/list 401/403/404 = missing_or_inaccessible; anônimo com token = public; 5xx/timeout/corpo ilegível = error; NAME_UNKNOWN, 401/403, 406, código desconhecido e sha-S listada com 404 = error na tag; DENIED deixou de valer absent",
+        "release só roda com publish == 'true'; passo 14 sem continue-on-error entre o registro e o docker login",
+        "R5 e passo 16: placeholder-* ignoradas e nunca reescritas; push só de sha-S com a tag ausente",
+        "recuperação 'tornar privado e reexecutar' removida de §3.4, §8 e §9",
+        "P1 (passo package-precondition, tags/list e sonda anônima; mutantes 'push cria o pacote' e 'sondagem sem tags/list'), P3 (inexistente, público, 5xx/timeout, erros de tag, placeholder; mutantes DENIED/NAME_UNKNOWN como absent e público aceito), L4 (NAME_UNKNOWN e MANIFEST_UNKNOWN em registry:2) e L5 (CLI com inexistente e público, saída 1)",
+        "sonda anônima hoje: este pacote e um nome inexistente dão 403 DENIED; aquasecurity/trivy recebe token; no gate, ok exige tags/list 200 (existência e acesso), então DENIED significa privado",
+        "script: FROM scratch + README, sem label org.opencontainers.image.source, push com credencial do usuário; GitHub Docs: 'When you first publish a package that is scoped to your personal account, the default visibility is private'; a herança de visibilidade vale só para pacote criado por workflow com GITHUB_TOKEN, caminho bloqueado",
+        "ligação posterior ao repositório: 'inherits the access permissions (but not the visibility)'; herança automática só se ligado antes da primeira publicação; 'Manage Actions access' não é ligação"
+      ]
+    }
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "O1",
+      "priority": "antes do merge",
+      "title": "Forks e outros workflows do repositório alcançam o pacote privado",
+      "detail": "GitHub Docs: 'If you grant a public repository access to private packages, forks of the repository may be able to access the private packages.' A §9 dá Write ao repositório público; fork-pr-contributor-approval = first_time_contributors; com Write, qualquer workflow do repositório (branch ou PR interno) pode pedir packages: write. Impacto baixo (bytes deriváveis, sem segredo; integridade vem das attestations). Registrar em §8, ajustar R4 ('dentro do workflow; a ACL dá Write ao repositório inteiro'), incluir na ciência pré-merge da §9 e recomendar approval_policy = all_external_contributors (decisão do usuário)."
+    },
+    {
+      "id": "O2",
+      "title": "Origem dos campos gate.* de release-image.json",
+      "detail": "validateReleaseImageRecord exige gate.checks/protection/decision, mas o gate só exporta decision/publish/sha/digest, o release não tem actions/checks: read e P1 limita download-artifact ao artefato do release. Exportar gate_record (JSON das respostas da API) ou permitir baixar o artefato do gate pelo nome exato; mutante P4: publish que preenche gate.checks com a constante."
+    },
+    {
+      "id": "O3",
+      "title": "Fonte da config no subcomando build",
+      "detail": "Passo 13 'lê só de evidence/ e do checkout', mas configUser, cmd e label revision só existem ali na saída da Trivy. Ler o blob da config do tarball âncora (SHA-256 = config_digest), nunca da Trivy; mutante P4: usuário tirado de trivy-gate.json."
+    },
+    {
+      "id": "O4",
+      "title": "Passo 14 só com prova textual",
+      "detail": "Precondition que classifica e sai 0 sobrevive a P1 e P3. Usar modo CLI (release-image-gate.mjs precondition) e testar em L5/P3 inexistente/público/erro com saída ≠ 0; mutante correspondente."
+    },
+    {
+      "id": "O5",
+      "title": "Prova de existência mais forte e fixture de pior caso",
+      "detail": "Exigir tags/list não vazio (de preferência com placeholder-\\d{8}); fixture de pacote inexistente com manifesto 404 MANIFEST_UNKNOWN para matar o mutante 'ignorar tags/list'; P3 dizer que o fixture real dá publish com sondagem sintética ok/absent."
+    },
+    {
+      "id": "O6",
+      "title": "Corpo do token autenticado nunca gravado",
+      "detail": "classifyPackageProbe recebe só status e código; token de registro em variável com ::add-mask::; nenhum campo token em release-gate.json nem em $RUNNER_TEMP/release-gate/; P1/P4 e mutante."
+    },
+    {
+      "id": "O7",
+      "title": "Precisão de texto",
+      "detail": "§9 passo 3: 'Manage Actions access' não liga o pacote (Docs); a ligação vem do label source no primeiro push, sem herança automática e nunca de visibilidade. §1.7: citar 'default visibility is private' e 'but not the visibility'. §8: com papel Read, tags/list 200, gate publish e push 403 sem criar nada. §3.2: o Bearer é o token de registro."
+    },
+    {
+      "id": "O8",
+      "title": "Regra de P1 sobre o volume contra a limpeza",
+      "detail": "'Fora dos passos da Trivy, nenhum passo cita o volume' conflita com docker volume rm do passo 23. Isentar a limpeza ou reescrever como 'nenhum passo monta, inspeciona ou copia o volume'."
+    },
+    {
+      "id": "O9",
+      "title": "Script do usuário (fora da SPEC)",
+      "detail": "(a) sair 1 se a sonda anônima vier 200 e avisar para não dar acesso ao Actions; (b) DOCKER_CONFIG temporário; (c) remover write:packages do token do gh depois (gh auth refresh -h github.com -r write:packages) ou usar token clássico curto, porque o mesmo token serve aos agentes da máquina; (d) Lead guarda cópia do script (sha256 b23bb991…) e a saída (tag, data, código da sonda) como primeiro dado de que pacote privado existente dá DENIED."
+    },
+    {
+      "id": "O10",
+      "title": "Diagnóstico de falha",
+      "detail": "Release vermelho por CVE não mostra o motivo (saída JSON em arquivo, sem upload em falha): no mesmo passo, ler trivy-gate.json por readEvidenceFile e escrever os IDs em $GITHUB_STEP_SUMMARY antes de falhar. No gate, subir release-gate.json antes da saída 1 do refuse, ou registrar que o refuse deixa só o resumo."
+    }
+  ],
+  "newPremise": {
+    "answer": "NO",
+    "reason": "A r4 usa só GITHUB_TOKEN (com login de leitura no gate e no verify), Sigstore keyless, actions/* já pinadas, a imagem pinada da Trivy 0.75.0 (sem premissa, segundo o r3) e o GHCR do dono (G6). A criação do pacote privado com credencial própria, só com placeholder, e o Write ao Actions estão autorizados em 22/10, e o script fica nesse escopo. A ciência dos metadados públicos segue pendente, mas como pré-condição do merge. O acesso de forks e de outros workflows do repositório (O1) é consequência documentada do Write de 22/10, sem concessão nova, e deve entrar na mesma ciência pré-merge."
+  },
+  "verifiedFacts": [
+    "SHA-256 da SPEC r4 = e69dfe057ed4ce141f74ead3ac570837140e87a00948fbdeeecb23e3910c4109",
+    "GHCR anônimo: token deste pacote 403 DENIED; nome aleatório inexistente 403 DENIED; aquasecurity/trivy recebe token (v1:<repo>:<id>)",
+    "GHCR: manifesto de tag inexistente em pacote existente = 404 MANIFEST_UNKNOWN; tags/list pagina por Link rel=next",
+    "repositório: public, forks_count 0, 1 contribuidor; fork-pr-contributor-approval first_time_contributors; default_workflow_permissions read; sha_pinning_required false",
+    "GET do pacote deu 404, mas o token local não tem read:packages (inconclusivo)",
+    "docker/dockerfile:1.7 = sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e; ghcr.io/aquasecurity/trivy:0.75.0 = sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa",
+    "actions/attest@1e69f48a action.yml: create-storage-record (padrão true, exige push-to-registry), sbom-path até 16 MB, subject-name/subject-digest, node24",
+    "GitHub Docs: pacote pessoal nasce privado; ligação transmite permissões 'but not the visibility'; herança automática só com ligação antes da primeira publicação; Manage Actions access não é ligação; forks podem acessar pacote privado dado a repositório público; público não volta a privado; Container registry 'currently free'",
+    "nenhum teste existente varre todos os workflows; só o do produto proíbe docker push/login; nenhum fixa a linha 1 do Dockerfile"
+  ]
+}
