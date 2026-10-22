@@ -1,0 +1,55 @@
+{
+  "verdict": "APPROVE",
+  "specSha256": "d1e202691984cd824e2203e40cb99d90298c53ca0d8820ea312d1e63afaa7f59",
+  "base": { "head": "24cdb463", "engineSha256": "7f25da7d988628a34b87fe47418c88f2b607ae105a382b247fd5a6b5550a3be7", "b1Sha256": "47ec764fa146111e8aab22d515d9751a3b7e48f9e8dcddf6cba78a21eafc0eb7", "node": "v22.23.2" },
+  "r2MandatoryStatus": {
+    "R2-M1": {
+      "status": "RESOLVED",
+      "evidence": "A §5.2 define o prólogo de forma fechada e igual nos dois níveis: só no início do SourceFile e do Block corpo de função; sequência máxima de ExpressionStatement com StringLiteral puro (sem template, parênteses ou outra expressão); termina na primeira instrução que não é assim; diretiva só com o texto cru exato; bloco que não é corpo de função não tem prólogo; helper único. C12, C13 e C15 (e C14) são positivos na AB01 (26) e na AB02 (37), com detalhes f@2, f@4, f@4 e f@3. A AB08 nomeia mut-block (C12), mut-expr (C13), mut-fnlate (C15) e mut-tpl (C14), além dos seis da r1. Reexecução com os fixtures versionados: Node 22 carrega o produto, v7 PROVEN, b1 UNKNOWN com esses detalhes. Cada mutante dá PROVEN só no fixture nomeado e é igual à b1 nos outros 57. R2-O1 a R2-O3: as contagens 26 e 37 batem; os detalhes de C12–C15 batem com a saída medida; sha256sum -c aprova os 60 arquivos de fixtures-c, que são idênticos (diff -r) aos dos scratches r1 e r2."
+    }
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "R3-O1",
+      "what": "A AB08 diz que o C11 mata 'arquivo .ts/.cts/.mts tratado como strict', mas o C11 é .cts. mut-tsonly (fileStrict || /\\.ts$/, 2edfa3d7…) é igual à b1 nos 58 fixtures do catálogo e dá PROVEN no D04 (m.ts com o texto do C11; Node 22 carrega; v7 PROVEN; b1 UNKNOWN m.ts:f@2). Fica opcional porque exige criar uma regra de extensão contra o texto explícito da §5.2.",
+      "fix": "Acrescentar o D04 como positivo (C16, m.ts) ou reescrever o mutante da AB08 como '.cts tratado como strict (C11)'."
+    },
+    {
+      "id": "R3-O2",
+      "what": "A tabela do helper da §5.2 não está em nenhum aceite. mut-empty (';' não encerra o prólogo, 17d7011f…) dá PROVEN no D01 (arquivo, b1 f@4) e no D02 (função, b1 f@5). mut-fnsep (helper separado no corpo de função, com texto cozido e skipParentheses, 6a68079f…) dá PROVEN no D05 (escape), no D06 (parênteses) e no D09 (template), todos com b1 f@4. Os dois são iguais à b1 nos 58 fixtures do catálogo. Uma tabela que testa só o helper não mata o mut-fnsep. Fica opcional porque os dois contrariam 'termina na primeira instrução que não é' e 'helper único'.",
+      "fix": "Levar a tabela para a AB06 ou a AB08, medida pela análise nos dois níveis, ou acrescentar D01, D02, D05, D06, D08 e D09 como positivos."
+    },
+    {
+      "id": "R3-O3",
+      "what": "mut-textprefix (prólogo e diretiva lidos pelo texto da instrução, a6bbfb59…) é igual à b1 nos 58 fixtures do catálogo e dá PROVEN no D03a ('use strict' + ''), no D03e ('use strict' === 0) e no D03f ('use strict' ? 0 : 1). Nos três, o Node carrega, a v7 dá PROVEN e a b1 dá UNKNOWN f@3. Fica opcional porque abandona a definição pelo AST.",
+      "fix": "Acrescentar o D03a ou o D03e como positivo."
+    },
+    {
+      "id": "R3-O4",
+      "what": "O R2-O4 segue fora do texto. Com a tupla nova, a fase de gramática (2076–2100) é pulada, e uma raiz UNKNOWN_RUNTIME_SYNTAX que fosse a única da base sumiria. É seguro e não ocorre nos 74 fixtures nem na raiz.",
+      "fix": "Registrar a exceção na G3 ou na AB05, na própria SPEC."
+    },
+    {
+      "id": "R3-O5",
+      "what": "O R2-O5 segue aberto. Na §6, a linha 166 tem 3 células e o cabeçalho tem 2, e a AB08 (linha 174) tem uma célula vazia a mais. O GFM não renderiza a tabela; o prettier --check passa.",
+      "fix": "Deixar a tabela com 2 colunas em todas as linhas."
+    },
+    {
+      "id": "R3-O6",
+      "what": "Redação. (1) 'Classe envolvente (corpo ou extends)' deveria ser 'qualquer parte da classe'. (2) A AB02 cita 'a b1 da recon e a revisão r1', mas a tabela completa, com C12–C15, está no apêndice da r2. A tools-wide só emite na passagem normal (if (!census)), então não é referência para o census da AB06. (3) A §1.3 e a §3 contam 18 PROVEN falsos, e a AB01 conta 26.",
+      "fix": "Ajustar o texto: 'qualquer parte da classe'; citar a tabela da r2 e dizer que a tools-wide não cobre o census; ligar os números 18 e 26."
+    }
+  ],
+  "newPremise": {
+    "answer": "não",
+    "reason": "A r3 só fecha a definição de prólogo de diretivas, que é a do ECMAScript e a mesma da varredura da recon (scan.mjs hasUseStrict, linhas 59–66); por isso os números da recon continuam válidos. O resto da b1 não muda: o modo de load() (1821–1825), a emissão depois da C0 e antes do corpo (1858–1862), e o census, que só devolve violações (2443–2449). unknown() só acrescenta e deduplica. Não há migração nem troca de variante."
+  },
+  "checks": {
+    "scratch": "/mnt/dados/cvg-work/annexb-recon-runtime/critic-0252-r3/",
+    "files": ["mutate3.py", "probe3.mjs", "run3.mjs", "run3-out.json", "run3-stdout.txt", "summarize3.py", "summary3.txt", "sha256.txt", "fixtures/D01..D11", "fixtures-c-copy", "tools-mut-{tsonly,empty,fnsep,textprefix}"],
+    "matrix": "74 fixtures (43 da recon, C01–C15, D01–D11) no Node 22.23.2 real e em 14 motores (v7, b1, 4 mutantes da r1, 4 da r2 e 4 da r3); sem erro, sem limite e com validation true em todos",
+    "notChanged": ["SPEC", "código", "scripts", "ledger", "lockfile"],
+    "notRun": ["certify", "test:e2e", "git commit", "git push", "medição da raiz real"]
+  }
+}

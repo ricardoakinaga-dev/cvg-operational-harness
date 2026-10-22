@@ -1,0 +1,143 @@
+{
+  "task": "HISO005-P2-BUILD-0252",
+  "review": "code-review-r1",
+  "verdict": "REVISE",
+  "reviewed": {
+    "worktree": "/mnt/dados/cvg-work/cvg-d9ef-annexb-recon-20261021",
+    "base": "24cdb463",
+    "commits": ["1ed16fdbd", "b5a76d2df"],
+    "engineBaseSha256": "7f25da7d988628a34b87fe47418c88f2b607ae105a382b247fd5a6b5550a3be7",
+    "engineSha256": "559bc32d319f63feffaabd68f7b936e6d6f7585345314da421a37da9a0e3f907",
+    "b1ReferenceSha256": "47ec764fa146111e8aab22d515d9751a3b7e48f9e8dcddf6cba78a21eafc0eb7",
+    "specSha256": "d1e202691984cd824e2203e40cb99d90298c53ca0d8820ea312d1e63afaa7f59",
+    "node": "v22.23.2",
+    "criticScratch": "/mnt/dados/cvg-work/annexb-build0252-runtime/critic-r1/"
+  },
+  "mandatory": [
+    {
+      "id": "M1",
+      "kind": "PROVEN falso (G1)",
+      "what": "O laço de strict sobe por qualquer ancestral FunctionLike com 'use strict' no corpo. O nome computado de método, getter ou setter de objeto literal não é código da função (ECMA-262 §11.2): é avaliado no código envolvente sloppy. Uma função de bloco ali dentro sai sem a tupla, e o kernel prova.",
+      "evidence": {
+        "X06": "m.js: function f(){return 'k'}; const o = { [(() => { { function f(s){return require(s)} } f('./products/x.js'); return 'k' })()]() { 'use strict' } }. Node 22 carrega products/x.js; v7, v8 559bc32d e b1 da recon dão PROVEN.",
+        "X07": "Igual ao X06, com IIFE function(){} no nome computado: Node carrega, v8 dá PROVEN.",
+        "X10": "Igual ao X06, dentro de function g(): Node carrega, v8 dá PROVEN.",
+        "controls": "X08 (método sem diretiva): v8 UNKNOWN f@2. X12 (nome computado em classe): Node não carrega, sem tupla (correto)."
+      },
+      "fix": "for (let c = n.parent, a = c.parent; a && !strict; c = a, a = a.parent) strict = ts.isClassLike(a) || (ts.isFunctionLike(a) && a.body === c && ts.isBlock(c) && strictPrologue(c.statements, sf)). Testado em cópia (engine d548c5f5…): 74 fixtures (normal e census) e 52 linhas da tabela idênticos ao selado; X06, X07 e X10 passam a UNKNOWN com a tupla; X12 continua sem tupla.",
+      "required": [
+        "aplicar a correção",
+        "acrescentar X06, X07 e X10 ao catálogo como positivos (Node 22, v7 e b1-corrigida medidos) e X08 e X12 como controles",
+        "acrescentar o mutante 'nome computado conta como código da função', morto por X06",
+        "registrar uma errata da §5.2 ('contém' = a declaração está no corpo da função); a mudança é mais conservadora e não é premissa nova; o lead decide se exige r4",
+        "refazer AB07, catálogo vN, tabela do prólogo e AB08 sobre o engine novo"
+      ]
+    },
+    {
+      "id": "M2",
+      "kind": "mutante relevante vivo (teste não prova a exatidão do texto cru)",
+      "what": "A §5.2 exige o texto cru exatamente igual a 'use strict', mas a tabela não fixa espaço nas pontas nem prefixo ou sufixo dentro das aspas. Os mutantes mutA (.slice(1,-1).trim() === 'use strict') e mutB (.getText(sf).includes('use strict')) dão saída idêntica em todas as entradas da suíte (74 fixtures em normal e census, 52 linhas) e criam PROVEN falso.",
+      "evidence": {
+        "Y02": "'use strict ' no prólogo do arquivo: Node carrega; v8 UNKNOWN f@3; mutA e mutB PROVEN.",
+        "Y03": "' use strict' no prólogo de função: Node carrega; v8 UNKNOWN f@4; mutA e mutB PROVEN.",
+        "Y04": "'not use strict': Node carrega; v8 e mutA UNKNOWN; mutB PROVEN."
+      },
+      "required": [
+        "acrescentar a PROLOGUE (teste e prologue_node22.py) as linhas sloppy 'use strict ', ' use strict', 'use strict;' (com o ';' dentro das aspas) e 'not use strict', nos níveis file e function",
+        "confirmar as linhas novas no Node 22",
+        "incluir mutA e mutB na lista de mutantes da AB08"
+      ]
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "what": "base-vs-sealed.json só compara diagnósticos e tuplas (MATCH). O payload da base difere do selado do BUILD0247 em /semanticBoundary/compiledProvenance/referenceDigest (e4e4c39a… contra 2d94ee8b…), com a mesma receita, os mesmos 121 arquivos e o mesmo compilerTreeSha256. Registrar a diferença e a causa."
+    },
+    {
+      "id": "O2",
+      "what": "mutC (não descer na declaração já pega) sobrevive. Não há PROVEN falso, porque o arquivo já tem tupla. Um fixture com função de bloco dentro de outra função de bloco fixa o multiset de detalhes."
+    },
+    {
+      "id": "O3",
+      "what": "Registrar no relatório do BUILD as notas R3-O4 a R3-O6 (pendentes)."
+    },
+    {
+      "id": "O4",
+      "what": "No comentário da tabela do teste, citar prologue-table.json como a prova Node 22 das expectativas escritas à mão."
+    }
+  ],
+  "checks": [
+    {
+      "id": "spec-5.1-insertion",
+      "result": "PASS",
+      "detail": "Logo depois da C0 e antes de modules.set e block(); só em mode require; normal e census; só unknown(), sem cjsUnknown, rules, usage ou limites; detalhe name@linha com getStart."
+    },
+    {
+      "id": "spec-5.5-version",
+      "result": "PASS",
+      "detail": "semantic-kernel-v8-annexb-block-function"
+    },
+    {
+      "id": "spec-5.2-predicate",
+      "result": "FAIL (M1)",
+      "detail": "Pai, gerador/async, busca no pai, helper único e texto cru conformes. O nome computado de método de objeto literal herda o strict do corpo (PROVEN falso)."
+    },
+    {
+      "id": "diff-vs-b1",
+      "result": "INFO",
+      "detail": "A vN emite no census (a b1 não) e aceita declaração sem nome (a b1 exige n.name; é SyntaxError no Node, inofensivo). Mesmo laço de strict da b1: o defeito M1 também está na b1."
+    },
+    {
+      "id": "other-strict-escapes",
+      "result": "PASS",
+      "detail": "Classe (inclusive extends e nome computado) é strict (X12). Parâmetro não simples com 'use strict' é SyntaxError. Diferenças TS×V8 (HTML comments, conflict markers, ZWSP/NEL) só dão sloppy ou SyntaxError. Arquivo sem extensão em type:module dá UNKNOWN_ANCESTOR_FORMAT (Y01)."
+    },
+    {
+      "id": "test-expectations-origin",
+      "result": "PASS",
+      "detail": "gen_test.py gera de fixture-catalog.json (v7 7f25da7d e b1 47ec764f medidas antes da mudança) e afirma outras tuplas da b1 = v7. O harness do crítico reproduz a suíte: 0 divergências do selado contra o catálogo."
+    },
+    {
+      "id": "test-AB01-AB06",
+      "result": "PASS",
+      "detail": "Cobertos, inclusive census com refusalCensus em todos os fixtures, custo exato N05–N09 e notas R3-O1..O3 (D01–D11)."
+    },
+    {
+      "id": "test-prologue-table",
+      "result": "FAIL (M2)",
+      "detail": "52 linhas medidas pela análise em file/function/block/own, confirmadas no Node 22 (prologue-table.json allOk). Faltam linhas que fixem a exatidão nas pontas e por substring."
+    },
+    {
+      "id": "AB08-mutant-list",
+      "result": "PASS (parcial: execução em curso)",
+      "detail": "Os 18 da SPEC, mais R3 (tsonly, empty, fnsep, textprefix) e 3 extras. mutants.json na leitura: mut-own, mut-any, mut-arrow e mut-ts mortos pelos assassinos nomeados."
+    },
+    {
+      "id": "AB08-critic-mutants",
+      "result": "FAIL (M1, M2)",
+      "detail": "Vivos e relevantes: computed-key (código atual), mutA trim, mutB includes. Vivos e irrelevantes: mutC, mutE, mutF. Morto: mutD (P19, N10, N11, N12)."
+    },
+    {
+      "id": "AB07-independent",
+      "result": "PASS",
+      "detail": "v7×v8 normal e strict sem telemetria: só kernelVersion difere. v8: 11.723 diagnósticos, 10.833 tuplas, 0 provas, validation true, 0 UNKNOWN_ANNEXB_FUNCTION, normal = strict idêntico. Base × selado 0247: diagnósticos e tuplas iguais; referenceDigest difere (O1). Época: 1.410/1.410 inputs, 0 arquivos mudados."
+    },
+    {
+      "id": "regressions-literal",
+      "result": "PASS",
+      "detail": "Literal certo nas 7 suítes (0236, 0237×2, 0240, 0241, 0244, 0245, 0247). Fora de docs, nenhuma referência a v7, cjs-export-value ou 7f25da7d. check-product-boundary usa a constante."
+    },
+    {
+      "id": "commit-scope",
+      "result": "PASS",
+      "detail": "1ed16fdbd só tem docs; b5a76d2df só scripts/ e tests/; sha256 da SPEC no commit = d1e20269…"
+    },
+    {
+      "id": "not-run-this-round",
+      "result": "NOT_RUN",
+      "detail": "Gates estáticos, suíte B6 completa, unitária e consumidor fresco no Node 22. Depois do M1: refazer AB07, catálogo vN, tabela e AB08 sobre o engine novo."
+    }
+  ],
+  "at": "2026-10-22"
+}

@@ -1,0 +1,91 @@
+{
+  "task": "HISO005-P2-ANNEXB-RECON-20261021",
+  "round": "R1",
+  "reviewer": "crítico independente (subagente general-purpose, contexto novo, só leitura)",
+  "workDir": "/mnt/dados/cvg-work/annexb-recon-runtime/critic-r1",
+  "review": {
+    "verdict": "CHANGES_REQUIRED",
+    "mandatory": [
+      {
+        "id": "M1",
+        "what": "Falta em §1 metade da semântica do B.3.3.1 e falta o controle correspondente. Quando o nome ainda não é var, função ou parâmetro do escopo var, a var é criada na entrada da função e começa com undefined, mesmo que o bloco nunca seja avaliado. Ela sombreia o nome externo em todo o escopo var, inclusive antes do bloco. §1 só descreve a cópia feita quando a declaração é avaliada, e o 'why' da N06 (categoria 'not-evaluated') sugere que bloco não avaliado é seguro. Isso só vale ali porque f já é função do mesmo escopo. Esse caso gera PROVEN falso na main, e nenhum dos 21 positivos o exercita. Uma opção a que só copie na avaliação passaria em AB01–AB06 e deixaria esse PROVEN falso.",
+        "evidence": "Node 22.23.2 com fixtures meus em critic-r1/fixtures. X01 (const flag=true no topo; em g: if (flag) return 1; if (false) { function flag(){} }; return h(s)): products carregado, main PROVEN, b e b1 UNKNOWN_ANNEXB_FUNCTION flag@5. X02 (leitura antes de bloco avaliado) e X16 (const mode='safe'; if (false) { function mode(){} }) dão o mesmo resultado. Probe direto sem fixture (critic-r1/sem/a.cjs): h() lê flag antes de um if(false) e devolve undefined. O scanner da recon marca X01 com hazard=true, então a contagem de 0 na raiz continua valendo.",
+        "fix": "Em §1, descrever a criação da var com undefined na entrada da função (B.3.3.1 ii.2) e o sombreamento antes do bloco e com o bloco não avaliado. Corrigir o 'why' da N06 e a leitura de 'not-evaluated'. Acrescentar ao catálogo pelo menos dois positivos, X01 e X02 (ou X16), com os resultados da main, b e b1, e atualizar as contagens: 31→33 fixtures, 21→23 positivos, 11→13 PROVEN falsos. Atualizar também AB01, AB02, AB06, a pergunta da §8 e a linha da opção a, deixando claro que ela precisa modelar essa inicialização."
+      },
+      {
+        "id": "M2",
+        "what": "A âncora 8 atribui a violação falsa da N10 ao lexical() do censo (569–604). A medição refuta isso. A violação vem da passagem normal: find() não acha a ligação de bloco, que já morreu, e o require livre vira carregador (754–758 e 976–977, carga em 1084 → resolve → product 496–505). O lexical() só gera aresta falsa quando o argumento é finito. Os documentos também se contradizem: controls.json N10 traz expected.optionA = 'manter VIOLATION', enquanto spec §3 e §5.4 dizem que a opção a corrige a N10.",
+        "evidence": "Y01 = N10 sem a chamada g('./products/x.js'): main UNKNOWN [UNKNOWN_CJS_EXPORTS], sem violação. Logo, a violação da N10 vem do corpo. Y02 = require('./products/x.js') literal em g, sem chamada: main VIOLATION, que vem do censo (acquire em 703–718 → lexical). Y03 (literal com chamada): VIOLATION. Nos três o Node 22 não carrega products.",
+        "fix": "Reescrever o item 8 de §1 e a §5.4: a N10 sai pelo caminho do corpo (âncoras 4–5) e o lexical() só afeta argumento finito. Alinhar controls.json N10 expected.optionA com a spec. Acrescentar o negativo Y02 e dizer que a opção a só o corrige se mudar também o lexical()."
+      }
+    ],
+    "optional": [
+      {
+        "id": "O1",
+        "what": "§1: a frase 'não se aplica se ... é arguments' é imprecisa.",
+        "evidence": "Pelo B.3.3.1, arguments fica de fora só da criação e da inicialização. A cópia na avaliação continua. No Node 22, g(){ { function arguments(){} } return typeof arguments } devolve 'function'. O annexBApplies do scanner exclui arguments, o que subconta só uma métrica de sensibilidade (a raiz tem 0). b e b1 não são afetadas, porque arguments está em SPECIAL.",
+        "fix": "Dizer que arguments só não ganha var nova; a cópia na avaliação sobrescreve arguments. Ajustar a definição de annexBApplies."
+      },
+      {
+        "id": "O2",
+        "what": "A ressalva do A/B não traz a diferença de tuplas para a medição oficial.",
+        "evidence": "Base 10.761 contra 10.833 oficiais. Só a oficial tem 288 UNKNOWN_UNREACHED_INSTALLED_ENTRY. Só a base tem 155 UNKNOWN_INSTALLED_FILE_IDENTITY, 46 UNKNOWN_COMPILED_PROVENANCE e 15 UNKNOWN_INSTALLED_IDENTITY. Nodes (1.690.528) e states (134.899) são iguais aos oficiais, o que mostra que o corpo analisado é o mesmo. root-ab.mjs não grava bodyCoverage.modules.",
+        "fix": "Citar 10.761 contra 10.833 e a causa (sem referências instaladas e sem compilado). Citar nodes e states iguais e gravar bodyCoverage (1.341 módulos) no A/B."
+      },
+      {
+        "id": "O3",
+        "what": "Redação ambígua em §1.",
+        "evidence": "'Esses incluem 432 CJS sloppy' vem depois de três universos, mas 432 é só U4 (U3 tem 251). 'contra função, const ou nome do wrapper' pode ser lido como parâmetro do wrapper, que é o caso P19, excluído. Na âncora 1, 'como let' é impreciso: a ligação de bloco já nasce com o valor da função, sem TDZ.",
+        "fix": "Escrever 'os 7.859 de node_modules incluem 432 CJS sloppy' e 'nome declarado no topo do módulo'. Trocar 'como let' por 'ligação de bloco já com o valor'."
+      },
+      {
+        "id": "O4",
+        "what": "Faltam âncoras secundárias.",
+        "evidence": "Em 1548–1558, a escrita module.exports = x lê o module livre com !find(e,'module'): outro nome especial do kernel. Hoje ele está protegido pela C0 (MODULE_REFERENCE e FUNCTION_BODY_WRITE). O ponto de chamada do lexical() fica em 703–718.",
+        "fix": "Citar as duas âncoras e dizer por que a C0 já cobre module."
+      },
+      {
+        "id": "O5",
+        "what": "G3 conflita com a opção a.",
+        "evidence": "Corrigir valor pode transformar uma VIOLATION falsa em PROVEN quando não há outro UNKNOWN. Isso contradiz 'não cria PROVEN novo'. A N10 só escapa porque tem UNKNOWN_CJS_EXPORTS.",
+        "fix": "Restringir G3 à opção b ou ressalvar a opção a."
+      },
+      {
+        "id": "O6",
+        "what": "Controles extras que medi e que podem entrar no AB06.",
+        "evidence": "Positivos, todos PROVEN na main e UNKNOWN em b e b1: X03 (método de objeto literal sloppy), X06 (parâmetro de função externa), X11 (else sem chaves) e X14 (('use strict') entre parênteses). Negativos, todos PROVEN mantido em b e b1 e sem tupla nova: X04 (arrow com 'use strict'), X12 (strict herdado da função externa) e X13 (segunda diretiva do prólogo).",
+        "fix": "Incluir esses controles no catálogo ou nos aceites."
+      },
+      {
+        "id": "O7",
+        "what": "Cobertura e higiene.",
+        "evidence": "U4 cobre só node_modules/ da raiz. Há 16 .js/.cjs em node_modules aninhados, todos com 0 funções de bloco. task.json lista em outputs REPORT.md e review-r1/, que não existem.",
+        "fix": "Citar os 16 aninhados e corrigir a lista de outputs quando os arquivos existirem."
+      }
+    ],
+    "checksRun": [
+      "git rev-parse HEAD na worktree = 24cdb463; git status mostra só a pasta de evidência sem rastreio; sha256 do engine = 7f25da7d… (v7)",
+      "sed nas âncoras 569–604, 754–758, 902–915, 965–978, 1408–1409, 1517–1544, 1563–1566, 1568–1578 e 1865: todas batem com o código citado; grep 'strict' no engine: nenhuma ocorrência",
+      "grep Annex/sloppy/strict nas SPECs 0236–0247: nenhuma ocorrência; 0246 não existe, 0250 existe, logo a próxima livre é 0251",
+      "Varredura independente com @babel/parser (critic-r1/indep-scan.mjs), conta FunctionDeclaration com pai fora de Program, corpo de função, StaticBlock e TSModuleBlock: U1 1.341 (1.277 import, 64 require), 3 em 2 arquivos import, 0 em require; U2 1.349, 3 em 2; U3 3.874, 42 em 21, todas ESM, 251 CJS sloppy; U4 7.859, 20 em 11 (10 com 'use strict' de arquivo em require, 10 ESM), 432 CJS sloppy, 0 de bloco sloppy; node_modules aninhados: 16 arquivos, 0; 0 erros de parse em U1, U2 e U4",
+      "Diag v7r1diag: files = chaves de astFiles da passagem normal = 1.341 = bodyCoverage.modules.total do relatório oficial; modes 1.277/64; U1 ⊂ inputs; inputs v5r3 = inputs v7r1 (1.410)",
+      "real-v7r1-normal e -strict-report: status UNKNOWN, proofs [], violations [], validation valid true; sha256 iguais aos de task.json",
+      "Node 22.23.2 (env -i) com cópia dos 31 fixtures e observação própria (gancho load com registerHooks e require.cache): 31/31 batem com o esperado (21 positivos carregam products, 10 negativos não)",
+      "Kernel da main nos 31: PROVEN falso P01–P05, P12–P14, P16b, P17, P20 (11); UNKNOWN por outra causa P06–P11, P15, P18 (8); VIOLATION P16 e P19; PROVEN correto N01–N03 e N05–N09 (8); N04 UNKNOWN; N10 VIOLATION falsa. Variante b perde N06–N09, b1 (wide) perde N05–N09, controle (naive) acrescenta a tupla também em N01–N04",
+      "Fixtures extras X01–X16 e Y01–Y03 (resultados em M1, M2 e O6); probe critic-r1/sem/a.cjs: {g:'function', g2:'object', k:'function'} e h() = undefined",
+      "A/B na raiz (gz da recon): base = b = wide, 10.761 tuplas, sha 25b59109…; naive +3 (truncate@2011, marker@1844, count@1913) e 0 removidas; diferença contra a oficial em O2",
+      "sha256 de todos os inputsSha256 e runtimeFilesSha256 de task.json: 0 divergências",
+      "verify-root.py com saída em critic-r1/eval-root-check-critic.json: PASS, 1.410/1.410, head 228e7918"
+    ],
+    "numbersConfirmed": [
+      "31 fixtures, 21 positivos e 10 negativos; Node 22 bate em 31/31",
+      "11 PROVEN falsos na main (P01–P05, P12–P14, P16b, P17, P20); 8 UNKNOWN por outra causa; 2 violações verdadeiras; 8 PROVEN corretos; 1 UNKNOWN conservador (N04); 1 violação falsa (N10)",
+      "Custo nos fixtures: b perde 4 (N06–N09), b1 perde 5 (N05–N09), controle perde 8 (N01–N03, N05–N09); b e b1 fecham os 11",
+      "U1 = 1.341 arquivos (conjunto que a B6 carrega na passagem normal); 0 funções de bloco em módulo require e 3 em 2 arquivos import (ESM); o mesmo vale para U2 (1.349)",
+      "U3 3.874 com 42 em 21, todas ESM; U4 7.859 com 20 em 11 (10 strict de arquivo e 10 ESM); 432 CJS sloppy em U4 e 251 em U3; 0 de bloco em CJS sloppy em todos",
+      "0 provas na raiz (normal e strict); nenhuma prova depende do defeito",
+      "A/B: b e b1 = 0 tuplas novas e multiset igual ao da base (10.761, sha 25b59109…); controle = +3 tuplas em 2 arquivos; 229 contextos e 1.410 inputs",
+      "A recomendação b1 decorre dos números: custo 0 na raiz, 1 prova de fixture a mais que b, e predicado local. Ela também fecha os PROVEN falsos novos de M1 (X01, X02, X16) e de O6"
+    ]
+  }
+}

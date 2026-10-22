@@ -1,0 +1,4 @@
+# Correções da r2 sobre a revisão r1 da SPEC0252
+
+- **M1 (detecção de strict).** §5.2 reescrita: a busca começa no pai da declaração e olha só o prólogo do arquivo, o de cada função que contém a declaração e a classe envolvente; o corpo da própria função, funções irmãs, o tipo da função envolvente e a extensão TS não contam. C01, C02, C03 e C11 entram como positivos (AB01 com 22 PROVEN falsos; AB02 com 33 positivos). AB08 lista os mutantes com o fixture que mata cada um.
+- **Opcionais:** O1 (AB04 sem a b como aceite), O2 (detalhe `nome@linha` por `getStart`, deduplicação, gerador e `async` incluídos), O3 (o que a regra não toca, §5.1), O4 (multiset exato de detalhes e teste do census), O5 (C07 e C08 como negativos), O6 (base da AB07 e conferência com o selado do BUILD0247), O7 (AB09 alinhada à §8), O8 (âncoras 1821–1837 e 1858–1862) e O9 (alcance da G1).

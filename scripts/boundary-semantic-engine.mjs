@@ -24,7 +24,8 @@ import {
 // reimplemented. Its module hash is part of the profile (worker and parent).
 import { canonicalJson as installedCanonicalJson } from './boundary-installed-identity.mjs'
 
-export const SEMANTIC_KERNEL_VERSION = 'semantic-kernel-v7-cjs-export-value'
+export const SEMANTIC_KERNEL_VERSION =
+  'semantic-kernel-v8-annexb-block-function'
 export const INSTALLED_FILE_IDENTITY_PREMISE = 'installed-file-identity-v1'
 
 const SELF = fileURLToPath(import.meta.url)
@@ -1765,6 +1766,66 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
     visit(sf)
     return [...found].sort()
   }
+  // SPEC0252 §5.2: the directive prologue, one helper for the SourceFile and
+  // for a Block that is a function body. It is the maximal leading run of
+  // ExpressionStatements whose expression is a plain StringLiteral (no
+  // template, no parentheses, no other expression) and ends at the first
+  // statement that is not one, `;` included. A directive is strict only when
+  // the raw literal text without its quotes is exactly `use strict`.
+  function strictPrologue(statements, sf) {
+    for (const n of statements) {
+      if (!ts.isExpressionStatement(n) || !ts.isStringLiteral(n.expression))
+        return false
+      if (n.expression.getText(sf).slice(1, -1) === 'use strict') return true
+    }
+    return false
+  }
+  // SPEC0252 §5.2 (b1): every FunctionDeclaration with a body whose parent is
+  // not the SourceFile, a function or class static block body, nor a
+  // ModuleBlock (Annex B.3.3, B.3.4 and the labelled declaration of B.3.2),
+  // in sloppy code, as `name@line` (1-based line of getStart, no trivia).
+  // Strictness starts at the PARENT and looks only at the file prologue, the
+  // prologue of each function of any kind whose body contains the declaration
+  // and an enclosing class (any part of it); never at the declaration's own
+  // body, a sibling, the function kind or the file extension. Generators and
+  // async functions are included.
+  function annexBBlockFunctions(sf) {
+    const found = []
+    const fileStrict = strictPrologue(sf.statements, sf)
+    const functionBody = (b) =>
+      ts.isBlock(b) &&
+      (ts.isClassStaticBlockDeclaration(b.parent) ||
+        (ts.isFunctionLike(b.parent) && b.parent.body === b))
+    const visit = (n) => {
+      if (
+        ts.isFunctionDeclaration(n) &&
+        n.body &&
+        !ts.isSourceFile(n.parent) &&
+        !ts.isModuleBlock(n.parent) &&
+        !functionBody(n.parent)
+      ) {
+        // A function counts only when the declaration is inside its body: a
+        // computed name or a parameter is evaluated outside the function code.
+        let strict = fileStrict
+        for (let c = n, a = n.parent; a && !strict; c = a, a = a.parent)
+          strict =
+            ts.isClassLike(a) ||
+            (ts.isFunctionLike(a) &&
+              a.body === c &&
+              ts.isBlock(c) &&
+              strictPrologue(c.statements, sf))
+        if (!strict)
+          found.push(
+            (n.name?.text ?? '') +
+              '@' +
+              (sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1)
+          )
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    return found
+  }
   function load(file) {
     rules.add('K5')
     if (modules.has(file)) {
@@ -1860,6 +1921,13 @@ export function analyzeSemanticBoundary(input, { refusalCensus = false } = {}) {
         module.cjsUnknown = true
         unknown(file, 'UNKNOWN_CJS_EXPORTS', category)
       }
+    // SPEC0252 §5.1 (b1): one UNKNOWN_ANNEXB_FUNCTION root per block-level
+    // function declaration in sloppy code, before the body, in the normal pass
+    // and in the census. It only adds the tuple: no U for the importers, no
+    // rule, no usage, no limit.
+    if (mode === 'require')
+      for (const detail of annexBBlockFunctions(sf))
+        unknown(file, 'UNKNOWN_ANNEXB_FUNCTION', detail)
     modules.set(file, module)
     coverage.modules.started++
     if (block(sf.statements, env(), file).returned)

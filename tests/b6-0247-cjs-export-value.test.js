@@ -20,7 +20,7 @@ import { ownedRunParent } from './support/owned-run-parent.mjs'
 const parent = ownedRunParent('b6-0247-cjs')
 const pinnedNode = pinnedToolchainLocation().node
 const enginePath = path.resolve('scripts/boundary-semantic-engine.mjs')
-const KERNEL = 'semantic-kernel-v7-cjs-export-value'
+const KERNEL = 'semantic-kernel-v8-annexb-block-function'
 const TIMEOUT = 60000
 // SPEC0242 limits, unchanged (MC07).
 const LIMITS = {
