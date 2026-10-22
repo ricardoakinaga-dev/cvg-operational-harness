@@ -1009,6 +1009,12 @@ describe('SPEC0253 P1/O4/O6: package probe through curl --config -', () => {
     expect(accept.slice('Accept: '.length).split(', ').sort()).toEqual(
       [...PROBE_ACCEPT].sort()
     )
+    expect(accept.slice('Accept: '.length).split(', ').sort()).toEqual([
+      'application/vnd.docker.distribution.manifest.list.v2+json',
+      'application/vnd.docker.distribution.manifest.v2+json',
+      'application/vnd.oci.image.index.v1+json',
+      'application/vnd.oci.image.manifest.v1+json'
+    ])
     expect(run.result.stdout).toContain(`::add-mask::${REGISTRY_TOKEN}`)
     expect(outputs(run.githubOutput)).toMatchObject({
       untouched: '1',

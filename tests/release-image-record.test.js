@@ -802,7 +802,12 @@ describe('SPEC0253 P4: publish record', () => {
         (r) => (r.gate.protection[0].app_id = 1),
         /gate/
       ],
-      ['gate decision', (r) => (r.gate.decision = 'wait'), /gate/]
+      ['gate decision', (r) => (r.gate.decision = 'wait'), /gate/],
+      [
+        'well-formed gate block that the gate job did not emit',
+        (r) => (r.gate.checks.main[0].checkRunId += 1),
+        /gate_not_from_gate_job/
+      ]
     ]) {
       const copy = structuredClone(record)
       mutate(copy)
