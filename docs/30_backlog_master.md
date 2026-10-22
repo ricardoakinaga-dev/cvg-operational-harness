@@ -1,3 +1,9 @@
+# RELEASE-CI-0253-20261021 e HOSPITAL-SERVER-0393-20261021 — 22/10/2026
+
+- Release da imagem no GHCR privado ([SPEC0253](02_spec/0253_release_image_ghcr.md)): BUILD local concluído, em PR. Avança a [UP91-035](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-035) (publicação por digest com proveniência e SBOM atestados); deploy, verificação no destino e rollback continuam fora.
+- Antes do merge: pacote privado criado pelo usuário e ciência dos metadados públicos.
+- Servidor do hospital: requisitos e roteiro na [0393](03_build/0393_servidor_hospital_requisitos_e_instalacao.md); abertos [SRV-01–SRV-06](03_build/0374_plano_producao_harness.md#srv-01).
+
 # AUD0621 — remediação da auditoria crítica 0621 — 21/10/2026
 
 - F02–F24 e F26: fechados localmente, provados por teste e pela requalificação ([plano 0392](03_build/0392_aud0621_remediation.md)). F01 e F21: fechados localmente, com dependência de ambiente real. F25: fechado localmente pela frente PISO-008 (backup, restore, monitor externo, stop e imagem); falta o ambiente real (nft no host, receita no CI, monitor em outra máquina).

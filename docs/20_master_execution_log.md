@@ -1,3 +1,10 @@
+# RELEASE-CI-0253-20261021 e HOSPITAL-SERVER-0393-20261021 — release da imagem no GHCR privado e servidor do hospital — 21–22/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- Servidor: documento [0393](03_build/0393_servidor_hospital_requisitos_e_instalacao.md) com requisitos de compra e roteiro de instalação, medidos numa pilha local (pico de 1,29 CPU e 0,27 GiB; restore em 19,5 s; smoke 15/15). Achados: `migrate` reroda num `up` de serviço só (READMEs passam a usar `up -d --no-deps`); build não reprodutível (SRV-06). Cartões SRV-01–SRV-06 na 0374 §8 (`04ef5c57`).
+- SPEC0253: quatro revisões do crítico independente (r1–r3 REVISE, r4 APPROVE sem obrigatórios) (`cd0b50c1`). Correções principais: tarball nunca publicado (job único, Trivy em contêiner sem rede e sem montagem gravável), login do gate só de leitura, o release nunca cria o pacote.
+- BUILD local (`b991d4d07`, `6e313fb44`, `059b27c5a`, `2f763b94f`, `d7fcaeba8`): workflow, três scripts, testes P1–P5 e fixtures reais de `24cdb463`. 238 testes, 129/129 mutantes, L1–L5, `test:core` 6389 verdes, prettier, lint, typecheck e `docs:check-links` limpos. Crítico de código APPROVE na r1 e na r2; opcionais O1–O6, R2-O1 e R2-O2 implementados com mutantes. [Relatório](04_audit/evidence/RELEASE-CI-0253-20261021/build-report.md).
+- Lead: revisão do resultado (238/238 e gitleaks do intervalo limpo), linha e seção C9 do runbook a partir da [proposta](04_audit/evidence/RELEASE-CI-0253-20261021/readme-c9-proposal.md).
+
 # AUD0621-REMEDIATION-20261020 — remediação dos 26 achados da auditoria 0621 — 20–21/10/2026 (Claude Code)
 
 - Frentes e commits de candidata: produto `8cb00604` (F07–F11, F18, F21 produto, F24, F25), F01 `a9861469` (SPEC0176, migração 0029), runtime `92004871` (SPEC0248: F02–F04, F13, F14, F21 núcleo), persistência `0e91b96b` (SPEC0249, sem migração: F05, F06, F17, F19, F20, F26) e API/web `3a4f4b9d` + `b912b348` (SPEC0250: F12, F15, F16, F22, F23). Cada uma com first red na base, mutantes e crítico independente; detalhes na evidência de cada frente.
