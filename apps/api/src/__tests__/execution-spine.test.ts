@@ -435,6 +435,15 @@ describe('canonical execution HTTP boundary', () => {
     expect(toolCalls).toBe(0)
 
     const approvalId = paused.record.approvalId as string
+    // SPEC0251: the Approver decides a runtime approval only on an assigned
+    // case; the anonymous submission created the independent root.
+    await grantCase(app, {
+      kind: 'independent_execution',
+      resourceId: executionId,
+      operatorId: 'approver.synthetic',
+      role: 'Approver',
+      tenantId: tenantA as never
+    })
     const crossTenant = await app.inject({
       method: 'POST',
       url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,
@@ -560,6 +569,25 @@ describe('canonical execution HTTP boundary', () => {
     const app = buildServer({
       operationalExecution: store,
       operationalApprovalAuthority: approvalAuthority
+    })
+    // SPEC0251 (§6 adjustment a): created directly in the store, so the
+    // independent link is registered through the port before the grant.
+    await app.caseAuthority.registerExecutionLink(
+      tenantA as never,
+      accepted.record.id,
+      {
+        kind: 'independent',
+        conversationId: runtimeInput.conversationId,
+        sessionId: runtimeInput.sessionId
+      },
+      true
+    )
+    await grantCase(app, {
+      kind: 'independent_execution',
+      resourceId: accepted.record.id,
+      operatorId: 'approver.synthetic',
+      role: 'Approver',
+      tenantId: tenantA as never
     })
     const decision = await app.inject({
       method: 'POST',

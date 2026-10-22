@@ -1,0 +1,164 @@
+{
+  "verdict": "REVISE",
+  "specSha256": "96bdb2884f953695abe8584eb503ef5a84958d0c48b07fdd7c4b4cfce60892c8",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "base": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "reviewer": "independent critic (fresh context), 2026-10-21",
+  "mandatory": [
+    {
+      "id": "M1",
+      "summary": "O alvo 'execution' de authorizeCaseMutation contradiz a semantica de executionCase: null significa 'sem linha de vinculo' e nao checa existencia; o helper especificado nega Supervisor em execucao existente sem vinculo (contra S4 e contra a decisao Supervisor/Admin no tenant) e da 503 no esquema legado (contra S6).",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:69",
+        "packages/persistence/src/case-authority-postgres.ts:765-774",
+        "packages/persistence/src/case-authority.ts:663-666",
+        "packages/persistence/migrations/0029_case_assignment_authorization.sql:107-110 (case_id NOT NULL)",
+        "packages/persistence/src/case-authority-postgres.ts:652-658 (scoped -> requireCaseTables -> 503 no legado)"
+      ],
+      "fix": "Para kind 'execution', usar o algoritmo de readExecutionForCaller (apps/api/src/case-authorization/case-routes.ts:349-370): escopo assigned -> executionCase + canReadCase (null nega); existencia para todas as roles via executionReader(deps, snapshot).get -> 404; escopo tenant nao chama executionCase. Ou chamar readExecutionForCaller antes do fluxo atual. Corrigir o texto 'execucao sem vinculo tem caseId null'."
+    },
+    {
+      "id": "M2",
+      "summary": "Inventario de testes quebrados incompleto, com um arquivo fora do conjunto de escrita (apps/worker excluido) e testes de identidade trusted que usam GET /v1/tasks como rota protegida 200 e passam a receber 503.",
+      "evidence": [
+        "apps/worker/src/__tests__/operational-harness-iterative.test.ts:254-265 (Approver sem grant, espera 202; tambem no test:postgres, package.json:19)",
+        "apps/api/src/__tests__/approval-decision-atomicity.test.ts:107-113,164,220",
+        "apps/api/src/__tests__/approval-decision-atomicity-postgres.test.ts:157,392,441-442",
+        "apps/api/src/__tests__/execution-spine.test.ts:466-475,497-508",
+        "apps/api/src/__tests__/homolog-correlation-postgres.test.ts:141-146",
+        "apps/api/src/__tests__/journey-routes-coverage.test.ts:367-376,397",
+        "apps/api/src/__tests__/identity-trusted-resolver.test.ts:129",
+        "apps/api/src/__tests__/identity-composition-wiring.test.ts:80,187",
+        "apps/api/src/__tests__/operator-session.test.ts:100",
+        "apps/api/src/__tests__/production-boundary.test.ts:67 (NODE_ENV=production; principal sintetico recusado em case-routes.ts:118-122)"
+      ],
+      "fix": "Refazer o levantamento (apps/**, legacy/**, tests/**, incluindo apps/worker); incluir esses arquivos no conjunto de escrita (no minimo excecao explicita para o teste de apps/worker); fixar a politica sem afrouxar assercao: (a) runtime approval mantem Approver e cria vinculo/grant via registerExecutionLink + fixture; (b) testes de identidade trocam a rota de sonda por uma que nao dependa de caso, com as mesmas assercoes 401/200, ou configuram casePrincipalAuthority + principal quando NODE_ENV=test; nunca trocar 200 por 503 em teste de identidade; atualizar o skip-catalog dos PG tocados."
+    },
+    {
+      "id": "M3",
+      "summary": "POST /v1/journeys/tasks: o catch legado usa toSafeError e transforma CaseAuthorityError (case_not_found pela 4.2, case_integrity/case_authority_unavailable do snapshot) em 500; a 6 limita o legado a 'so a chamada do helper', o que contradiz I3/I7/S7 e no-store.",
+      "evidence": [
+        "legacy/packages/secretary-journeys/src/api-routes.ts:359-363",
+        "packages/shared/src/errors.ts:45-53",
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:69,105"
+      ],
+      "fix": "Especificar que o servidor injeta uma funcao que ja converte o erro via toSafeCaseError para DomainError (not_found/unauthorized/configuration_error, mensagem estatica), ou permitir que o catch legado use toSafeCaseError injetado + cache-control no-store; ajustar o conjunto de escrita da 6; citar a rota de jornada explicitamente na S7."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "summary": "Justificar na 1 a inclusao da runtime approval (texto literal, changesPremiseOf 7, freio continua via cancel); declarar que assumed/rejected tambem exigem vinculo; Approver sem vinculo mantem cancel (conversation:update) mas nao tem takeover.",
+      "evidence": [
+        "packages/shared/src/auth.ts:15-22",
+        "apps/api/src/server.ts:1091-1094",
+        "packages/persistence/src/attendance-approval.ts:65-76"
+      ]
+    },
+    {
+      "id": "O2",
+      "summary": "2: principal ausente so da 401 em trusted; readSnapshot nao fica em case-routes:101-158.",
+      "evidence": [
+        "apps/api/src/case-authorization/case-routes.ts:107-139"
+      ]
+    },
+    {
+      "id": "O3",
+      "summary": "I3: deixar explicito que 'root ausente' da 404 so para Operator/Approver.",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:33"
+      ]
+    },
+    {
+      "id": "O4",
+      "summary": "Fixar a ordem: na runtime approval, parse do corpo e chave de idempotencia antes do helper; na jornada, validador de sessionId e helper depois de !tenantId/!journeys.",
+      "evidence": [
+        "apps/api/src/server.ts:1216-1217",
+        "legacy/packages/secretary-journeys/src/api-routes.ts:343-351"
+      ]
+    },
+    {
+      "id": "O5",
+      "summary": "Not found do port (400 invalid_action) depois do helper: declarar inalcancavel ou mapear para 404.",
+      "evidence": [
+        "packages/persistence/src/repositories/task-repository.ts:222",
+        "packages/persistence/src/repositories/approval-repository.ts:62-63"
+      ]
+    },
+    {
+      "id": "O6",
+      "summary": "Tirar listPage de RuntimePersistence.tasks/approvals, como a SPEC0250 fez com updateStatus.",
+      "evidence": [
+        "docs/02_spec/0250_api_tasks_session_approvals.md:67,89"
+      ]
+    },
+    {
+      "id": "O7",
+      "summary": "4.4: painel de tarefas nao tem espaco de mensagem; ajustar 'nenhuma outra mudanca visual'.",
+      "evidence": [
+        "apps/web/src/App.tsx:156,1124"
+      ]
+    },
+    {
+      "id": "O8",
+      "summary": "Provas: positivos por rota na S3 (incluindo jornada e POST approvals), Admin e ApproverA na S1, no-store nos 200 das listas, mesmo log para ausente e sem grant, replay idempotente por OperatorB, corpo comparado sem meta.correlationId.",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:113-122"
+      ]
+    },
+    {
+      "id": "O9",
+      "summary": "Timing: 'sem grant' faz uma consulta a mais (hasActiveGrant); paridade com SPEC0176; opcional devolver granted na mesma instrucao.",
+      "evidence": [
+        "apps/api/src/case-authorization/case-routes.ts:150-158"
+      ]
+    },
+    {
+      "id": "O10",
+      "summary": "No modo postgres de cliente unico, read() nao abre transacao; preferir COUNT+pagina numa instrucao so.",
+      "evidence": [
+        "packages/persistence/src/case-authority-postgres.ts:486-489"
+      ]
+    },
+    {
+      "id": "O11",
+      "summary": "I4/9: escrita em transacao separada depois do snapshot; efeito pode ser confirmado depois do COMMIT da revogacao; documentar; checar o grant na transacao de escrita fica como evolucao.",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:34,139"
+      ]
+    },
+    {
+      "id": "O12",
+      "summary": "Imutabilidade vem do codigo, nao de trigger; FKs da 0001 sao NOT VALID; root pode nascer depois (null->X), monotonico e seguro.",
+      "evidence": [
+        "packages/persistence/migrations/0001_tenant_isolation.sql:770-787"
+      ]
+    },
+    {
+      "id": "O13",
+      "summary": "I7: usar CaseAuthorityError ? toSafeCaseError : toSafeError + statusCodeForError, para nao perder 413/414/415.",
+      "evidence": [
+        "apps/api/src/server.ts:1616-1619",
+        "apps/api/src/case-authorization/case-routes.ts:166-175"
+      ]
+    },
+    {
+      "id": "O14",
+      "summary": "Adendo SPEC0107: criar secoes de PATCH e POST /v1/approvals, citar runtime approval e /v1/journeys/tasks, registrar 400->404 frente a regra de Versionamento.",
+      "evidence": [
+        "docs/02_spec/0107_contratos_de_api.md:57-93"
+      ]
+    },
+    {
+      "id": "O15",
+      "summary": "Esquema legado: taskCase/listTasks filtram tenant pelo join em conversations.tenant_id (sem tasks/sessions.tenant_id), como coreSessionCase legado.",
+      "evidence": [
+        "packages/persistence/src/case-authority-postgres.ts:705-718"
+      ]
+    }
+  ],
+  "newPremise": {
+    "answer": "nao",
+    "reason": "Runtime approval cabe em 'decidir approval so no caso atribuido': as excecoes enumeradas (takeover, input/cancel) sao fechadas, o registro cita SPEC0176 7 (cuja unica mutacao de approval e a runtime approval) e o freio continua por cancel e pelo Supervisor. 400->404 e consequencia da indistinguibilidade. O 503 em trusted para Supervisor/Admin e a politica de principal da SPEC0176 ('mesma regra'), ja no 9, sem ambiente operacional afetado. Nenhuma migracao. A correcao do M2 e decisao de conjunto de escrita, nao de produto."
+  }
+}

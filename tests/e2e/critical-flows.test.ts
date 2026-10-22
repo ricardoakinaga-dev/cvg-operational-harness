@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../../apps/api/src/server.ts'
+import { grantCase } from '../../apps/api/src/__tests__/case-authorization-fixtures.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -42,6 +43,14 @@ describe('critical runtime flows', () => {
       status: string
     }>
 
+    // SPEC0251 (§6 adjustment a): the Approver decides only on an assigned
+    // case.
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: inboundBody.data.conversationId,
+      operatorId: 'approver.shift-a',
+      role: 'Approver'
+    })
     const decision = await app.inject({
       method: 'POST',
       url: `/v1/approvals/${approvalBody.data.id}/decision`,

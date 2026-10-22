@@ -15,6 +15,7 @@ import {
 } from '@cvg/persistence'
 import type { ApprovalRequestInput } from '@cvg/approval-engine'
 import { assertApprovalDecisionAuditDedupe, buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 import { reconcileStuckApprovalDecisions } from '../../../worker/src/homolog-worker.ts'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -148,6 +149,34 @@ async function countDecisionEvents(
     [approvalId]
   )
   return result.rows[0].count as number
+}
+
+/**
+ * SPEC0251 (§6 adjustment a): the fixture execution is created directly in
+ * the store, so its independent case link is registered through the port and
+ * the deciding Approver receives the grant before deciding.
+ */
+async function grantExecution(
+  app: ReturnType<typeof buildServer>,
+  executionId: string
+) {
+  await app.caseAuthority.registerExecutionLink(
+    tenantA as never,
+    executionId,
+    {
+      kind: 'independent',
+      conversationId: 'conversation_atomic_pg_synthetic',
+      sessionId: 'session_atomic_pg_synthetic'
+    },
+    true
+  )
+  await grantCase(app, {
+    kind: 'independent_execution',
+    resourceId: executionId,
+    operatorId: 'approver.synthetic',
+    role: 'Approver',
+    tenantId: tenantA as never
+  })
 }
 
 function decisionHeaders(commandKey: string) {
@@ -374,6 +403,7 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           operationalExecution: flakyStore as never,
           operationalApprovalAuthority: authority as never
         })
+        await grantExecution(app, executionId)
         const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
         const first = await app.inject({
           method: 'POST',
@@ -422,6 +452,7 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           operationalExecution: store as never,
           operationalApprovalAuthority: authority as never
         })
+        await grantExecution(app, executionId)
         const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
         const [first, second] = await Promise.all([
           app.inject({
@@ -495,6 +526,7 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           operationalExecution: store as never,
           operationalApprovalAuthority: authority as never
         })
+        await grantExecution(app, executionId)
         const first = await app.inject({
           method: 'POST',
           url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,

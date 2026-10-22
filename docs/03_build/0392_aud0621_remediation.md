@@ -59,6 +59,6 @@ Um crítico independente reexecutou as sondas do auditor (`AUD-CRITICAL-20261020
 
 ## Decisões que ficam com o usuário
 
-1. Escopo por caso em tasks e approvals (resíduo P1 do F01): SPEC nova, porque muda o modelo de autorização aprovado na SPEC0176.
+1. Escopo por caso em tasks e approvals (resíduo P1 do F01): SPEC nova, porque muda o modelo de autorização aprovado na SPEC0176. Decidido em 21/10: [SPEC0251](../02_spec/0251_case_scope_tasks_approvals.md), com BUILD local em 22/10.
 2. Produtor verificado de `case_principals` ligado ao login OIDC/MFA (UP91-025) antes de qualquer composição trusted servir leitura de caso.
 3. D2 (organização clínica por modelo) continua não concedida.

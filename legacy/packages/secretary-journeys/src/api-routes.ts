@@ -1,8 +1,10 @@
 /**
  * LEGACY CONTENT — HTTP routes of the Esmeralda V2 tutor/pet/appointment
  * journeys, moved from apps/api/src/server.ts by SPEC-LEGACY-004 (PR-L04),
- * slice 2. The route bodies are byte-for-byte the former ones; the API passes
- * its identity, tenant and error helpers in through the composition point.
+ * slice 2. The route bodies are byte-for-byte the former ones, except
+ * `POST /v1/journeys/tasks`, which SPEC0251 puts behind the case authority
+ * injected by the API; the API passes its identity, tenant, case and error
+ * helpers in through the composition point.
  */
 import type { FastifyInstance } from 'fastify'
 import type { TenantId } from '@cvg/platform'
@@ -32,6 +34,24 @@ export interface SecretaryJourneyRouteDependencies {
   ) => TenantId
   resolveOptionalRequestTenant: (headers: Record<string, unknown>) => TenantId
   statusCodeForError: (code: string) => number
+  /**
+   * SPEC0251 §4.3 — case precondition of a journey task: the operator must
+   * be able to act on the session's case (404 otherwise). Injected by the API.
+   */
+  authorizeTaskSession: (
+    identity: OperatorIdentity,
+    tenantId: TenantId,
+    sessionId: string
+  ) => Promise<void>
+  /**
+   * SPEC0251 I7 — error mapping of the journey task route: the case branch
+   * ahead of the API's generic mapping, with the HTTP status. Injected by the API.
+   */
+  toSafeTaskError: (error: unknown) => {
+    status: number
+    code: string
+    message: string
+  }
 }
 
 export function registerSecretaryJourneyRoutes(
@@ -44,7 +64,9 @@ export function registerSecretaryJourneyRoutes(
     requireAuthenticatedMutations,
     resolveDataPlaneTenant,
     resolveOptionalRequestTenant,
-    statusCodeForError
+    statusCodeForError,
+    authorizeTaskSession,
+    toSafeTaskError
   } = dependencies
 
   app.get('/v1/journeys/owners/search', async (request, reply) => {
@@ -349,16 +371,34 @@ export function registerSecretaryJourneyRoutes(
           'invalid_action',
           'Journey persistence is unavailable in this mode'
         )
-      const body = request.body as Record<string, unknown>
+      const body = request.body
+      // SPEC0251 §4.3: the session id follows CreateInternalTaskSchema
+      // (string of 1 to 160 characters) and is validated before the case.
+      const sessionId =
+        typeof body === 'object' && body !== null && !Array.isArray(body)
+          ? (body as Record<string, unknown>).sessionId
+          : undefined
+      if (
+        typeof sessionId !== 'string' ||
+        sessionId.length < 1 ||
+        sessionId.length > 160
+      ) {
+        throw new DomainError(
+          'validation_failed',
+          'Journey task session is invalid'
+        )
+      }
+      if (identity) await authorizeTaskSession(identity, tenantId, sessionId)
       const task = await journeys.createJourneyTask({
         ...(body as Parameters<JourneyRepository['createJourneyTask']>[0]),
         tenantId,
         auditContext: journeyAuditContext(identity, correlationId)
       } as Parameters<JourneyRepository['createJourneyTask']>[0])
+      reply.header('cache-control', 'no-store')
       return ok(task, correlationId)
     } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
+      const safeError = toSafeTaskError(error)
+      reply.code(safeError.status).header('cache-control', 'no-store')
       return fail(safeError.code, safeError.message, correlationId)
     }
   })

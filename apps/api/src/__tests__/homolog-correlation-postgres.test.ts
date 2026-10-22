@@ -18,6 +18,7 @@ import {
 } from '@cvg/persistence'
 import type { ApprovalRequestInput } from '@cvg/approval-engine'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const pgRequired = process.env.AUD19_PG_REQUIRED === '1'
@@ -127,10 +128,31 @@ describe('durable correlation without PII (AUD19-009)', () => {
           approvalId: requested.approvalId,
           reason: 'waiting for correlation proof'
         })
-        app = buildServer({
+        const server = buildServer({
           persistence: { kind: 'postgres', client: pool as never },
           operationalExecution: store as never,
           operationalApprovalAuthority: authority as never
+        })
+        app = server
+        // SPEC0251 (§6 adjustment a): the execution was created directly in
+        // the store, so its independent link is registered through the port
+        // and the deciding Approver receives the grant.
+        await server.caseAuthority.registerExecutionLink(
+          tenantA as never,
+          accepted.record.id,
+          {
+            kind: 'independent',
+            conversationId: 'conversation_correlation_synthetic',
+            sessionId: 'session_correlation_synthetic'
+          },
+          true
+        )
+        await grantCase(server, {
+          kind: 'independent_execution',
+          resourceId: accepted.record.id,
+          operatorId: 'approver.synthetic',
+          role: 'Approver',
+          tenantId: tenantA as never
         })
         const decision = await app.inject({
           method: 'POST',

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -23,6 +24,26 @@ async function createFixtureSession(
     }
   })
   return (inbound.json() as Envelope<{ sessionId: string }>).data.sessionId
+}
+
+/** Same fixture, also returning the conversation for a SPEC0251 grant. */
+async function createFixtureCase(
+  app: ReturnType<typeof buildServer>,
+  suffix: string
+) {
+  const inbound = await app.inject({
+    method: 'POST',
+    url: '/v1/webhooks/channels/whatsapp/messages',
+    payload: {
+      externalMessageId: `operator-identity-${suffix}`,
+      senderRef: '+551155551111',
+      body: 'Atendimento ficticio para validar identidade operacional',
+      receivedAt: '2026-04-29T16:00:00-03:00'
+    }
+  })
+  return (
+    inbound.json() as Envelope<{ sessionId: string; conversationId: string }>
+  ).data
 }
 
 describe('operator identity RBAC hardening', () => {
@@ -122,7 +143,7 @@ describe('operator identity RBAC hardening', () => {
 
   it('audits approval decisions with the controlled operator identity from headers', async () => {
     const app = buildServer()
-    const sessionId = await createFixtureSession(
+    const { sessionId, conversationId } = await createFixtureCase(
       app,
       'approval-controlled-identity'
     )
@@ -138,6 +159,24 @@ describe('operator identity RBAC hardening', () => {
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>
 
+    // AUD-0621 F01 / SPEC0176: an Approver without a read_case grant gets
+    // the static 404 on the session reader; the decision actor is asserted
+    // on the full tenant audit reader (approval events are not session-linked).
+    // Read before the SPEC0251 grant, while the Approver is unassigned.
+    const limitedAudit = await app.inject({
+      method: 'GET',
+      url: `/v1/audit/sessions/${sessionId}`,
+      headers: {
+        'x-operator-id': 'approver.shift-a',
+        'x-operator-role': 'Approver'
+      }
+    })
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: conversationId,
+      operatorId: 'approver.shift-a',
+      role: 'Approver'
+    })
     const decision = await app.inject({
       method: 'POST',
       url: `/v1/approvals/${approvalBody.data.id}/decision`,
@@ -146,17 +185,6 @@ describe('operator identity RBAC hardening', () => {
         'x-operator-role': 'Approver'
       },
       payload: { decision: 'approved', note: 'identidade controlada' }
-    })
-    // AUD-0621 F01 / SPEC0176: an Approver without a read_case grant gets
-    // the static 404 on the session reader; the decision actor is asserted
-    // on the full tenant audit reader (approval events are not session-linked).
-    const limitedAudit = await app.inject({
-      method: 'GET',
-      url: `/v1/audit/sessions/${sessionId}`,
-      headers: {
-        'x-operator-id': 'approver.shift-a',
-        'x-operator-role': 'Approver'
-      }
     })
     const audit = await app.inject({
       method: 'GET',
@@ -273,7 +301,7 @@ describe('operator identity RBAC hardening', () => {
 
   it('requires task lifecycle updates to use an Operator identity from headers', async () => {
     const app = buildServer()
-    const sessionId = await createFixtureSession(
+    const { sessionId, conversationId } = await createFixtureCase(
       app,
       'task-controlled-identity'
     )
@@ -300,6 +328,23 @@ describe('operator identity RBAC hardening', () => {
       },
       payload: { status: 'in_progress' }
     })
+    // AUD-0621 F01 / SPEC0176: an unassigned Operator gets the static 404 on
+    // the session reader; the task actor is asserted on the full tenant
+    // audit reader (task events are not session-linked by their producer).
+    // Read before the SPEC0251 grant, while the Operator is unassigned.
+    const limitedAudit = await app.inject({
+      method: 'GET',
+      url: `/v1/audit/sessions/${sessionId}`,
+      headers: {
+        'x-operator-id': 'operator.shift-a',
+        'x-operator-role': 'Operator'
+      }
+    })
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: conversationId,
+      operatorId: 'operator.shift-a'
+    })
     const accepted = await app.inject({
       method: 'PATCH',
       url: `/v1/tasks/${taskBody.data.id}/status`,
@@ -308,17 +353,6 @@ describe('operator identity RBAC hardening', () => {
         'x-operator-role': 'Operator'
       },
       payload: { status: 'in_progress' }
-    })
-    // AUD-0621 F01 / SPEC0176: an unassigned Operator gets the static 404 on
-    // the session reader; the task actor is asserted on the full tenant
-    // audit reader (task events are not session-linked by their producer).
-    const limitedAudit = await app.inject({
-      method: 'GET',
-      url: `/v1/audit/sessions/${sessionId}`,
-      headers: {
-        'x-operator-id': 'operator.shift-a',
-        'x-operator-role': 'Operator'
-      }
     })
     const audit = await app.inject({
       method: 'GET',

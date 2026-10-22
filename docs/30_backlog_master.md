@@ -1,3 +1,9 @@
+# UP91-018-CASE-SCOPE-20261021 — 22/10/2026
+
+- Escopo por caso em tasks e approvals ([SPEC0251](02_spec/0251_case_scope_tasks_approvals.md)): BUILD local concluído, em PR. Fecha o resíduo P1 do F01 da AUD0621.
+- Abertos no [UP91-018](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-018): checar o grant dentro da transação de escrita (hoje a autorização usa snapshot anterior, mesma regra das leituras); criação de task e approval em dois passos; HEAD das listas sem `no-store`.
+- Próximo: [UP91-025](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-025) com IdP sintético local (decisão de 21/10).
+
 # AUD0621 — remediação da auditoria crítica 0621 — 21/10/2026
 
 - F02–F24 e F26: fechados localmente, provados por teste e pela requalificação ([plano 0392](03_build/0392_aud0621_remediation.md)). F01 e F21: fechados localmente, com dependência de ambiente real. F25: fechado localmente pela frente PISO-008 (backup, restore, monitor externo, stop e imagem); falta o ambiente real (nft no host, receita no CI, monitor em outra máquina).

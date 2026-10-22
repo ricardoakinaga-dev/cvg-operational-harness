@@ -180,8 +180,17 @@ describe('tenant-scoped inbound data plane', () => {
     expect(tasksB.json().data).toHaveLength(1)
     expect(approvalsA.json().data).toHaveLength(1)
     expect(approvalsB.json().data).toHaveLength(1)
-    expect(crossTenantTask.statusCode).toBe(400)
-    expect(crossTenantApproval.statusCode).toBe(400)
+    // SPEC0251 I3: another tenant's task or approval is the static 404.
+    expect(crossTenantTask.statusCode).toBe(404)
+    expect(crossTenantTask.json().error).toEqual({
+      code: 'not_found',
+      message: 'Resource not found'
+    })
+    expect(crossTenantApproval.statusCode).toBe(404)
+    expect(crossTenantApproval.json().error).toEqual({
+      code: 'not_found',
+      message: 'Resource not found'
+    })
   })
 
   it('does not expose audit events for a session outside the operator tenant', async () => {

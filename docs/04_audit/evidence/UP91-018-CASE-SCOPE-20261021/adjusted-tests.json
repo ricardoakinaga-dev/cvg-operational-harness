@@ -1,0 +1,183 @@
+{
+  "task": "UP91-018-CASE-SCOPE-20261021",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md §6",
+  "rules": {
+    "a": "conceder o vínculo pela fixture existente (provisionPrincipal, grantCase), mantendo a role; execução criada direto no store → registerExecutionLink antes do grant; conversa/sessão semeada no banco → root antes do grant; worker e E2E por import relativo ou app.caseAuthority",
+    "b": "trocar a expectativa 400→404 com o corpo novo",
+    "c": "trocar a rota de sonda trusted por uma protegida sem escopo de caso permitida à role (Supervisor: GET /v1/observability/audit-evidence), mantendo asserções e causa",
+    "d": "esquema legado sem 0029: mutação por Operator/Approver espera 503; a prova de efeito passa ao Supervisor ou a uma asserção equivalente no esquema com 0029"
+  },
+  "assertionsLoosened": 0,
+  "files": [
+    {
+      "file": "apps/api/src/__tests__/task-lifecycle.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "PATCH por Operator sem vínculo. O fixture devolve também conversationId e o Operator recebe o grant. A leitura de auditoria de sessão do Operator ainda sem vínculo (404, SPEC0176) passa a ser feita antes do grant, com a mesma identidade e a mesma asserção."
+    },
+    {
+      "file": "apps/api/src/__tests__/task-status-atomicity.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "PATCH por Operator sem vínculo (P1/P3); o fixture concede o grant na conversa."
+    },
+    {
+      "file": "apps/api/src/__tests__/task-approval-pagination.test.ts",
+      "rules": [
+        "a",
+        "b"
+      ],
+      "reason": "Decisão (Approver) e PATCH (Operator) sem vínculo → grant das duas roles na conversa do tenant; PATCH na task de outro tenant: 400 invalid_action → 404 not_found 'Resource not found'."
+    },
+    {
+      "file": "apps/api/src/__tests__/tenant-inbound-isolation.test.ts",
+      "rules": [
+        "b"
+      ],
+      "reason": "PATCH e decisão em recurso de outro tenant: 400 → 404 not_found 'Resource not found'."
+    },
+    {
+      "file": "apps/api/src/__tests__/server-boundary-envelope.test.ts",
+      "rules": [
+        "a",
+        "b"
+      ],
+      "reason": "App com requireAuthenticatedMutations: criação de task/approval e PATCH por Operator sem vínculo → grant; decisão de approval ausente e PATCH de task ausente: 400 invalid_action → 404 not_found."
+    },
+    {
+      "file": "apps/api/src/__tests__/operator-identity-rbac.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Decisão (Approver) e PATCH (Operator) sem vínculo → grant via helper novo createFixtureCase (mesmo fixture, devolvendo conversationId). As leituras de auditoria de sessão sem vínculo (404) passam para antes do grant, mesma identidade e asserção."
+    },
+    {
+      "file": "apps/api/src/__tests__/observability.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Decisão por Approver sem vínculo; o evento approval.decided esperado volta com o grant."
+    },
+    {
+      "file": "apps/api/src/__tests__/health.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Decisão por Approver sem vínculo (allowedDecision)."
+    },
+    {
+      "file": "apps/api/src/__tests__/attendance-approval-atomic.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Decisões por Approver sem vínculo; o setup concede o grant na conversa."
+    },
+    {
+      "file": "apps/api/src/__tests__/approval-decision-atomicity.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Runtime approval de execução criada direto no store: registerExecutionLink (plano independent) e grant ao Approver (e ao approver.other do teste de repetição)."
+    },
+    {
+      "file": "apps/api/src/__tests__/execution-spine.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Runtime approval por Approver: grant no root independent criado pela submissão; no teste de recuperação REQUESTED a execução foi criada no store, então registerExecutionLink antes do grant."
+    },
+    {
+      "file": "apps/api/src/__tests__/journey-routes-coverage.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "POST /v1/journeys/tasks autenticado sem vínculo. O app do teste confia só em operator.journeys, então o grant usa app.caseAuthority diretamente (provisionPrincipal + putAssignment no root da conversa)."
+    },
+    {
+      "file": "apps/api/src/__tests__/identity-trusted-resolver.test.ts",
+      "rules": [
+        "c"
+      ],
+      "reason": "GET /v1/tasks como sonda trusted sem casePrincipalAuthority (esperava 200) → GET /v1/observability/audit-evidence (Supervisor); 401/200/success mantidos."
+    },
+    {
+      "file": "apps/api/src/__tests__/identity-composition-wiring.test.ts",
+      "rules": [
+        "c"
+      ],
+      "reason": "Quatro testes usam GET /v1/tasks como sonda trusted (200/401/replay) → GET /v1/observability/audit-evidence; o teste de falha do replay store (401) ficou como estava."
+    },
+    {
+      "file": "apps/api/src/__tests__/operator-session.test.ts",
+      "rules": [
+        "c"
+      ],
+      "reason": "Sondas de cookie, logout e rotação (esperavam 200/401) e a sonda 'session storage not composed' (503 de outra causa, citada na SPEC §6) → GET /v1/observability/audit-evidence (Supervisor), mantendo 200/401/503 e a causa verificada."
+    },
+    {
+      "file": "apps/api/src/__tests__/production-boundary.test.ts",
+      "rules": [
+        "c"
+      ],
+      "reason": "Sonda trusted em perfil production-like (esperava 200) → GET /v1/observability/audit-evidence (Supervisor)."
+    },
+    {
+      "file": "apps/api/src/__tests__/approval-decision-atomicity-postgres.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Runtime approval de execução criada direto no store (PostgreSQL): registerExecutionLink independent + grant ao Approver."
+    },
+    {
+      "file": "apps/api/src/__tests__/homolog-correlation-postgres.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Runtime approval de execução criada direto no store (PostgreSQL): registerExecutionLink independent + grant ao Approver."
+    },
+    {
+      "file": "apps/api/src/__tests__/task-approval-postgres.test.ts",
+      "rules": [
+        "a",
+        "b"
+      ],
+      "reason": "seedSession semeia conversa/sessão por SQL sem root: o root nasce na própria semente por ensureCoreConversationRootInTransaction e só então o grant (R3-M1); o principal é provisionado no primeiro grant do tenant e reaproveitado depois (provision: false, R4-O3). PATCH na task de outro tenant (P5): 400 invalid_action → 404 not_found."
+    },
+    {
+      "file": "apps/api/src/__tests__/postgres-persistence-mode.test.ts",
+      "rules": [
+        "d"
+      ],
+      "reason": "Esquema legado 0000 sem 0029: decisão do Approver passa a esperar 503 e a decisão persistida é provada pelo Supervisor; PATCH do Operator passa a esperar 503 e o efeito persistido de status de task fica provado no esquema com 0029 (task-approval-postgres P2/P4 e case-scope-tasks-approvals-postgres S5)."
+    },
+    {
+      "file": "apps/worker/src/__tests__/operational-harness-iterative.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Runtime approval por Approver no P3-WORKER-004: grant no root independent da submissão, pela fixture da API por import relativo."
+    },
+    {
+      "file": "tests/e2e/critical-flows.test.ts",
+      "rules": [
+        "a"
+      ],
+      "reason": "Decisão por Approver sem vínculo (TypeError em data.status sem o ajuste, verificado): grant pela fixture da API por import relativo."
+    }
+  ],
+  "inventoryWithoutAdjustment": [
+    {
+      "file": "apps/api/src/__tests__/journeys-api-postgres.test.ts",
+      "reason": "os apps não ligam requireAuthenticatedMutations; a identidade é ignorada e o helper não roda (R3, nota O10)"
+    }
+  ],
+  "countsByRule": {
+    "a": 16,
+    "b": 4,
+    "c": 4,
+    "d": 1
+  },
+  "filesAdjusted": 22
+}

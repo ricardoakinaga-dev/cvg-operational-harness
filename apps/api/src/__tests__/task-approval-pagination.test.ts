@@ -6,6 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
 import type { RateLimiterPort } from '../rate-limit.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 const tenant = 'tenant_00000000-0000-4000-8000-000000000623'
 const otherTenant = 'tenant_00000000-0000-4000-8000-000000000624'
@@ -31,13 +32,14 @@ interface PageInfo {
 }
 
 async function seed(app: App, tenantId: string, tasks: number, approvals = 0) {
-  const { session } = await app.persistence.conversations.createWithSession({
-    tenantId: tenantId as never,
-    channel: 'internal',
-    senderRef: `aud0621-pages-${tenantId}`,
-    externalMessageId: crypto.randomUUID(),
-    body: 'Synthetic AUD0621 pagination fixture'
-  })
+  const { conversation, session } =
+    await app.persistence.conversations.createWithSession({
+      tenantId: tenantId as never,
+      channel: 'internal',
+      senderRef: `aud0621-pages-${tenantId}`,
+      externalMessageId: crypto.randomUUID(),
+      body: 'Synthetic AUD0621 pagination fixture'
+    })
   const taskIds: string[] = []
   for (let index = 0; index < tasks; index += 1) {
     const created = await app.inject({
@@ -72,7 +74,7 @@ async function seed(app: App, tenantId: string, tasks: number, approvals = 0) {
     expect(created.statusCode).toBe(200)
     approvalIds.push(created.json().data.id as string)
   }
-  return { taskIds, approvalIds }
+  return { taskIds, approvalIds, conversationId: conversation.id }
 }
 
 async function list(app: App, url: string, role = 'Supervisor') {
@@ -96,7 +98,22 @@ describe('bounded task and approval listings (AUD0621 F23, SPEC0250)', () => {
   it('P5: pages 101 tasks and approvals with metadata, filters and validation', async () => {
     const app = buildServer({ rateLimiter: unlimited })
     try {
-      const { taskIds, approvalIds } = await seed(app, tenant, 101, 101)
+      const { taskIds, approvalIds, conversationId } = await seed(
+        app,
+        tenant,
+        101,
+        101
+      )
+      // SPEC0251: Operator and Approver act only on assigned cases.
+      for (const role of ['Operator', 'Approver'] as const) {
+        await grantCase(app, {
+          kind: 'core_conversation',
+          resourceId: conversationId,
+          operatorId: headers(role)['x-operator-id'],
+          role,
+          tenantId: tenant as never
+        })
+      }
       const other = await seed(app, otherTenant, 1, 1)
       const crossTenant = await app.inject({
         method: 'PATCH',
@@ -104,8 +121,12 @@ describe('bounded task and approval listings (AUD0621 F23, SPEC0250)', () => {
         headers: headers('Operator'),
         payload: { status: 'done' }
       })
-      expect(crossTenant.statusCode).toBe(400)
-      expect(crossTenant.json().error.code).toBe('invalid_action')
+      // SPEC0251 I3: another tenant's task is the static 404 (was 400).
+      expect(crossTenant.statusCode).toBe(404)
+      expect(crossTenant.json().error).toEqual({
+        code: 'not_found',
+        message: 'Resource not found'
+      })
       const otherTasks = await app.inject({
         method: 'GET',
         url: '/v1/tasks',

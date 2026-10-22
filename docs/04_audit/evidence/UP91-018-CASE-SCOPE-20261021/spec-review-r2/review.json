@@ -1,0 +1,144 @@
+{
+  "verdict": "REVISE",
+  "specSha256": "3b88fab87e65058f6b794459e186d379ab837714144433cdbc0caf9fd781db13",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "revision": "r2",
+  "base": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "reviewer": "independent critic (fresh context), round 2, 2026-10-21",
+  "method": "leitura e grep; sem servidor, PostgreSQL ou testes",
+  "r1MandatoryStatus": {
+    "M1": {
+      "status": "RESOLVED",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:74",
+        "apps/api/src/case-authorization/case-routes.ts:349-372",
+        "packages/persistence/src/case-authority-postgres.ts:652-658,765-774"
+      ],
+      "note": "O alvo 'execution' segue readExecutionForCaller. No escopo tenant, executionCase nao e consultado: Supervisor decide execucao sem vinculo e no esquema legado. S4 e S6 ficam coerentes."
+    },
+    "M2": {
+      "status": "PARTIAL",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:118",
+        "apps/api/src/server.ts:2217-2226"
+      ],
+      "note": "Resolvidos: inventario por regra, apps/worker/**/__tests__ no conjunto de escrita, troca das sondas trusted e skip-catalog. Nao resolvido: o ajuste (a) deixou de fora registerExecutionLink, pedido na r1 M2, e a lista fechada nao cobre o esquema legado sem 0029. Ver R2-M1."
+    },
+    "M3": {
+      "status": "RESOLVED",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:39,86,117,134",
+        "apps/api/src/server.ts:1678",
+        "apps/api/src/legacy-composition.ts:9-14"
+      ],
+      "note": "O servidor injeta helper e mapeador em registerSecretaryJourneyRoutes (unico chamador). O catch da rota de jornada usa o mapeador, e a S7 cita a rota."
+    }
+  },
+  "mandatory": [
+    {
+      "id": "R2-M1",
+      "summary": "A regra fechada de ajuste de testes da secao 6 (a/b/c, sem afrouxar assercao) nao cobre duas classes do proprio inventario. (i) Esquema legado sem 0029: postgres-persistence-mode espera decisao do Approver e PATCH do Operator com sucesso; pela I5/S6 os dois passam a 503, nao ha como conceder grant sem as tabelas 0029 e so o Operator tem task:update. (ii) Execucoes criadas direto no store: nao tem linhagem nem root, e grantCase exige root; falta registerExecutionLink, que a r1 M2 pedia.",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:118",
+        "apps/api/src/__tests__/postgres-persistence-mode.test.ts:1915,1961,1999-2007,2021-2029,2097-2105",
+        "apps/api/src/case-authorization/case-routes.ts:141-146",
+        "packages/persistence/src/case-authority-postgres.ts:473-479",
+        "packages/shared/src/auth.ts:4-13",
+        "apps/api/src/__tests__/approval-decision-atomicity.test.ts:64,107-113",
+        "apps/api/src/__tests__/homolog-correlation-postgres.test.ts:90-146",
+        "apps/api/src/__tests__/execution-spine.test.ts:466-475",
+        "packages/persistence/src/case-authority.ts:266-271,663-666",
+        "apps/api/src/__tests__/case-authorization-fixtures.ts:57-72,112"
+      ],
+      "fix": "Na secao 6: acrescentar o ajuste (d): esquema legado sem 0029 (runInitialPostgresMigration) -> a mutacao por Operator/Approver passa a esperar 503 configuration_error (I5/S6); quando o teste precisa provar efeito, a decisao de approval passa a Supervisor com a mesma assercao de efeito; o PATCH no legado fica so como 503. Completar o ajuste (a): para execucao criada no store, chamar app.caseAuthority.registerExecutionLink(tenant, executionId, {kind:'independent', conversationId, sessionId}, true) e depois grantCase({kind:'independent_execution', resourceId: executionId, role:'Approver'})."
+    },
+    {
+      "id": "R2-M2",
+      "summary": "A I7 prescreve, para 'as rotas desta SPEC', o catch 'CaseAuthorityError ? toSafeCaseError : toSafeError'. Na rota de runtime approval, isso apaga a cadeia atual (ApprovalError -> operationalApprovalError; OperationalExecutionError passa direto). Como nenhuma das duas classes estende DomainError, 403 (self-approval), 404 e 409 viram 500. Nao ha teste de rota que proteja esses mapeamentos.",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:39",
+        "apps/api/src/server.ts:1396-1401,5112-5129",
+        "packages/approval-engine/src/engine.ts:42",
+        "packages/harness/src/execution-spine.ts:241-253",
+        "packages/shared/src/errors.ts:45-53"
+      ],
+      "fix": "Reescrever a I7: acrescentar o ramo CaseAuthorityError -> toSafeCaseError a frente do mapeamento ja existente em cada rota; na runtime approval, a ordem fica CaseAuthorityError -> ApprovalError (operationalApprovalError) -> OperationalExecutionError -> toSafeError. Na S7, acrescentar a guarda de regressao: um ApprovalError nessa rota mantem o status atual (por exemplo, self-approval -> 403)."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "summary": "S6 ('503 para Operator e Supervisor nas oito rotas') contradiz a ordem da 4.3 (permissao antes do helper) e a SPEC0176 7 (role sem permissao -> 403): Supervisor nao tem task:update e Operator nao tem approval:decide. Escrever 'por rota, com a role que tem a permissao'. Na S5, dizer 'OperatorB nas rotas de task, ApproverB nas de approval'.",
+      "evidence": ["packages/shared/src/auth.ts:4-31", "docs/02_spec/0251_case_scope_tasks_approvals.md:132-133"]
+    },
+    {
+      "id": "O2",
+      "summary": "As provas de criacao (S3/S5) precisam de requireAuthenticatedMutations: true. Sem isso, em test com simulacao, a identidade e ignorada em POST /v1/tasks, /v1/journeys/tasks e /v1/approvals.",
+      "evidence": ["apps/api/src/server.ts:749-752,1690-1695,1805-1810", "legacy/packages/secretary-journeys/src/api-routes.ts:339-344"]
+    },
+    {
+      "id": "O3",
+      "summary": "O catch nao distingue falha de autorizacao de caso de um 401 de identidade, e o mapeador injetado na jornada nao define cabecalho. Aplicar cache-control: no-store a toda resposta das oito rotas.",
+      "evidence": ["docs/02_spec/0251_case_scope_tasks_approvals.md:39"]
+    },
+    {
+      "id": "O4",
+      "summary": "Dependencias novas da jornada como opcionais deixam indefinido o caso de ausencia (risco de fail-open). Tornar obrigatorias (ha um so chamador) ou fixar: identidade presente e helper ausente -> 503.",
+      "evidence": ["docs/02_spec/0251_case_scope_tasks_approvals.md:117", "apps/api/src/server.ts:1678"]
+    },
+    {
+      "id": "O5",
+      "summary": "Jornada: corpo nulo ou nao-objeto deve dar 400 validation_failed antes do helper (hoje viraria TypeError -> 500).",
+      "evidence": ["legacy/packages/secretary-journeys/src/api-routes.ts:352"]
+    },
+    {
+      "id": "O6",
+      "summary": "S3: acrescentar Supervisor decidindo approval do tenant B -> 404 (a I3 promete isso). Mata o mutante 'taskCase/approvalRequestCase sem filtro de tenant' na memoria.",
+      "evidence": ["docs/02_spec/0251_case_scope_tasks_approvals.md:35,130"]
+    },
+    {
+      "id": "O7",
+      "summary": "S7 '413/415 preservados' nao exercita o catch: esses codigos nascem no error handler do Fastify, antes da rota. Trocar por 'DomainError existente mantem o status' e ajustar a justificativa da I7.",
+      "evidence": ["apps/api/src/server.ts:500-505", "apps/api/src/http-request-boundary.ts:39-47"]
+    },
+    {
+      "id": "O8",
+      "summary": "A SPEC0107 nao tem secao para a decisao de runtime approval; o adendo da 4.5 precisa cria-la ou levar a linha de erro para a SPEC dona da rota.",
+      "evidence": ["docs/02_spec/0107_contratos_de_api.md:57-93"]
+    },
+    {
+      "id": "O9",
+      "summary": "Sondas trusted que esperam 503 em GET /v1/tasks por outro motivo (session store ausente) passam a ser vazias. Estender o ajuste (c) a elas.",
+      "evidence": ["apps/api/src/__tests__/operator-session.test.ts:186-196"]
+    },
+    {
+      "id": "O10",
+      "summary": "Inventario: acrescentar journeys-api-postgres (Operator cria task de jornada em postgres-pool e espera 200) e dizer como o teste do worker obtem a fixture.",
+      "evidence": ["apps/api/src/__tests__/journeys-api-postgres.test.ts:304-318"]
+    },
+    {
+      "id": "O11",
+      "summary": "tasks.list e approvals.list continuam em RuntimePersistence sem escopo e sem rota; remover junto com listPage ou justificar.",
+      "evidence": ["apps/api/src/server.ts:4632,4653-4655"]
+    },
+    {
+      "id": "O12",
+      "summary": "4.2: aceitar DomainError not_found ou CaseAuthorityError case_not_found (mesmo corpo e errorCode), para reutilizar readExecutionForCaller.",
+      "evidence": ["apps/api/src/case-authorization/case-routes.ts:363,369"]
+    },
+    {
+      "id": "O13",
+      "summary": "9: execucao independente nao da grant automatico a quem submete; o Approver precisa de atribuicao explicita no root independent_execution.",
+      "evidence": ["packages/persistence/src/case-authority.ts:872-918"]
+    },
+    {
+      "id": "O14",
+      "summary": "I2: dizer que o consumo do limite de taxa antes do helper, na runtime approval, nao conta como 'efeito'.",
+      "evidence": ["apps/api/src/server.ts:1170-1199"]
+    }
+  ],
+  "newPremise": {
+    "answer": "nao",
+    "reason": "A runtime approval cabe em 'decidir approval': a SPEC0176 1 lista decidir approval entre as permissoes independentes, e o usuario manteve como excecao so takeover, input e cancel. A troca 400->404 decorre de '404 como inexistente'. O 503 em trusted para Supervisor/Admin e a politica de principal da SPEC0176 ('no modelo da SPEC0176'), com a UP91-025 sequenciada depois pelo usuario e producao NO_GO. A perda do PATCH no esquema legado afeta so o cliente de teste. Os dois obrigatorios sao correcoes de texto. Nenhuma migracao."
+  }
+}

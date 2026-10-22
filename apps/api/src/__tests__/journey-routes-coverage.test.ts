@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { InMemoryRateLimiter } from '../rate-limit.ts'
 import { buildServer } from '../server.ts'
+import { provisionPrincipal } from './case-authorization-fixtures.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000801'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000802'
@@ -302,6 +303,31 @@ describe('journey routes coverage', () => {
     })
     const sessionId = (inbound.json() as Envelope<{ sessionId: string }>).data
       ?.sessionId
+    // SPEC0251 (§6 adjustment a): the journey task requires the session's
+    // case. This app trusts only `operator.journeys`, so the grant goes
+    // through `app.caseAuthority` directly instead of the registry routes.
+    const conversationId = (
+      inbound.json() as Envelope<{ conversationId: string }>
+    ).data!.conversationId
+    await provisionPrincipal(app, {
+      tenantId: tenantA as never,
+      operatorId: 'operator.journeys',
+      role: 'Operator'
+    })
+    const root = await app.caseAuthority.readSnapshot(
+      tenantA as never,
+      (snapshot) => snapshot.coreConversationCase(conversationId)
+    )
+    await app.caseAuthority.putAssignment({
+      tenantId: tenantA as never,
+      caseId: root!.caseId!,
+      operatorId: 'operator.journeys',
+      status: 'ACTIVE',
+      expectedRevision: 0,
+      actor: { operatorId: 'supervisor.case-manager', role: 'Supervisor' },
+      correlationId: `corr_${crypto.randomUUID()}`,
+      actorPrincipal: { required: false, authorityVersion: null }
+    })
 
     const unauthenticatedOwner = await app.inject({
       method: 'POST',

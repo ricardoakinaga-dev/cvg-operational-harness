@@ -1,6 +1,8 @@
 import { PageControls, type PageControlsInfo } from '../page-controls.tsx'
 
 export interface TasksPanelProps {
+  /** SPEC0251 §4.4: status line, e.g. an item no longer available. */
+  message?: string | null
   tasks: Array<{ id: string; title: string; priority: string; status: string }>
   error?: string | null
   isLoading?: boolean
@@ -15,6 +17,7 @@ export interface TasksPanelProps {
 }
 
 export function TasksPanel({
+  message = null,
   tasks,
   error = null,
   isLoading = false,
@@ -34,6 +37,7 @@ export function TasksPanel({
         <span className="counter">{pageInfo?.total ?? tasks.length}</span>
       </header>
       <div className="list">
+        {message ? <p role="status">{message}</p> : null}
         {isLoading ? (
           <p className="state" role="status">
             Carregando...

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer, type RuntimeLogEntry } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -19,14 +20,28 @@ async function createFixtureSession(app: ReturnType<typeof buildServer>) {
       receivedAt: '2026-04-29T15:00:00-03:00'
     }
   })
-  return (inbound.json() as Envelope<{ sessionId: string }>).data.sessionId
+  return (
+    inbound.json() as Envelope<{ sessionId: string; conversationId: string }>
+  ).data
+}
+
+// SPEC0251: the Operator changes task status only on an assigned case.
+async function grantOperator(
+  app: ReturnType<typeof buildServer>,
+  conversationId: string
+) {
+  await grantCase(app, {
+    kind: 'core_conversation',
+    resourceId: conversationId,
+    operatorId: 'operator.shift-a'
+  })
 }
 
 describe('task lifecycle API', () => {
   it('updates internal task status with audit evidence and no external side effect', async () => {
     const logs: RuntimeLogEntry[] = []
     const app = buildServer({ runtimeLogger: (entry) => logs.push(entry) })
-    const sessionId = await createFixtureSession(app)
+    const { sessionId, conversationId } = await createFixtureSession(app)
 
     const task = await app.inject({
       method: 'POST',
@@ -42,6 +57,19 @@ describe('task lifecycle API', () => {
     })
     const taskBody = task.json() as Envelope<{ id: string; status: string }>
 
+    // AUD-0621 F01 / SPEC0176: the unassigned Operator gets the static 404
+    // on the session reader; the task event (not session-linked by its
+    // producer) is asserted on the full tenant audit reader. Read before the
+    // SPEC0251 grant, while the Operator is still unassigned.
+    const limitedAudit = await app.inject({
+      method: 'GET',
+      url: `/v1/audit/sessions/${sessionId}`,
+      headers: {
+        'x-operator-id': 'operator.shift-a',
+        'x-operator-role': 'Operator'
+      }
+    })
+    await grantOperator(app, conversationId)
     const update = await app.inject({
       method: 'PATCH',
       url: `/v1/tasks/${taskBody.data.id}/status`,
@@ -50,17 +78,6 @@ describe('task lifecycle API', () => {
         'x-operator-role': 'Operator'
       },
       payload: { status: 'in_progress' }
-    })
-    // AUD-0621 F01 / SPEC0176: the unassigned Operator gets the static 404
-    // on the session reader; the task event (not session-linked by its
-    // producer) is asserted on the full tenant audit reader.
-    const limitedAudit = await app.inject({
-      method: 'GET',
-      url: `/v1/audit/sessions/${sessionId}`,
-      headers: {
-        'x-operator-id': 'operator.shift-a',
-        'x-operator-role': 'Operator'
-      }
     })
     const audit = await app.inject({
       method: 'GET',
@@ -114,7 +131,8 @@ describe('task lifecycle API', () => {
 
   it('rejects terminal task transitions with a safe envelope', async () => {
     const app = buildServer()
-    const sessionId = await createFixtureSession(app)
+    const { sessionId, conversationId } = await createFixtureSession(app)
+    await grantOperator(app, conversationId)
     const task = await app.inject({
       method: 'POST',
       url: '/v1/tasks',

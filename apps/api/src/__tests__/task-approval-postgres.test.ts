@@ -10,6 +10,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { Client, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
+  ensureCoreConversationRootInTransaction,
   runPostgresMigrations,
   TENANT_SCHEMA_TABLES,
   withTenantContext
@@ -17,6 +18,7 @@ import {
 import type { TenantId } from '@cvg/platform'
 import { buildServer } from '../server.ts'
 import type { RateLimiterPort } from '../rate-limit.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 if (process.env.AUD0621_PG_REQUIRED === '1' && !testDatabaseUrl) {
@@ -138,8 +140,43 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
          VALUES ($1, $2, $3, 'active', 'BOT_ACTIVE', $4, $4)`,
         [tenantId, sessionId, conversationId, new Date()]
       )
+      // SPEC0251 (§6 adjustment a, R3-M1/R4-O3): the conversation is seeded
+      // directly, so its core case root is created in the same seed before
+      // any grant.
+      await ensureCoreConversationRootInTransaction(
+        client,
+        tenantId,
+        conversationId,
+        new Date()
+      )
     })
-    return sessionId
+    return { sessionId, conversationId }
+  }
+
+  /**
+   * SPEC0251 (§6 adjustment a): Operator/Approver act only on assigned
+   * cases. The principal is provisioned on its first grant in the tenant and
+   * reused afterwards (`provision: false`, R4-O3).
+   */
+  async function grantRole(
+    server: ReturnType<typeof app>,
+    conversationId: string,
+    role: 'Operator' | 'Approver',
+    tenantId: TenantId = tenant
+  ) {
+    const operatorId = headers(role, tenantId)['x-operator-id']
+    const existing = await server.caseAuthority.readSnapshot(
+      tenantId,
+      (snapshot) => snapshot.principal(operatorId)
+    )
+    await grantCase(server, {
+      kind: 'core_conversation',
+      resourceId: conversationId,
+      operatorId,
+      role,
+      tenantId,
+      provision: existing === null
+    })
   }
 
   async function createTask(
@@ -212,7 +249,8 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
     })
     await holder.connect()
     try {
-      const sessionId = await seedSession(tenant, 'race')
+      const { sessionId, conversationId } = await seedSession(tenant, 'race')
+      await grantRole(server, conversationId, 'Operator')
       const taskId = await createTask(server, sessionId, `race-${randomUUID()}`)
       await holder.query('BEGIN')
       await holder.query('SELECT id FROM tasks WHERE id = $1 FOR UPDATE', [
@@ -258,7 +296,11 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
     const server = app()
     const fn = `${schema}.aud0621_fail_task_audit`
     try {
-      const sessionId = await seedSession(tenant, 'audit-fault')
+      const { sessionId, conversationId } = await seedSession(
+        tenant,
+        'audit-fault'
+      )
+      await grantRole(server, conversationId, 'Operator')
       const taskId = await createTask(
         server,
         sessionId,
@@ -321,8 +363,16 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
   it('P5: pages 101 tasks and approvals with one-snapshot metadata and filters', async () => {
     const server = app()
     try {
-      const sessionId = await seedSession(pageTenant, 'pages')
-      const otherSession = await seedSession(otherTenant, 'pages-other')
+      const { sessionId, conversationId } = await seedSession(
+        pageTenant,
+        'pages'
+      )
+      await grantRole(server, conversationId, 'Operator', pageTenant)
+      await grantRole(server, conversationId, 'Approver', pageTenant)
+      const { sessionId: otherSession } = await seedSession(
+        otherTenant,
+        'pages-other'
+      )
       const taskIds: string[] = []
       for (let index = 0; index < 101; index += 1) {
         taskIds.push(
@@ -346,8 +396,12 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
         headers: headers('Operator', pageTenant),
         payload: { status: 'done' }
       })
-      expect(crossTenant.statusCode).toBe(400)
-      expect(crossTenant.json().error.code).toBe('invalid_action')
+      // SPEC0251 I3: another tenant's task is the static 404 (was 400).
+      expect(crossTenant.statusCode).toBe(404)
+      expect(crossTenant.json().error).toEqual({
+        code: 'not_found',
+        message: 'Resource not found'
+      })
       expect(await taskStatus(otherTask)).toBe('open')
       expect(await statusEvents(otherTask)).toEqual([])
       const approvalIds: string[] = []

@@ -47,6 +47,11 @@ interface Envelope<T> {
   error: { code: string; message: string } | null
 }
 
+// SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503 in
+// trusted mode without a principal authority; the identity probes use a
+// protected route without case scope permitted to the Supervisor identity.
+const PROBE = '/v1/observability/audit-evidence'
+
 describe('identity composition wiring', () => {
   it('passes the injected trusted resolver to the built server', async () => {
     const now = () => NOW_MS
@@ -63,12 +68,12 @@ describe('identity composition wiring', () => {
     const token = createTrustedOperatorIdentityToken(identity, SECRET, now)
     const denied = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: simulationHeaders
     })
     const allowed = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: {
         ...simulationHeaders,
         'x-cvg-operator-token': token
@@ -103,7 +108,7 @@ describe('identity composition wiring', () => {
     }
     const wrongAudience = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: {
         'x-cvg-operator-token': signedToken({
           ...validClaims,
@@ -114,7 +119,7 @@ describe('identity composition wiring', () => {
     })
     const expired = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: {
         'x-cvg-operator-token': signedToken({
           ...validClaims,
@@ -131,12 +136,12 @@ describe('identity composition wiring', () => {
     )
     const first = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: { 'x-cvg-operator-token': replayedToken }
     })
     const replay = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: { 'x-cvg-operator-token': replayedToken }
     })
     await app.close()
@@ -171,7 +176,7 @@ describe('identity composition wiring', () => {
 
     const denied = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: { 'x-cvg-operator-token': forged }
     })
     expect(denied.statusCode).toBe(401)
@@ -179,7 +184,7 @@ describe('identity composition wiring', () => {
 
     const allowed = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROBE,
       headers: { 'x-cvg-operator-token': token }
     })
     await app.close()
@@ -224,7 +229,7 @@ describe('identity composition wiring', () => {
       [appA, appB].map((app) =>
         app.inject({
           method: 'GET',
-          url: '/v1/tasks',
+          url: PROBE,
           headers: { 'x-cvg-operator-token': token }
         })
       )

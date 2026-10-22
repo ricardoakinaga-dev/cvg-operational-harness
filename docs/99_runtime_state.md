@@ -1,3 +1,12 @@
+# UP91-018-CASE-SCOPE-20261021 — escopo por caso em tasks e approvals — 22/10/2026 (Claude Code)
+
+- `status: READY_FOR_REVIEW` (PR). Resíduo P1 do F01 da AUD0621. [Decisões do usuário de 21/10](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/user-decisions-20261021.json): SPEC agora com a regra "BUILD após APPROVE do crítico"; mutação de task e approval exige vínculo; takeover e input/cancelamento de execução continuam livres; UP91-025 depois, com IdP sintético local; D2 mantém NO_MODEL; Codex100 G02 sem decisão nova. [Claim](08_runtime/agent_coordination.md).
+- `last_completed_action`: [SPEC0251](02_spec/0251_case_scope_tasks_approvals.md) aprovada pelo crítico independente na r4, sem premissa nova nem migração ([aprovação](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/spec-approval.json)). BUILD local: listas de tasks e approvals filtradas por caso antes do COUNT; criar task (duas rotas), mudar status, criar approval e decidir approval (duas tabelas) só com grant para Operator/Approver, 404 igual ao de recurso ausente; Supervisor/Admin no tenant. 19 testes novos com first red, 24/24 mutantes mortos, `test:postgres` 330/330, cobertura 6407 testes (94,25% statements), `coverage:critical` e `mutation:guard` PASS, E2E `critical-flows` 1/1 e `rem21-014` 18/18; crítico de código APPROVE na r2. [Relatório](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/build-report.md).
+- `next_action`:
+  1. Merge do PR com os 5 checks obrigatórios verdes no SHA exato.
+  2. UP91-025: produtor verificado de `case_principals` com IdP sintético local. Até lá, em trusted, conversas, tasks e approvals respondem 503.
+  3. Resíduos registrados na UP91-018: grant checado dentro da transação de escrita; criação de task e approval em dois passos; HEAD das listas sem `no-store`.
+
 # AUD0621-REMEDIATION-20261020 — remediação da auditoria crítica 0621 — 21/10/2026 (Claude Code)
 
 - `status: READY_FOR_REVIEW` (PR da integração). Pedido do usuário em 20/10: "resolva todos os itens apresentados nesse relatório do agente crítico" ([relatório 0621](04_audit/0621_critical_production_audit_2026-10-20.md), 26 achados, NO_GO). [Plano e resultado](03_build/0392_aud0621_remediation.md). [Claim](08_runtime/agent_coordination.md).

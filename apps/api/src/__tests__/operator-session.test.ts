@@ -20,6 +20,13 @@ const identity = {
   tenantId: 'tenant_00000000-0000-4000-8000-000000000505'
 }
 
+// SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503 in
+// trusted mode without a principal authority, which would mask the cause each
+// probe verifies (session cookie, logout, rotation, missing session store).
+// The probes use a protected route without case scope permitted to the
+// Supervisor identity of this suite.
+const PROTECTED_PROBE = '/v1/observability/audit-evidence'
+
 function localSessionStore(): OperatorSessionStore {
   const records = new Map<string, OperatorSessionRecord>()
   return {
@@ -94,7 +101,7 @@ describe('REM21-005 trusted operator session API', () => {
 
     const protectedRead = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROTECTED_PROBE,
       headers: { cookie }
     })
     expect(protectedRead.statusCode).toBe(200)
@@ -115,7 +122,7 @@ describe('REM21-005 trusted operator session API', () => {
 
     const afterLogout = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROTECTED_PROBE,
       headers: { cookie }
     })
     expect(afterLogout.statusCode).toBe(401)
@@ -186,7 +193,7 @@ describe('REM21-005 trusted operator session API', () => {
     )
     const protectedRead = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROTECTED_PROBE,
       headers: { 'x-cvg-operator-token': token }
     })
     expect(protectedRead.statusCode).toBe(503)
@@ -275,12 +282,12 @@ describe('REM21-005 trusted operator session API', () => {
 
     const oldSession = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROTECTED_PROBE,
       headers: { cookie: firstCookie }
     })
     const newSession = await app.inject({
       method: 'GET',
-      url: '/v1/tasks',
+      url: PROTECTED_PROBE,
       headers: { cookie: rotatedCookie }
     })
     expect(oldSession.statusCode).toBe(401)

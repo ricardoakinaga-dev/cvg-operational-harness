@@ -1,0 +1,76 @@
+{
+  "verdict": "APPROVE",
+  "reviewedCommit": "0fd6307e0",
+  "base": "24cdb463",
+  "previousCommit": "acbec9f49",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "specSha256": "ef409b124e505310083bffa060e11b248905973ea8b7480989f77e1eb0c2d50e",
+  "method": "leitura só pelos objetos git (git diff 24cdb463..0fd6307e0, git diff acbec9f49..0fd6307e0, git show 0fd6307e0:<path>); sem testes, servidor, PostgreSQL ou npm; comportamento do Fastify 5.12.5 conferido em node_modules (só leitura)",
+  "summary": "Nenhum obrigatório. O M1 da r1 foi resolvido: a S2 PostgreSQL revoga o grant e exige total 0, itens vazios e no-store nas duas listas, o que mata o mutante do predicado ACTIVE. O1, O2 e O3 foram resolvidos. O O4 segue com o lead e é pré-condição do PR. O5 e O6 ficam como registro. As correções ficam dentro do §6 e não introduzem regressão, quebra de contrato nem buraco de autorização. Restam cinco opcionais de prova ou registro.",
+  "r1Status": {
+    "M1": {
+      "status": "resolvido",
+      "evidence": "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts:755-775: putAssignment REVOKED com expectedRevision 1 (200); para OperatorA, /v1/tasks?limit=7 e /v1/approvals?limit=7 exigem pageInfo {limit:7, offset:0, total:0, hasNextPage:false}, ids [] e cache-control no-store, com status 200 (readList :284). A revogação mantém a linha com status REVOKED (case-authority-postgres.ts:1376-1383; o INSERT nasce com revision 1, :1394-1398). Sem 'a.status = ACTIVE' (:177), o EXISTS (:170-178) casaria a linha e o total seria 30, então M13 morre. O sha do SKIP-PG-040 (scripts/skip-catalog.json:434-437) confere com o arquivo em 0fd6307e0 e a contagem continua em 5."
+    },
+    "O1": {
+      "status": "resolvido",
+      "evidence": "apps/api/src/server.ts:790-812. O Set tem exatamente os oito pares método + template da §4.3, e os templates conferem com server.ts:1195, 1743, 1802, 1836, 1889, 1952, 2010 e legacy api-routes.ts:358 (registrada na raiz, server.ts:1726). O roteamento vem antes do onRequest, então o hook cobre o 400/413/415 do setErrorHandler (:502-508), o 403/426 de http-security.ts:231-268 e o 414 de alvo (:523-530) com caminho casado. Num erro do roteador (setNotFoundHandler :509-521) o routeOptions.url fica undefined e nada muda. Nada muda fora das oito rotas: o único outro onSend (http-security.ts:271-283) não toca em cache-control. A prova está em case-scope-tasks-approvals.test.ts:1382-1400 (400 de JSON inválido e 415 de XML, ambos com no-store).",
+      "caveats": ["R2-O1", "R2-O2", "R2-O3"]
+    },
+    "O2": {
+      "status": "resolvido nas seis mutações; resíduo nas duas listas (R2-O5)",
+      "evidence": "case-scope-tasks-approvals.test.ts:1331-1380 usa OperatorB (grant só em Y) e ApproverB (sem grant), com requireAuthenticatedMutations true (:212). Com o helper antes da validação, PATCH (:1344), POST /v1/tasks (:1345), POST /v1/approvals (:1346), decisão (:1347-1349), runtime sem idempotency-key em execução vinculada a X (:1350-1355; vínculo :1247-1267) e jornada (:1359-1380) responderiam 404; o teste exige 400."
+    },
+    "O3": {
+      "status": "resolvido",
+      "evidence": "apps/web/src/App.tsx:389 e :413 chamam setTaskMessage(null) junto de setApprovalMessage(null) nos dois blocos de reset (:372-393 e :396-416). Não há teste dedicado, o que é aceitável para um opcional de UX."
+    },
+    "O4": {
+      "status": "não resolvido no commit; encaminhado ao lead",
+      "evidence": "git cat-file -e 0fd6307e0:docs/02_spec/0251_case_scope_tasks_approvals.md dá ausente, assim como spec-approval.json. docs/02_spec/0107_contratos_de_api.md:63,95 continua apontando para a SPEC0251. corrections.md registra 'Para o lead'. Segue opcional, mas é pré-condição do PR."
+    },
+    "O5": {
+      "status": "aceito como registro",
+      "evidence": "first-red.json:100 registra o esquema legado 0000–0027 e que 0028_session_events é opt-in."
+    },
+    "O6": {
+      "status": "aceito como registro",
+      "evidence": "adjusted-tests.json:13 (task-lifecycle), :50 (operator-identity-rbac) e :92-96 (journey-routes-coverage com grant pela porta)."
+    }
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "R2-O1",
+      "title": "Seis das oito chaves do hook no-store não têm prova",
+      "evidence": "A S7 cobre só POST /v1/tasks (400) e POST /v1/approvals (415) (case-scope-tasks-approvals.test.ts:1382-1400). Um erro de digitação em outra chave do Set (server.ts:793-802) sobreviveria, porque o M12 só remove o cabeçalho. Hoje as oito chaves estão corretas. O título do teste (:1232) ainda diz 'every handler response'.",
+      "fix": "Laço sobre as oito rotas com uma recusa anterior ao handler válida para qualquer método, por exemplo origin não permitida (403, http-security.ts:265), exigindo cache-control no-store. Ajustar o título do teste."
+    },
+    {
+      "id": "R2-O2",
+      "title": "HEAD derivado de GET /v1/tasks e GET /v1/approvals fica fora do hook",
+      "evidence": "O Fastify 5 expõe HEAD para cada GET (exposeHeadRoutes true por padrão: node_modules/fastify/lib/config-validator.js:69-70; buildServer não o desliga, server.ts:482-490). A chave usa request.method (server.ts:803-808). O handler compartilhado já põe no-store, mas as respostas de HEAD anteriores ao handler (403, 426, 414) saem sem o cabeçalho. Não há corpo, então não há exposição.",
+      "fix": "Acrescentar 'HEAD /v1/tasks' e 'HEAD /v1/approvals' ao Set, ou registrar no fechamento que a I7 vale para os métodos declarados na §4.3."
+    },
+    {
+      "id": "R2-O3",
+      "title": "corrections.md diz que o 414 de alvo 'não casa rota nenhuma', o que não é exato",
+      "evidence": "O 414 vem do onRequest (server.ts:523-530), que roda depois do roteamento. Com o caminho de uma das oito rotas e uma query acima de 8 KiB, a rota casa e o hook põe no-store. Só o setNotFoundHandler (:509-521) fica fora, por exemplo com parâmetro acima de maxParamLength 100.",
+      "fix": "Corrigir o registro: o 414 com caminho de uma das oito rotas leva no-store pelo hook; só o erro do roteador fica fora, porque não é resposta das oito rotas."
+    },
+    {
+      "id": "R2-O4",
+      "title": "Evidência da rodada de correções ainda não gravada",
+      "evidence": "Quando li, mutants.json ainda tinha reviewedCommit acbec9f49 e 20 mutantes, sem os M12 e M13 que corrections.md anuncia. Os logs de lint, typecheck, prettier, test:postgres e skip-governance são de 00:25 a 00:31, antes de 0fd6307e0 (00:46). A leitura estática indica que M12 e M13 morrem.",
+      "fix": "Antes do fechamento, acrescentar M12 e M13 a mutants.json (reviewedCommit 0fd6307e0) e reexecutar em 0fd6307e0 os gates do §8 afetados: S2 e S7 focais, test:postgres, lint, typecheck e skip-governance."
+    },
+    {
+      "id": "R2-O5",
+      "title": "A ordem 'parse → snapshot' nas listas segue sem prova discriminante",
+      "evidence": "Nas duas GET do bloco de validação (case-scope-tasks-approvals.test.ts:1334-1343), OperatorB e ApproverB têm principal provisionado e lista não dá 404, então a inversão continuaria respondendo 400. O comentário do teste (:1331-1332) exagera para essas duas chamadas. O teste de outage (:1125-1230) não tem query inválida. As listas estão em server.ts:1809-1826 e :2016-2032. Impacto baixo: a inversão só trocaria 400 por 503 durante outage.",
+      "fix": "No app de outage, chamar GET /v1/tasks?limit=0 e GET /v1/approvals?status=bogus e esperar 400, não 503. Ou restringir o comentário às mutações."
+    }
+  ],
+  "regressions": "Nenhuma. A rodada tocou 5 arquivos, todos dentro do §6 (server.ts só com o hook restrito às rotas da §4.3, App.tsx, os dois testes novos e skip-catalog.json). git diff --name-only 24cdb463..0fd6307e0 lista os mesmos 35 arquivos da r1. O código de autorização e de persistência não mudou desde acbec9f49. Nenhum status, corpo ou DTO mudou. Os shas do skip-catalog conferem para os 5 arquivos PG tocados.",
+  "newPremise": false
+}

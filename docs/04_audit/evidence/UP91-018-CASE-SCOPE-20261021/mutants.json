@@ -1,0 +1,315 @@
+{
+  "task": "UP91-018-CASE-SCOPE-20261021",
+  "spec": "SPEC0251 §7 (mutantes mínimos) + mutantes das correções das revisões de código r1/r2",
+  "reviewedCommit": "1937337dd",
+  "method": "cada mutante aplicado sozinho no arquivo da árvore (cópia de segurança), teste que deve matá-lo executado com Node 22 (PG: container 127.0.0.1:56270), arquivo restaurado e conferido byte a byte",
+  "total": 24,
+  "killed": 24,
+  "survived": 0,
+  "specMutants": "M01–M11 (19 variantes, uma por rota/adaptador onde a SPEC pede)",
+  "reviewMutants": "M12–M15 (r1 O1/M1, r2 R2-O1/R2-O5)",
+  "mutants": [
+    {
+      "id": "M01a-exists-memory",
+      "mutant": "remover o EXISTS (S1)",
+      "file": "packages/persistence/src/case-authority.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t S1",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S1 — case-scoped task and approval lists (memory) > filters before COUNT/offset/limit for Operator/Approver and keeps the tenant for Supervisor/Admin"
+      ]
+    },
+    {
+      "id": "M01b-exists-postgres",
+      "mutant": "remover o EXISTS (S2)",
+      "file": "packages/persistence/src/case-authority-postgres.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts -t S2",
+      "postgres": true,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 4 skipped (5)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts > SPEC0251 PostgreSQL case scope of tasks and approvals > S2 — lists filter in one statement before COUNT/offset/limit under RLS, with DTO parity"
+      ]
+    },
+    {
+      "id": "M02-null-case-allowed",
+      "mutant": "tratar caseId null como permitido (S3, sessão sem root)",
+      "file": "apps/api/src/case-authorization/case-routes.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t S3",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  4 failed | 2 passed | 6 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > PATCH /v1/tasks/:taskId/status: indistinguishable 404 without effect; assigned Operator 200",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/tasks: 404 without task for an unassigned or rootless session, replay included",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/journeys/tasks: 404 without task for an unassigned or rootless session, replay included",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals: 404 without approval outside the assigned case; Supervisor stays in its tenant"
+      ]
+    },
+    {
+      "id": "M03-authorize-after-write",
+      "mutant": "autorizar depois da escrita (S3, efeito persistido) — PATCH",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t PATCH",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > PATCH /v1/tasks/:taskId/status: indistinguishable 404 without effect; assigned Operator 200"
+      ]
+    },
+    {
+      "id": "M04a-skip-patch",
+      "mutant": "pular o helper no PATCH /v1/tasks/:taskId/status",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t PATCH",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > PATCH /v1/tasks/:taskId/status: indistinguishable 404 without effect; assigned Operator 200"
+      ]
+    },
+    {
+      "id": "M04b-skip-post-tasks",
+      "mutant": "pular o helper no POST /v1/tasks",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t POST /v1/tasks:",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/tasks: 404 without task for an unassigned or rootless session, replay included"
+      ]
+    },
+    {
+      "id": "M04c-skip-journey-task",
+      "mutant": "pular o helper no POST /v1/journeys/tasks",
+      "file": "legacy/packages/secretary-journeys/src/api-routes.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t POST /v1/journeys/tasks",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/journeys/tasks: 404 without task for an unassigned or rootless session, replay included"
+      ]
+    },
+    {
+      "id": "M04d-skip-post-approvals",
+      "mutant": "pular o helper no POST /v1/approvals",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t POST /v1/approvals:",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals: 404 without approval outside the assigned case; Supervisor stays in its tenant"
+      ]
+    },
+    {
+      "id": "M04e-skip-decision",
+      "mutant": "pular o helper no POST /v1/approvals/:id/decision",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t decision: approved",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals/:id/decision: approved, rejected and assumed require the case; Supervisor tenant-wide"
+      ]
+    },
+    {
+      "id": "M04f-skip-runtime-decision",
+      "mutant": "pular o helper na decisão de runtime approval",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t S4",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S4 — runtime approval decision (memory) > requires the execution case for Approver; Supervisor decides tenant-wide; missing is 404 for both"
+      ]
+    },
+    {
+      "id": "M05-helper-always-denies",
+      "mutant": "helper que nega sempre (positivos do S3/S4)",
+      "file": "apps/api/src/case-authorization/case-routes.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t S3|S4",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  6 failed | 1 passed | 5 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > PATCH /v1/tasks/:taskId/status: indistinguishable 404 without effect; assigned Operator 200",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/tasks: 404 without task for an unassigned or rootless session, replay included",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/journeys/tasks: 404 without task for an unassigned or rootless session, replay included",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals: 404 without approval outside the assigned case; Supervisor stays in its tenant",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals/:id/decision: approved, rejected and assumed require the case; Supervisor tenant-wide",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S4 — runtime approval decision (memory) > requires the execution case for Approver; Supervisor decides tenant-wide; missing is 404 for both"
+      ]
+    },
+    {
+      "id": "M06-absent-is-400",
+      "mutant": "responder 400 para ausente (S3, igualdade de corpo)",
+      "file": "apps/api/src/case-authorization/case-routes.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t S3",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  5 failed | 1 passed | 6 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > PATCH /v1/tasks/:taskId/status: indistinguishable 404 without effect; assigned Operator 200",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/tasks: 404 without task for an unassigned or rootless session, replay included",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/journeys/tasks: 404 without task for an unassigned or rootless session, replay included",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals: 404 without approval outside the assigned case; Supervisor stays in its tenant",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals/:id/decision: approved, rejected and assumed require the case; Supervisor tenant-wide"
+      ]
+    },
+    {
+      "id": "M07-execution-case-in-tenant-scope",
+      "mutant": "consultar executionCase no escopo tenant (S4/S6, Supervisor)",
+      "file": "apps/api/src/case-authorization/case-routes.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts -t S6",
+      "postgres": true,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 1 passed | 3 skipped (5)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts > SPEC0251 PostgreSQL case scope of tasks and approvals > S6 — legacy 0000–0027 schema without 0029: lists, decisions and runtime approval by the Supervisor only"
+      ]
+    },
+    {
+      "id": "M08a-mapper-to-safe-error",
+      "mutant": "trocar o mapeador de I7 por toSafeError (S7)",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t outage",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 1 passed | 10 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S6/S7 — authority outage and error mapping (memory) > a snapshot outage is a redacted 503 on the eight routes, never 500 and never an effect"
+      ]
+    },
+    {
+      "id": "M08b-journey-mapper-to-safe-error",
+      "mutant": "trocar o mapeador de I7 por toSafeError na jornada (S7)",
+      "file": "legacy/packages/secretary-journeys/src/api-routes.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t outage",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 1 passed | 10 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S6/S7 — authority outage and error mapping (memory) > a snapshot outage is a redacted 503 on the eight routes, never 500 and never an effect"
+      ]
+    },
+    {
+      "id": "M09-runtime-chain-generic",
+      "mutant": "substituir a cadeia de erro da runtime approval pelo mapeador genérico (S7, 403)",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t previous mapping",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S6/S7 — authority outage and error mapping (memory) > every handler response carries no-store and the previous mapping of each route is kept"
+      ]
+    },
+    {
+      "id": "M10a-taskcase-no-tenant-memory",
+      "mutant": "taskCase sem filtro de tenant (S3, teste direto do snapshot) — memória",
+      "file": "packages/persistence/src/case-authority.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t snapshot tenant",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > resolves task and approval cases only inside the snapshot tenant"
+      ]
+    },
+    {
+      "id": "M10b-approvalcase-no-tenant-memory",
+      "mutant": "approvalRequestCase sem filtro de tenant (S3 snapshot e Supervisor no tenant B) — memória",
+      "file": "packages/persistence/src/case-authority.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t S3",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  2 failed | 4 passed | 6 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > POST /v1/approvals/:id/decision: approved, rejected and assumed require the case; Supervisor tenant-wide",
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S3 — case-scoped mutations (memory) > resolves task and approval cases only inside the snapshot tenant"
+      ]
+    },
+    {
+      "id": "M10c-resource-case-no-tenant-postgres",
+      "mutant": "taskCase/approvalRequestCase sem filtro de tenant no SQL (S5, snapshot sem RLS)",
+      "file": "packages/persistence/src/case-authority-postgres.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts -t S3/S5",
+      "postgres": true,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 4 skipped (5)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts > SPEC0251 PostgreSQL case scope of tasks and approvals > S3/S5 — snapshot task and approval lookups stay in the snapshot tenant, with and without RLS"
+      ]
+    },
+    {
+      "id": "M11-web-404-is-failure",
+      "mutant": "tratar 404 como falha na web (S8)",
+      "file": "apps/web/src/App.tsx",
+      "test": "apps/web/src/__tests__/case-scope-unavailable-item.test.tsx",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  2 failed (2)",
+      "killedBy": [
+        "apps/web/src/__tests__/case-scope-unavailable-item.test.tsx > SPEC0251 S8 — unavailable item after a 404 > reloads the approval queue and shows the message without a failed state",
+        "apps/web/src/__tests__/case-scope-unavailable-item.test.tsx > SPEC0251 S8 — unavailable item after a 404 > reloads the task board and shows the message in the task panel without a failed state"
+      ]
+    },
+    {
+      "id": "M12-no-store-hook-removed",
+      "mutant": "I7 (code-review r1 O1): sem o hook, respostas do framework antes do handler perdem no-store (S7)",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t previous mapping",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S6/S7 — authority outage and error mapping (memory) > every handler response carries no-store and the previous mapping of each route is kept"
+      ]
+    },
+    {
+      "id": "M13-revoked-grant-visible-postgres",
+      "mutant": "lista PostgreSQL sem o predicado ACTIVE (code-review r1 M1; S2 revogação)",
+      "file": "packages/persistence/src/case-authority-postgres.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts -t S2",
+      "postgres": true,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 4 skipped (5)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts > SPEC0251 PostgreSQL case scope of tasks and approvals > S2 — lists filter in one statement before COUNT/offset/limit under RLS, with DTO parity"
+      ]
+    },
+    {
+      "id": "M14-no-store-route-set-typo",
+      "mutant": "I7 (code-review r2 R2-O1): uma rota fora do conjunto do hook (POST /v1/journeys/tasks)",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t previous mapping",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 11 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S6/S7 — authority outage and error mapping (memory) > every handler response carries no-store and the previous mapping of each route is kept"
+      ]
+    },
+    {
+      "id": "M15-list-snapshot-before-validation",
+      "mutant": "lista abre a unidade de caso antes de validar a consulta (code-review r2 R2-O5)",
+      "file": "apps/api/src/server.ts",
+      "test": "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts -t outage",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "Tests  1 failed | 1 passed | 10 skipped (12)",
+      "killedBy": [
+        "apps/api/src/__tests__/case-scope-tasks-approvals.test.ts > SPEC0251 S6/S7 — authority outage and error mapping (memory) > a snapshot outage is a redacted 503 on the eight routes, never 500 and never an effect"
+      ]
+    }
+  ]
+}

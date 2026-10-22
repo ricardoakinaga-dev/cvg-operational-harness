@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryCapabilityApprovalAuthority } from '@cvg/platform'
 import { buildServer } from '../server.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 interface Envelope<T> {
   success: boolean
@@ -241,7 +242,12 @@ describe('server boundary envelopes', () => {
       'unauthorized'
     )
     expect(missingCheckpoint.statusCode).toBe(400)
-    expect(missingDecision.statusCode).toBe(400)
+    // SPEC0251 I3: a missing approval request is the static 404 (was 400).
+    expect(missingDecision.statusCode).toBe(404)
+    expect((missingDecision.json() as Envelope<never>).error).toEqual({
+      code: 'not_found',
+      message: 'Resource not found'
+    })
     expect(invalidApproval.statusCode).toBe(400)
     expect((invalidApproval.json() as Envelope<never>).error?.code).toBe(
       'validation_failed'
@@ -265,6 +271,14 @@ describe('server boundary envelopes', () => {
     })
     const sessionId = (inbound.json() as Envelope<{ sessionId: string }>).data
       ?.sessionId
+    // SPEC0251: the Operator creates and moves tasks only on an assigned case.
+    await grantCase(app, {
+      kind: 'core_conversation',
+      resourceId: (inbound.json() as Envelope<{ conversationId: string }>).data!
+        .conversationId,
+      operatorId: operatorHeaders['x-operator-id'],
+      tenantId: operatorHeaders['x-tenant-id'] as never
+    })
     const task = await app.inject({
       method: 'POST',
       url: '/v1/tasks',
@@ -340,10 +354,12 @@ describe('server boundary envelopes', () => {
     expect((invalidStatus.json() as Envelope<never>).error?.code).toBe(
       'validation_failed'
     )
-    expect(missingTask.statusCode).toBe(400)
-    expect((missingTask.json() as Envelope<never>).error?.code).toBe(
-      'invalid_action'
-    )
+    // SPEC0251 I3: a missing task is the static 404 (was 400).
+    expect(missingTask.statusCode).toBe(404)
+    expect((missingTask.json() as Envelope<never>).error).toEqual({
+      code: 'not_found',
+      message: 'Resource not found'
+    })
     expect(unauthenticatedTask.statusCode).toBe(401)
     expect(approval.statusCode).toBe(200)
     expect(unauthenticatedApproval.statusCode).toBe(401)

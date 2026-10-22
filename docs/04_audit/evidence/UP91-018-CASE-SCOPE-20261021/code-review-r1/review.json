@@ -1,0 +1,56 @@
+{
+  "verdict": "REVISE",
+  "reviewedCommit": "acbec9f49",
+  "base": "24cdb463",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "specSha256": "ef409b124e505310083bffa060e11b248905973ea8b7480989f77e1eb0c2d50e",
+  "method": "leitura por objetos git (git diff 24cdb463..acbec9f49, git show acbec9f49:<path>); sem testes, servidor, PostgreSQL ou npm",
+  "summary": "O código de produção está fiel à SPEC: invariantes I1–I7, §4.1–§4.5 e conjunto de escrita do §6. Nenhum buraco de autorização ou regressão encontrado. Os ajustes de teste cabem nas regras (a)–(d) sem afrouxar asserção. Um obrigatório de prova: a S2 em PostgreSQL não tem o passo de revogação da matriz da S1, e o predicado a.status = 'ACTIVE' do SQL novo de lista fica sem teste que o mate.",
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "S2 (PostgreSQL) não prova a revogação da matriz da S1; o predicado ACTIVE da lista PostgreSQL fica sem teste",
+      "evidence": "SPEC 0251 linhas 128-129 (S2 = 'mesma matriz do S1'; a S1 inclui 'Depois de revogar o grant de OperatorA, a mesma chamada dá total 0'). A S1 em memória cumpre (apps/api/src/__tests__/case-scope-tasks-approvals.test.ts:546-555). A S2 PostgreSQL não revoga nada (apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts:520-756). A única revogação em PostgreSQL é na S5 e exercita só o PATCH via hasActiveGrant (:1011-1021). Nenhum outro teste PostgreSQL lista tasks ou approvals com grant REVOKED. Um mutante que tire 'AND a.status = 'ACTIVE'' de assignedSessionVisibility (packages/persistence/src/case-authority-postgres.ts:170-178, linha 177) sobrevive à suíte e, em produção (PostgreSQL), mostraria a Operator/Approver os itens de um caso revogado.",
+      "fix": "No fim da S2, revogar o grant de operator.a no caso X (putAssignment(w.seed, w.caseX, 'operator.a', {status:'REVOKED', expectedRevision:1}, as('supervisor.case-manager','Supervisor', tenantA))). Afirmar total 0, data vazio e cache-control no-store em GET /v1/tasks?limit=7 e GET /v1/approvals?limit=7 para OperatorA (opcionalmente também ApproverA). Atualizar o sourceSha256 do SKIP-PG-040 em scripts/skip-catalog.json."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "Alcance do no-store (I7): só as respostas do handler",
+      "evidence": "A I7 (SPEC linha 39) diz 'todas as respostas das oito rotas'. O BUILD cobre as respostas do handler (case-scope-tasks-approvals.test.ts:1232). Ficam sem no-store o 400/413/415 de setErrorHandler (apps/api/src/server.ts:502-508), o 414/404 de alvo em onRequest (:523-530) e o 403 de origem do hook de segurança. É o R4-O6, que ficou fora das buildNotesFromR4Optionals. São envelopes genéricos, sem dado.",
+      "fix": "Um onSend restrito aos oito templates (request.routeOptions.url) que garanta cache-control: no-store, ou registrar no fechamento que a I7 vale para 'toda resposta produzida pelo handler' e ajustar o texto na promoção."
+    },
+    {
+      "id": "O2",
+      "title": "Ordem 'validação 400 antes do helper' sem prova discriminante",
+      "evidence": "O bloco 'Validation stays 400 before any case lookup' usa OperatorA/ApproverA com grant e autoridade saudável (case-scope-tasks-approvals.test.ts:1331-1357). Um mutante que ponha o helper antes da validação do corpo continua respondendo 400. A I3 afirma essa ordem (SPEC linha 35).",
+      "fix": "Repetir as chamadas inválidas com OperatorB/ApproverB (sem grant) ou com o app de outage, esperando 400 em vez de 404/503."
+    },
+    {
+      "id": "O3",
+      "title": "taskMessage não é limpo na troca de identidade ou escopo",
+      "evidence": "apps/web/src/App.tsx:168 declara taskMessage. Os blocos de reset em :388-389 e :411-412 limpam approvalMessage, mas não taskMessage. A mensagem só é limpa em :932 e definida em :954.",
+      "fix": "Acrescentar setTaskMessage(null) junto de setApprovalMessage(null) nos dois blocos de reset."
+    },
+    {
+      "id": "O4",
+      "title": "Commit não autocontido: o link para a SPEC0251 aponta para arquivo fora do commit",
+      "evidence": "docs/02_spec/0107_contratos_de_api.md:63,95 aponta para 0251_case_scope_tasks_approvals.md. 'git cat-file -e acbec9f49:docs/02_spec/0251_case_scope_tasks_approvals.md' → ausente: a SPEC e a evidência estão não versionadas na árvore.",
+      "fix": "Versionar a SPEC e docs/04_audit/evidence/UP91-018-CASE-SCOPE-20261021/ no mesmo PR antes de publicar."
+    },
+    {
+      "id": "O5",
+      "title": "S6 legado usa 0000–0027 em vez de 'até 0028' (justificado; só registro)",
+      "evidence": "case-scope-tasks-approvals-postgres.test.ts:298-329. A 0028_session_events é opt-in, exige schema dedicado e recusa o de runtime (packages/persistence/migrations/0028_session_events.sql:1-9; packages/persistence/src/postgres-migrations.ts:49). Já registrado em first-red.json.",
+      "fix": "Citar o desvio na evidência de fechamento; nenhuma mudança de código."
+    },
+    {
+      "id": "O6",
+      "title": "Ajustes fora da letra de (a), sem afrouxar asserção (só registro)",
+      "evidence": "task-lifecycle.test.ts:64-81 e operator-identity-rbac.test.ts:166-188,335-356 leem o audit limitado (404 estático) antes do grant e da mutação. journey-routes-coverage.test.ts:306-330 concede pela porta app.caseAuthority.putAssignment, porque o app só confia em operator.journeys. Os dois estão documentados em adjusted-tests.json.",
+      "fix": "Nenhuma mudança; mencionar no fechamento as variantes 'reordenar' e 'porta direta' da regra (a)."
+    }
+  ],
+  "newPremise": false
+}

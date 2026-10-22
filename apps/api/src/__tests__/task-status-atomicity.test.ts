@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuditRepository } from '@cvg/persistence'
 import { buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
 
 const operatorHeaders = {
   'x-operator-id': 'operator.aud0621.tasks',
@@ -43,6 +44,12 @@ async function fixture(app: App) {
   })
   expect(inbound.statusCode).toBe(200)
   const sessionId = inbound.json().data.sessionId as string
+  // SPEC0251: the Operator changes task status only on an assigned case.
+  await grantCase(app, {
+    kind: 'core_conversation',
+    resourceId: inbound.json().data.conversationId as string,
+    operatorId: operatorHeaders['x-operator-id']
+  })
   const created = await app.inject({
     method: 'POST',
     url: '/v1/tasks',

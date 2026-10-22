@@ -1,0 +1,113 @@
+{
+  "verdict": "REVISE",
+  "specSha256": "12099e543b4cd605bb0f69f0377349ae90b72e0ae8b664de772ac08e7d0388c5",
+  "spec": "docs/02_spec/0251_case_scope_tasks_approvals.md",
+  "revision": "r3",
+  "base": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "reviewer": "independent critic (fresh context), round 3, 2026-10-21",
+  "method": "leitura e grep; sem servidor, PostgreSQL ou testes",
+  "r2MandatoryStatus": {
+    "R2-M1": {
+      "status": "RESOLVED",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:118",
+        "apps/api/src/__tests__/postgres-persistence-mode.test.ts:1999-2029,2097-2104",
+        "packages/persistence/src/case-authority-postgres.ts:705-718,1178-1197,392-419"
+      ],
+      "note": "As duas classes da r2 estao cobertas: (d) esquema legado sem 0029 (503 e prova de efeito no Supervisor ou no esquema com 0029) e (a) registerExecutionLink antes do grant para execucao criada direto no store. A classe analoga de conversa/sessao core semeada sem root nao foi levantada na r2 e virou R3-M1."
+    },
+    "R2-M2": {
+      "status": "RESOLVED",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:39,134,137",
+        "apps/api/src/server.ts:1396-1401,5112-5129,4485-4497",
+        "packages/approval-engine/src/engine.ts:249-253"
+      ],
+      "note": "I7 poe o ramo CaseAuthorityError -> toSafeCaseError a frente do mapeamento existente sem substitui-lo; a cadeia ApprovalError/OperationalExecutionError da runtime approval continua; S7 tem a guarda de regressao (403 self-approval, 409, 400/409 do PATCH) e o mutante correspondente."
+    }
+  },
+  "r2OptionalStatus": {
+    "reflected": ["O1", "O2", "O3", "O4", "O5", "O6", "O7", "O8", "O9", "O10", "O11", "O12", "O13", "O14"],
+    "caveats": [
+      "O6 introduziu erro: 'Supervisor ... numa task do tenant B -> 404' e impossivel (R3-M2).",
+      "O2 aplicado so na S3; S5 tambem precisa de requireAuthenticatedMutations: true (R3-O1).",
+      "O3: conjunto de escrita do legado nao cobre o no-store no sucesso da jornada (R3-O4).",
+      "O10: journeys-api-postgres nao quebra (app sem requireAuthenticatedMutations); entrada inofensiva."
+    ]
+  },
+  "mandatory": [
+    {
+      "id": "R3-M1",
+      "title": "Ajuste (a) nao cobre sessao core semeada sem root; task-approval-postgres fica sem caminho permitido",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:118",
+        "apps/api/src/__tests__/task-approval-postgres.test.ts:118-143,221-228,280-298,369-384",
+        "apps/api/src/__tests__/case-authorization-fixtures.ts:57-71",
+        "apps/api/src/case-authorization/case-routes.ts:156",
+        "packages/shared/src/auth.ts:4-13"
+      ],
+      "problem": "seedSession insere conversations/sessions por SQL sem case_roots; Operator (PATCH, P2/P4/P5) e Approver (decisao, P5) passam a receber 404 porque caseId e null. grantCase -> findCaseId exige exatamente um root, inexistente; so o Operator tem task:update; o ajuste (d) nao se aplica (esquema com 0029). A lista fechada (a)-(d) nao permite tornar verdes as provas da SPEC0250, e o proprio (d) aponta task-approval-postgres como destino da prova de efeito de status.",
+      "correction": "Acrescentar ao ajuste (a): 'quando a conversa/sessao foi semeada direto no banco, sem root (ex.: seedSession de task-approval-postgres.test.ts), criar antes o root pelo port existente app.caseAuthority.backfillCoreRoots(tenant, { afterConversationId: null, limit: 100 }) (case-authority-postgres.ts:1241-1281) ou na semente por ensureCoreConversationRootInTransaction (case-root-sql.ts:26-48), e so entao grantCase (provision: false a partir do segundo grant do mesmo operador).'"
+    },
+    {
+      "id": "R3-M2",
+      "title": "S3 exige 'Supervisor numa task do tenant B -> 404', o que e impossivel; o mutante de tenant em taskCase nao morre por rota",
+      "evidence": [
+        "docs/02_spec/0251_case_scope_tasks_approvals.md:84,130,137",
+        "apps/api/src/server.ts:1690-1691,1760",
+        "legacy/packages/secretary-journeys/src/api-routes.ts:339-340",
+        "packages/shared/src/auth.ts:4-46",
+        "packages/persistence/src/case-authority.ts:609-614,667-668",
+        "packages/persistence/src/case-authority-postgres.ts:775-784"
+      ],
+      "problem": "Todas as rotas que chegam a taskCase exigem task:update, so do Operator; pela ordem da §4.3 a permissao vem antes do helper, entao Supervisor recebe 403. No escopo assigned, taskCase sem filtro de tenant ainda nega via hasActiveGrant filtrado pelo tenant do snapshot: o mutante e equivalente em todas as provas de rota. Para approval a prova funciona (Supervisor tem approval:decide; sem filtro sairia 400 'Approval request not found').",
+      "correction": "Na S3, trocar por 'Supervisor do tenant A decidindo uma approval do tenant B e criando approval numa sessao do tenant B -> 404 e recurso inalterado'; acrescentar prova de snapshot (memoria e PostgreSQL) readSnapshot(tenantA, s => s.taskCase(idDoTenantB)) e approvalRequestCase -> null; na lista de mutantes, apontar o filtro de tenant de taskCase para essa prova (nenhuma role de escopo tenant tem task:update)."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R3-O1",
+      "point": "S5: repetir requireAuthenticatedMutations: true nas rotas de criacao; sem ele o negativo OperatorB -> 404 falha pelo motivo errado.",
+      "evidence": ["apps/api/src/server.ts:749-752,1690-1695,1805-1810", "legacy/packages/secretary-journeys/src/api-routes.ts:339-344"]
+    },
+    {
+      "id": "R3-O2",
+      "point": "S6: dizer que o 'legado sem 0029' da runtime approval e o esquema 0000-0028 via runPostgresMigrations({ migrations }) com cliente postgres unico; runInitialPostgresMigration so aplica 0000 e nao tem tabela de execucao.",
+      "evidence": ["packages/persistence/src/postgres-migrations.ts:12-15,72-76", "apps/api/src/__tests__/case-assignment-authorization-postgres.test.ts:755-789"]
+    },
+    {
+      "id": "R3-O3",
+      "point": "S4/S6: APPROVED responde 202 (escrever 2xx); o estado da execucao no codigo e WAITING_APPROVAL, nao APPROVAL_REQUIRED.",
+      "evidence": ["apps/api/src/server.ts:1245,1378"]
+    },
+    {
+      "id": "R3-O4",
+      "point": "I7/§6: permitir reply.header('cache-control','no-store') no sucesso de POST /v1/journeys/tasks, ou dizer que o servidor aplica por hook restrito as oito rotas.",
+      "evidence": ["legacy/packages/secretary-journeys/src/api-routes.ts:358", "docs/02_spec/0251_case_scope_tasks_approvals.md:39,117"]
+    },
+    {
+      "id": "R3-O5",
+      "point": "§4.1/§6: dizer se listTasks/listApprovalRequests duplicam SQL e mapeamento em case-authority-postgres.ts ou se uma mudanca minima em postgres.ts e permitida; S2 compara o escopo tenant com o listPage atual.",
+      "evidence": ["packages/persistence/src/postgres.ts:1066-1133,1396-1466,1584-1630"]
+    },
+    {
+      "id": "R3-O6",
+      "point": "rem21-014 roda API real em trusted sem autoridade de principal; /v1/tasks e /v1/approvals sem mock passam a 503 (paineis em falha, como ja ocorre com conversas). Registrar na evidencia do E2E.",
+      "evidence": ["playwright.rem21-014.config.ts:44-52", "tests/e2e/rem21-014-qualification.spec.ts:151-161,351-375,418-480"]
+    },
+    {
+      "id": "R3-O7",
+      "point": "Ajuste (a): citar tests/e2e/critical-flows.test.ts (Approver decide) junto com o worker, com import relativo da fixture.",
+      "evidence": ["tests/e2e/critical-flows.test.ts:45-50"]
+    },
+    {
+      "id": "R3-O8",
+      "point": "S7 first red: na base as rotas nao consultam a autoridade de caso; o red e 'sem no-store/2xx', nao '500'.",
+      "evidence": ["docs/02_spec/0251_case_scope_tasks_approvals.md:134"]
+    }
+  ],
+  "newPremise": {
+    "answer": "nao",
+    "reason": "Runtime approval esta em 'decidir approval' (excecoes do usuario fechadas: takeover, input, cancelamento; freio por cancelamento continua). 400->404 decorre de '404 como inexistente'. 503 em trusted para Supervisor/Admin ate a UP91-025 e a politica da SPEC0176 ('mesma regra') na sequencia decidida pelo usuario; producao NO_GO. Execucao independente sem grant automatico vem da SPEC0176 §5. R3-M1 e R3-M2 sao regras de prova e de ajuste de teste. Nenhuma migracao."
+  }
+}
