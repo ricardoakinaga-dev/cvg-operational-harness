@@ -1,0 +1,119 @@
+{
+  "spec": "docs/02_spec/0254_oidc_login_case_principals.md",
+  "specRevision": "r2",
+  "specSha256": "3c804dc22c34b736b6d0c6bb5d683b6144a1d7d34dd083d33926d34afef49694",
+  "previousReview": {
+    "path": "docs/04_audit/evidence/UP91-025-OIDC-20261022/spec-review-r1/review.md",
+    "specSha256": "2681db98b0630f96dfab94b0403ac11e521f044df7d66f4d34eae690d02539bc",
+    "verdict": "REVISE"
+  },
+  "base": "d9c84df9e",
+  "task": "UP91-025-OIDC-20261022",
+  "reviewer": "Claude Code, crítico independente; o mesmo da r1, em contexto separado do executor",
+  "at": "2026-10-22",
+  "verdict": "APPROVE",
+  "r1MandatoryStatus": [
+    {
+      "id": "M1",
+      "status": "fechado",
+      "evidence": "§4.2 com execute: [enableNonRepudiationChecks], sem allowInsecureRequests; I1; texto do JWKS em :138; M23; O5; O12. O check-sig-r2.mjs, com a chamada exata da r2, deu: chave correta 303 (token 1, jwks 1); outra chave com kid conhecido 401 (OAUTH_INVALID_RESPONSE); kid desconhecido 401 (OAUTH_KEY_SELECTION_FAILED); rotação recusada pela mesma Configuration e aceita por uma nova."
+    },
+    {
+      "id": "M2",
+      "status": "fechado",
+      "evidence": "O5 com zero chamadas a token no replay mata o M13. A sequência 'state divergente → 401; mesmo code com o state certo → 303' mata o M24, porque oidc-login-transaction.ts:150-163 roda antes de :169-175. O issuer que só difere na normalização (O2) mata o M19. As citações de M3 e M14 foram corrigidas."
+    },
+    {
+      "id": "M3",
+      "status": "fechado",
+      "evidence": "I9 (:80), O11 (:358) e o aceite 13 isentam só a authorizationUrl da resposta 200 do start; o O11 cobre o 303, os 401/503 e o audit."
+    },
+    {
+      "id": "M4",
+      "status": "fechado",
+      "evidence": "O I5 e a §4.1 (:102-103) exigem RLS e DATABASE_MIGRATION_URL com papel distinto. A §4.8, passo 2 (:255), deixa a recusa de production-bootstrap.ts:52-56 só em production. O ambiente de O6/O9/O10 está em :336-344. As linhas 59-130 do harness criam papéis e schemas; as linhas 131-137 são o stubEnv, que a r2 exclui. parseEnv aceita DATABASE_MIGRATION_URL (env.ts:31)."
+    }
+  ],
+  "mandatory": [],
+  "decisionsCheck": {
+    "producerTable": "Cobre todas as combinações, lida em ordem. O padrão canônico faz 'Np = N e Dp = D' equivaler a authorityVersion === V, coerente com case-routes.ts:116-130. A linha 3 acima da linha 4 é inofensiva: o principal com Np > N já recebe 401 nas rotas de caso (case-routes.ts:120). A linha 4 serializa com o FOR SHARE do alvo de um grant (case-authority-postgres.ts:1352-1371). A linha 7 só atualiza com N maior. A linha 9 aplica a P3 de forma literal.",
+    "spec0176Reading": "A leitura explícita da P4 em :204 (o login só tira acesso sob a mesma versão; dar acesso só na linha 1 ou com N maior) é consistente com as linhas 4, 6 e 9 e com a decisão registrada.",
+    "p5Version": "oidc-v<N>-<D> tem no máximo 80 caracteres e cabe em case-authority.ts:332 e no CHECK de 0029. A ordem vem só de N; D serve para detectar edição; as entries são ordenadas antes do digest.",
+    "bootCheck": "O hífen final do prefixo evita colisão entre v3 e v30; left() não usa coringa. A checagem lê sob RLS, ignora fixtures e inclui principais inativos. No rollback, o boot sobe e a linha 3 recusa. Réplicas com o mesmo N e D diferente terminam em recusa, nunca em privilégio. Resíduos registrados em :314."
+  },
+  "newMutants": [
+    { "id": "M23", "killed": true, "by": "O5 (assinatura e kid); a r1 mediu accepted: true sem a extensão" },
+    { "id": "M24", "killed": true, "by": "O5 (sequência e zero chamadas a token)" },
+    { "id": "M25", "killed": true, "by": "O9 (N=3 editado sobe)" },
+    { "id": "M26", "killed": true, "by": "O6/O9 (rollback sem escrita: revisão e audit iguais)" },
+    { "id": "M27", "killed": true, "by": "O5 (token 500, JWKS 500 ou fora → 503; medido com o invólucro em check-sig-r2.mjs)" },
+    { "id": "M28", "killed": true, "by": "O8 (espaços ao redor do nome e cookie em array: sem o 403, a resposta vira 401)" },
+    { "id": "M29", "killed": "parcial", "by": "O1 só lista __proto__; um mutante que exclui só __proto__ sobrevive (R2-O4)" }
+  ],
+  "deviations": [
+    {
+      "id": "Object.hasOwn sem mutante",
+      "accepted": true,
+      "note": "A justificativa das correções está errada: o mutante de leitura pode ser morto por poluição de protótipo. Os claims têm protótipo Object.prototype, e a leitura direta devolveu o array poluído enquanto Object.hasOwn deu false. Saída mínima: R2-O1."
+    },
+    {
+      "id": "Checagem de boot em packages/persistence",
+      "accepted": true,
+      "note": "Método só de leitura, sem schema. Há só dois implementadores de CaseReadSnapshot (case-authority.ts:699 e case-authority-postgres.ts:801) e nenhum fake em testes. O claim do BUILD precisa cobrir esses caminhos."
+    },
+    {
+      "id": "Digest como sufixo da versão",
+      "accepted": true,
+      "note": "A ordem vem só de N. O sufixo é o único jeito de detectar edição sem subir N sem criar estado novo, como pede a decisão do lead. A rota de caso compara a string inteira."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R2-O1",
+      "title": "Teste de poluição de protótipo (Object.prototype[claim] com um array, removido em finally; token sem o claim → 401 groups_invalid), registrado como M30; ou ao menos corrigir a frase das correções"
+    },
+    {
+      "id": "R2-O2",
+      "title": "Fazer a marcação de indisponível do invólucro D12 por chamada (AsyncLocalStorage), não por flag do módulo; a Configuration é compartilhada, e uma flag global trocaria 401 e 503 entre callbacks concorrentes"
+    },
+    {
+      "id": "R2-O3",
+      "title": "Os casos 'JWKS 500' e 'JWKS fora' do O5 exigem app ou Configuration nova, porque o JWKS fica em cache por até 300 s"
+    },
+    {
+      "id": "R2-O4",
+      "title": "O O1 deve testar constructor e prototype além de __proto__ (M29)"
+    },
+    {
+      "id": "R2-O5",
+      "title": "Ordenar requiredAmr antes do digest; hoje trocar a ordem muda D, e o boot recusa sem mudança semântica (falha fechada, custo só operacional)"
+    },
+    {
+      "id": "R2-O6",
+      "title": "Confirmar com o usuário que o corte da P4 vale só para as rotas de caso (inclusive tasks e approvals); as demais rotas aceitam a sessão até 15 min (UP91-026)"
+    },
+    {
+      "id": "R2-O7",
+      "title": "Tratar 429 do token endpoint como indisponível (503); baixa prioridade"
+    }
+  ],
+  "premises": [
+    { "id": "P1", "status": "decidida pelo usuário e aplicada", "where": "§4.2, §11" },
+    { "id": "P2", "status": "decidida pelo usuário e aplicada", "where": "§4.4" },
+    { "id": "P3", "status": "decidida pelo usuário e aplicada", "where": "§4.5 linha 9" },
+    { "id": "P4", "status": "decidida pelo usuário e aplicada", "where": "§4.5 linha 4 e :204" },
+    { "id": "P5", "status": "decidida pelo lead e aplicada", "where": "I12, §4.1, linhas 3 e 7, §4.8 passo 6" },
+    { "id": "P6", "status": "decidida pelo lead e aplicada", "where": "I5, §4.1, §7" },
+    { "id": "P7", "status": "decidida pelo lead e aplicada", "where": "§5, §11" },
+    { "id": "nova", "status": "nenhuma premissa escondida nova", "where": "a ressalva sobre o alcance do corte da P4 ficou no R2-O6" }
+  ],
+  "probes": {
+    "scripts": [
+      "scratchpad/run/check-sig-r2.mjs",
+      "node -e (poluição de protótipo vs Object.hasOwn)"
+    ],
+    "runtime": "Node v22.23.2 com env -i; openid-client 6.8.8, oauth4webapi 3.8.8 e jose 6.2.12 extraídos do cache npm para o scratchpad, fora do repositório",
+    "data": "só sintéticos"
+  },
+  "notDone": ["código", "testes do repositório", "PG", "lockfile", "commit", "push"]
+}

@@ -1,0 +1,50 @@
+{
+  "task": "UP91-025-OIDC-20261022",
+  "at": "2026-10-22",
+  "by": "Claude Code, CONT-20261018-D9EF",
+  "channel": "AskUserQuestion",
+  "spec": "docs/02_spec/0254_oidc_login_case_principals.md (r1, sha256 2681db98b0630f96dfab94b0403ac11e521f044df7d66f4d34eae690d02539bc)",
+  "decisions": [
+    {
+      "id": "P1",
+      "question": "UP91-025 (login OIDC com IdP sintético): a SPEC0254 precisa de uma biblioteca OIDC no runtime da API. A SPEC0152 exige biblioteca mantida, em vez de validação feita à mão. Autoriza adicionar `openid-client` 6.x (MIT, com `jose` e `oauth4webapi` do mesmo mantenedor) no lockfile e na allowlist de licenças?",
+      "answer": "Autorizo openid-client (Recomendado)",
+      "scope": "versão exata, a 6.x mais recente sem advisory na data do BUILD, com claim próprio de lockfile; BUILD só depois do APPROVE do crítico"
+    },
+    {
+      "id": "P2",
+      "question": "Um usuário que, no IdP, tem grupos que não estão na matriz de papéis do harness: o que acontece no login?",
+      "answer": "Ignorar grupos alheios (Recomendado)",
+      "scope": "só contam os grupos da matriz; o login falha com zero ou mais de um grupo elegível, ou com entrada inativa"
+    },
+    {
+      "id": "P3",
+      "question": "Se a role do usuário mudar no IdP sem mudar a versão da matriz, o login seguinte faz o quê?",
+      "answer": "Recusa até nova versão (Recomendado)",
+      "scope": "regra literal da SPEC0176: login não atualiza sozinho registro existente; SPEC aprovada não muda"
+    },
+    {
+      "id": "P4",
+      "question": "Login OIDC: um operador ativo faz login, e o IdP agora diz que o grupo dele corresponde a uma entrada inativa da matriz (por exemplo, saiu da equipe). O login é recusado nos dois casos. A dúvida é se o login também desativa o registro do operador no harness. A SPEC0176 diz que um login nunca atualiza sozinho um registro que já existe.",
+      "answer": "Login só pode reduzir (Recomendado)",
+      "scope": "recusa e desativa na hora, o que corta as sessões abertas; o login pode tirar acesso, mas nunca dar ou trocar role; registrado como leitura explícita da SPEC0176 :52"
+    }
+  ],
+  "leadDecisions": [
+    {
+      "id": "P5",
+      "decision": "versão de autoridade por inteiro crescente na configuração (`matrix.version`), não por digest: o produtor recusa sem escrita quando a versão do principal é maior que a vigente (rollback de matriz não reativa), e só uma versão maior que a do principal conta como 'versão nova' para atualizar ou reativar; editar a matriz exige subir a versão (o boot recusa matriz cujo digest mude sem mudar a versão, se a SPEC conseguir provar isso sem estado novo; senão, registrar como resíduo)",
+      "why": "o digest não tem ordem: voltar a uma matriz anterior reativaria principais desativados, contra a SPEC0176 :52"
+    },
+    {
+      "id": "P6",
+      "decision": "aceita como premissa explícita só em NODE_ENV=test: no modo OIDC de teste o processo de serving recebe a credencial de migração; em produção continua proibido (SPEC0144 :54)",
+      "why": "o IdP sintético e o modo OIDC desta fatia só existem em teste"
+    },
+    {
+      "id": "P7",
+      "decision": "informativo, já decidido pelo escopo de 21/10 (IdP sintético): até a 0254-C, nenhuma composição fora de teste lê casos; o ensaio C8 com HMAC segue com 503 nas rotas de caso",
+      "why": "comunicado ao usuário no relatório"
+    }
+  ]
+}
