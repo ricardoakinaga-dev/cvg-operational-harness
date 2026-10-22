@@ -277,6 +277,17 @@ describe('SPEC0253 P1: actions, host tooling and job rules', () => {
     for (const step of allSteps) {
       expect(step.run, step.name).not.toMatch(/\b(?:curl|wget)\b/)
     }
+    expect(workflow).not.toMatch(/\b(?:curl|wget)\b/)
+  })
+
+  it('writes every run: inline or as a literal | block, so the run: checks see it (R2-O2)', () => {
+    const runs = [...workflow.matchAll(/^\s+run:(.*)$/gm)].map((m) =>
+      m[1].trim()
+    )
+    expect(runs.length).toBe(allSteps.filter((step) => step.run).length)
+    for (const header of runs) {
+      expect(header === '|' || !/^[|>]/.test(header), header).toBe(true)
+    }
   })
 
   it('applies the job rules to every job and step', () => {

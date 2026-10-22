@@ -1075,25 +1075,40 @@ describe('SPEC0253 O10: Trivy gate diagnostics', () => {
 })
 
 describe('SPEC0253 code review r1: record hardening (O4, O6)', () => {
-  it('refuses in build, before any login or push, a record that would not fit release-image.json (O4)', () => {
-    const ctx = setup()
-    const findings = Array.from({ length: 8000 }, (_, index) => ({
-      VulnerabilityID: `CVE-2026-${String(index).padStart(5, '0')}`,
-      PkgName: `pkg-${index}`,
-      Severity: 'HIGH',
-      InstalledVersion: '1.0.0'
-    }))
-    fs.writeFileSync(
-      path.join(ctx.evidence, 'trivy-full.json'),
-      json(trivyReport(ctx.image.configDigest, findings))
-    )
-    const result = runBuild(ctx)
-    expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain('release_build_record_too_large')
-    expect(fs.existsSync(path.join(ctx.evidence, 'build-record.json'))).toBe(
-      false
-    )
-  })
+  // About 156 bytes per finding in the record: 8000 is above 1 MiB, 6300 is
+  // between the margin (1 MiB − 128 KiB) and 1 MiB (code review r2, R2-O1),
+  // 5000 is below the margin and must pass.
+  it.each([
+    ['above the 1 MiB limit', 8000, false],
+    ['inside the margin kept for release-image.json', 6300, false],
+    ['below the margin', 5000, true]
+  ])(
+    'checks the record size in build, before any login or push (O4): %s',
+    (_label, count, accepted) => {
+      const ctx = setup()
+      const findings = Array.from({ length: count }, (_, index) => ({
+        VulnerabilityID: `CVE-2026-${String(index).padStart(5, '0')}`,
+        PkgName: `pkg-${index}`,
+        Severity: 'HIGH',
+        InstalledVersion: '1.0.0'
+      }))
+      fs.writeFileSync(
+        path.join(ctx.evidence, 'trivy-full.json'),
+        json(trivyReport(ctx.image.configDigest, findings))
+      )
+      const result = runBuild(ctx)
+      const record = path.join(ctx.evidence, 'build-record.json')
+      if (accepted) {
+        expect(result.status).toBe(0)
+        expect(fs.statSync(record).size).toBeGreaterThan(700 * 1024)
+        expect(fs.statSync(record).size).toBeLessThan(1024 * 1024 - 128 * 1024)
+      } else {
+        expect(result.status).not.toBe(0)
+        expect(result.stderr).toContain('release_build_record_too_large')
+        expect(fs.existsSync(record)).toBe(false)
+      }
+    }
+  )
 
   it('refuses a file whose inode changed between lstat and open (O6)', () => {
     const directory = tempDir('cvg-release-inode-')
