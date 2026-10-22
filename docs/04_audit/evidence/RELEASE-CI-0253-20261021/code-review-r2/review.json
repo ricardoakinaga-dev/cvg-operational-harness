@@ -1,0 +1,68 @@
+{
+  "round": 2,
+  "verdict": "APPROVE",
+  "commits": ["059b27c5a"],
+  "base": "6e313fb44",
+  "spec": {
+    "path": "docs/02_spec/0253_release_image_ghcr.md",
+    "sha256": "e69dfe057ed4ce141f74ead3ac570837140e87a00948fbdeeecb23e3910c4109"
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "R2-O1",
+      "title": "A prova de O4 nao distingue a margem do limite cheio",
+      "evidence": [
+        "tests/release-image-record.test.js:1078-1096",
+        "scripts/release-image-record.mjs:57",
+        "scripts/release-image-record.mjs:286-291"
+      ],
+      "risk": "baixo: o teste usa 8000 achados (build-record de 1249499 bytes, acima de 1 MiB); o mutante RELEASE_RECORD_MARGIN = 0 sobrevive (55/55 verdes na copia do scratchpad); sem margem volta a falha pos-push da O4 da r1 na faixa de 896 KiB a 1 MiB",
+      "fix": "caso com build-record entre 917504 e 1048576 bytes (cerca de 6000 achados minimos) esperando release_build_record_too_large; opcionalmente, um caso no tamanho maximo aceito que confere o publish dentro do limite"
+    },
+    {
+      "id": "R2-O2",
+      "title": "O teste de O5 (e os outros asserts sobre step.run) nao enxerga run: |- nem run: >",
+      "evidence": [
+        "tests/release-image-workflow-contract.test.js:116",
+        "tests/release-image-workflow-contract.test.js:276-280"
+      ],
+      "risk": "baixo: com REGISTRY_TOKEN: ${{ github.token }} e curl -H Authorization em run: |- ou run: >, os 34/34 ficam verdes (a variante em linha e morta); a limitacao do parser e anterior ao delta, mas a prova nova depende dela; o YAML atual nao tem curl/wget nem blocos |-/>",
+      "fix": "aplicar o O5 sobre o texto inteiro do workflow, ou exigir que todo run: seja | ou em linha (recusar |-, |+, > e >-)"
+    },
+    {
+      "id": "R2-O3",
+      "title": "O1 ainda aceita 200 sem a chave tags como pagina vazia",
+      "evidence": [
+        "scripts/release-image-gate.mjs:750-759"
+      ],
+      "risk": "muito baixo: {} na pagina 1 da missing_or_inaccessible com a dica enganosa da §9; {} numa pagina >=2 deixa a lista parcial; absent continua exigindo 404 MANIFEST_UNKNOWN; contraria o proprio comentario e a correcao da r1",
+      "fix": "aceitar so Array.isArray(body.tags) || body.tags === null, mais um caso de teste com {}"
+    },
+    {
+      "id": "R2-REG",
+      "title": "Registro: o first red nao cobre as provas acrescentadas depois",
+      "evidence": [
+        "tests/release-image-gate.test.js:1338",
+        "tests/release-image-workflow-contract.test.js:276",
+        "tests/release-image-gate.test.js:1207"
+      ],
+      "risk": "documental: a eficacia dessas provas aparece so nos mutantes R1-O2-oneLine-identity, R1-O5-curl-in-workflow e R1-O6-without-pagination (todos KILLED); a O7 da r1 continua pendente",
+      "fix": "o relatorio do BUILD registra isso, mais os desvios (a)-(i) da r1, e o Lead versiona as evidencias"
+    }
+  ],
+  "checked": [
+    "O1 resolvido: 200 ilegivel ou tags que nao e lista vira unreadable em qualquer pagina (gate.mjs:752-770); provas HTML p1, garbage p2 e tags:'x' (gate.test.js:1257)",
+    "O2 resolvido: mask so depois de curlConfigValue (gate.mjs:686-697); errorCode ^[A-Z0-9_]{1,64}$, senao UNRECOGNIZED_CODE, que falha fechado; oneLine em todo stderr do gate e nos motivos do resumo; stdout continua em JSON de uma linha",
+    "O3 resolvido: argv comeca com -q --proto =https na funcao curl unica (gate.mjs:572-586); o curl real aceita (real-anonymous.json: 403 DENIED)",
+    "O4 resolvido: limite antes de gravar, mais releitura por readEvidenceFile (record.mjs:283-293); o passo Build record (yml:272) vem antes de precondition (279) e login (286); pior caso simulado: release-image.json com 1018338-1021100 bytes, folga de ~27 KB",
+    "O5 resolvido como proposto (workflow-contract.test.js:276-280); mutante em linha morto",
+    "O6 resolvido: wait e superseded pela CLI (exit 0, publish=false, sem gate_record); --paginate --slurp nas listas e nao na branch; inode testado por stub de lstat",
+    "Invariantes mantidos: token so no stdin do curl; release nunca cria o pacote; refuse em 5xx/timeout/406/indice sem mudanca; GITHUB_OUTPUT sem mudanca",
+    "Escopo: contract.mjs e o workflow sem mudanca; o delta toca so os 5 arquivos declarados",
+    "vitest tests/release-image-*.test.js: 235/235 verdes; prettier --check limpo",
+    "mutants-final.json: 125 mutantes KILLED, 11 do delta correspondendo a O1-O6; first-red-r1.txt com 6 vermelhos (O1x2, O2x2, O3, O4)",
+    "Mutantes do critico, na copia do scratchpad: margem 0 sobrevive (R2-O1); curl em run: |- e > sobrevive, em linha morre (R2-O2)",
+    "SHA-256 da SPEC r4 conferido"
+  ]
+}

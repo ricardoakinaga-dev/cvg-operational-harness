@@ -1,0 +1,99 @@
+{
+  "task": "RELEASE-CI-0253-20261021",
+  "spec": "docs/02_spec/0253_release_image_ghcr.md",
+  "specSha256": "e69dfe057ed4ce141f74ead3ac570837140e87a00948fbdeeecb23e3910c4109",
+  "base": "cd0b50c1b405dcb26cd91c72db0dde7c90f17ca7",
+  "at": "2026-10-22",
+  "node": "v22.23.2",
+  "method": "provas escritas antes do workflow e dos scripts; cada estágio rodado com env -i e Node 22",
+  "stages": [
+    {
+      "stage": "A",
+      "state": "base + tests/release-image-*.test.js e fixtures; sem scripts nem workflow; Dockerfile da base",
+      "command": "npx vitest run tests/release-image-workflow-contract.test.js tests/release-image-gate.test.js tests/release-image-record.test.js",
+      "exitCode": 1,
+      "result": "Test Files 3 failed (3)",
+      "failures": [
+        "Error: Cannot find module '../scripts/release-image-contract.mjs' imported from /mnt/dados/cvg-work/cvg-d9ef-prodpath-20261021/tests/release-image-gate.test.js",
+        "Error: Cannot find module '../scripts/release-image-contract.mjs' imported from /mnt/dados/cvg-work/cvg-d9ef-prodpath-20261021/tests/release-image-record.test.js",
+        "Error: Cannot find module '../scripts/release-image-contract.mjs' imported from /mnt/dados/cvg-work/cvg-d9ef-prodpath-20261021/tests/release-image-workflow-contract.test.js"
+      ],
+      "proofs": {
+        "P1": "módulo ausente (o teste importa o contrato)",
+        "P3": "módulo ausente",
+        "P4": "módulo ausente",
+        "L5": "módulo ausente (CLI do gate)"
+      }
+    },
+    {
+      "stage": "B",
+      "state": "scripts presentes; workflow ausente; Dockerfile da base",
+      "command": "npx vitest run tests/release-image-workflow-contract.test.js",
+      "exitCode": 1,
+      "result": "Test Files 1 failed (1)",
+      "failures": [
+        "Error: ENOENT: no such file or directory, open '/mnt/dados/cvg-work/cvg-d9ef-prodpath-20261021/.github/workflows/release-image.yml'"
+      ],
+      "proofs": {
+        "P1": "arquivo ausente (.github/workflows/release-image.yml)"
+      }
+    },
+    {
+      "stage": "C",
+      "state": "workflow presente; Dockerfile da base (linha 1 sem digest)",
+      "command": "npx vitest run tests/release-image-workflow-contract.test.js -t P2",
+      "exitCode": 1,
+      "result": "Tests 1 failed | 32 skipped (33)",
+      "failures": [
+        "AssertionError: expected '# syntax=docker/dockerfile:1.7' to match /^…/dockerfile:1\\.7@sha256:[0-9a-f]{64}$"
+      ],
+      "proofs": {
+        "P2": "# syntax sem digest (Dockerfile:1)"
+      }
+    },
+    {
+      "stage": "D",
+      "state": "provas do endurecimento da crítica r1 contra os scripts de 6e313fb44 (copiados de volta e restaurados por SHA-256)",
+      "command": "npx vitest run tests/release-image-*.test.js -t 'code review r1'",
+      "exitCode": 1,
+      "result": "Tests 6 failed | 4 passed | 224 skipped (234)",
+      "failed": [
+        "refuses in build, before any login or push, a record that would not fit release-image.json (O4)",
+        "starts every curl argv with -q and HTTPS-only protocols (O3)",
+        "classifies a tags/list 200 with HTML body on the only page as error (O1)",
+        "classifies a tags/list 200 with unreadable second page as error (O1)",
+        "never masks nor prints a token that is not a single printable line (O2)",
+        "keeps registry error codes and reasons on one sanitized line (O2)"
+      ],
+      "passed": [
+        "refuses a file whose inode changed between lstat and open (O6)",
+        "classifies a tags/list 200 with tags that is not a list as error (O1)",
+        "decides wait with exit 0 and publish=false",
+        "decides superseded with exit 0 and publish=false"
+      ],
+      "note": "as que passaram cobrem lacunas de prova de comportamento já existente (inode, wait/superseded, tags não lista)"
+    }
+  ],
+  "green": {
+    "commit": "b991d4d07e9c997a0bd396affebbc2c36a139a05",
+    "result": "3 arquivos, 223 testes verdes (P1/P2 33, P3/L5 e sondagem 137, P4 53)",
+    "afterStricterProofs": {
+      "commit": "6e313fb44",
+      "result": "3 arquivos, 223 testes verdes (as provas novas entraram em testes existentes)"
+    },
+    "afterCodeReviewR1": {
+      "commit": "059b27c5a",
+      "result": "3 arquivos, 235 testes verdes (P1/P2 34, gate 146, registro 55)"
+    },
+    "afterCodeReviewR2": {
+      "commit": "2f763b94f",
+      "result": "3 arquivos, 238 testes verdes (P1/P2 35, gate 146, registro 57)",
+      "note": "provas só de teste sobre comportamento já existente (R2-O1, R2-O2): não há vermelho no código; a eficácia vem de 4 mutantes mortos (margem zerada, margem grande demais, run: >- com curl e token, run: >- com interpolação de workflow_run)"
+    }
+  },
+  "testSideFixesDuringBuild": [
+    "ordenação numérica dos IDs de suíte no caso real (sort léxico no teste)",
+    "parser textual do workflow: topLevel cortava a chave no índice 0",
+    "asserção sem matcher e regex aquasecurity/ que atingia a referência da imagem, não um uses:"
+  ]
+}
