@@ -1,11 +1,3 @@
-# HISO005-P2-BUILD-0252 — Annex B.3.3 no kernel B6 (SPEC0252, opção b1) — 22/10/2026 (Claude Code)
-
-- `status: READY_FOR_REVIEW` (PR). [Decisão do usuário de 21/10](04_audit/evidence/HISO005-P2-BUILD-0252-20261021/user-decision-20261021.json): correção pela opção b1, com a regra "BUILD após APPROVE do crítico". [Claim](08_runtime/agent_coordination.md).
-- `last_completed_action`: [SPEC0252](02_spec/0252_b6_annexb_block_function.md) r3 aprovada pelo crítico independente (r1–r2 REVISE). BUILD local: kernel `semantic-kernel-v8-annexb-block-function` marca `UNKNOWN_ANNEXB_FUNCTION` em toda função declarada em bloco de módulo `require` sloppy; fecha os 26 PROVEN falsos da v7 nos fixtures. Raiz `228e7918` sem mudança (11.723 diagnósticos, 10.833 tuplas, zero provas, normal = strict). 165 testes novos com first red, 29/29 mutantes, B6 focal 1.153/1.153, `test:core` 6.319 verdes; crítico de código APPROVE na r2. [Relatório](04_audit/evidence/HISO005-P2-BUILD-0252-20261021/REPORT.md).
-- `next_action`:
-  1. Merge do PR com os 5 checks obrigatórios verdes no SHA exato.
-  2. Próximo da B6: [HISO005-P2-WORKSPACE-MAP](03_build/0370_harness_product_isolation_backlog.md) e SPEC0246, com a mesma regra de gate.
-
 # AUD0621-REMEDIATION-20261020 — remediação da auditoria crítica 0621 — 21/10/2026 (Claude Code)
 
 - `status: READY_FOR_REVIEW` (PR da integração). Pedido do usuário em 20/10: "resolva todos os itens apresentados nesse relatório do agente crítico" ([relatório 0621](04_audit/0621_critical_production_audit_2026-10-20.md), 26 achados, NO_GO). [Plano e resultado](03_build/0392_aud0621_remediation.md). [Claim](08_runtime/agent_coordination.md).

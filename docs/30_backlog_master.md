@@ -1,8 +1,3 @@
-# HISO005-P2-BUILD-0252 — 22/10/2026
-
-- Annex B.3.3 no kernel B6 ([SPEC0252](02_spec/0252_b6_annexb_block_function.md)): BUILD local concluído, em PR. Fecha o PROVEN falso do achado do BUILD0247 ([cartão](03_build/0370_harness_product_isolation_backlog.md)).
-- Abertos na B6: HISO005-P2-WORKSPACE-MAP e SPEC0246.
-
 # AUD0621 — remediação da auditoria crítica 0621 — 21/10/2026
 
 - F02–F24 e F26: fechados localmente, provados por teste e pela requalificação ([plano 0392](03_build/0392_aud0621_remediation.md)). F01 e F21: fechados localmente, com dependência de ambiente real. F25: fechado localmente pela frente PISO-008 (backup, restore, monitor externo, stop e imagem); falta o ambiente real (nft no host, receita no CI, monitor em outra máquina).

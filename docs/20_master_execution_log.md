@@ -1,10 +1,3 @@
-# HISO005-P2-BUILD-0252 — Annex B.3.3 no kernel B6 (SPEC0252, opção b1) — 21–22/10/2026 (Claude Code, CONT-20261018-D9EF)
-
-- Recon T1 ([relatório](04_audit/evidence/HISO005-P2-ANNEXB-RECON-20261021/REPORT.md)): 0 ocorrências na raiz real; 18 PROVEN falsos na v7 nos fixtures; custo medido das opções; usuário escolheu b1 em 21/10.
-- SPEC0252: três revisões do crítico independente (r1–r2 REVISE, r3 APPROVE); os opcionais da r3 viraram os fixtures D01–D11 do BUILD.
-- BUILD local (`1ed16fdb`, `b5a76d2d`, `9a571d36`, `3e8275c2`): kernel v8, teste de 165 casos sobre 88 fixtures, literal da versão em 7 suítes B6. Provas AB01–AB09, 29/29 mutantes, B6 na raiz `228e7918` igual à base. Crítico de código r1 REVISE (M1 nome computado de método de objeto, M2 mutantes sobreviventes), r2 APPROVE.
-- Lead: REPORT gravado, errata do M1 decidida sem r4; gerador da evidência reformatado para o gitleaks, com o teste gerado igual byte a byte.
-
 # AUD0621-REMEDIATION-20261020 — remediação dos 26 achados da auditoria 0621 — 20–21/10/2026 (Claude Code)
 
 - Frentes e commits de candidata: produto `8cb00604` (F07–F11, F18, F21 produto, F24, F25), F01 `a9861469` (SPEC0176, migração 0029), runtime `92004871` (SPEC0248: F02–F04, F13, F14, F21 núcleo), persistência `0e91b96b` (SPEC0249, sem migração: F05, F06, F17, F19, F20, F26) e API/web `3a4f4b9d` + `b912b348` (SPEC0250: F12, F15, F16, F22, F23). Cada uma com first red na base, mutantes e crítico independente; detalhes na evidência de cada frente.
