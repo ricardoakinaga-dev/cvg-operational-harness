@@ -47,8 +47,15 @@ está ativa sem expor o segredo.
 ## Rotação
 
 Regra geral: gerar a nova versão no cofre, renderizar o arquivo de ambiente,
-aplicar com `docker compose ... up -d <serviço>` (recria só o que mudou),
+aplicar com `docker compose ... up -d --no-deps <serviço>` (recria só esse
+serviço; depois de recriar a `api`, `docker compose ... restart proxy`),
 conferir `/ready` e o smoke de destino, e só então remover a versão antiga.
+"Recriar" na tabela abaixo é esse comando. Sem `--no-deps` o compose roda o
+`migrate` de novo, que fora da janela de `GRANT`/`REVOKE`
+([C3](../README.md#c3--job-de-migração-antes-do-serving)) falha com
+`permission denied for database cvg` e deixa a `api` recriada parada em
+`Created`
+([registro](../../../docs/04_audit/evidence/HOSPITAL-SERVER-0393-20261021/raw/single-service-up.txt)).
 Registrar data e `keyId` (nunca o valor) no ledger da rodada.
 
 | Segredo                           | Sobreposição                                                                                                                     | Ordem                                                                                                                                                                                                                                                                  |
@@ -59,7 +66,7 @@ Registrar data e `keyId` (nunca o valor) no ledger da rodada.
 | `CVG_STOP_ALERT_WEBHOOK_SECRET`   | Do lado do receptor: ele aceita as duas assinaturas durante a troca                                                              | 1) receptor aceita antigo e novo; 2) recriar `api`; 3) induzir/aguardar um alerta de teste (C7); 4) receptor retira o antigo                                                                                                                                           |
 | Senha do runtime (`DATABASE_URL`) | Não (um papel, uma senha)                                                                                                        | `\password cvg_runtime` e, em seguida, recriar `api` e `worker` no mesmo minuto. Conexões abertas seguem; só reconexões nesse intervalo falham, e os pools tratam a perda sem derrubar o processo (0802)                                                               |
 | Senha de sessão                   | Não                                                                                                                              | `\password cvg_session` e recriar `api`. Durante o intervalo, rotas de operador respondem 503 (falha fechada, 0802)                                                                                                                                                    |
-| Senhas de migração e dono de auth | Não, mas só são usadas no deploy                                                                                                 | Trocar entre deploys; o próximo `up -d` já usa a nova                                                                                                                                                                                                                  |
+| Senhas de migração e dono de auth | Não, mas só são usadas no deploy                                                                                                 | Trocar entre deploys; o próximo `up -d` completo, dentro da janela de C3, já usa a nova                                                                                                                                                                                |
 | Senha de backup                   | Não                                                                                                                              | Trocar fora do horário do timer e atualizar `/etc/cvg-harness/backup.env`                                                                                                                                                                                              |
 | Certificado TLS                   | Sim (o novo é instalado antes de o antigo vencer)                                                                                | Renovar, gravar nos caminhos de `CVG_HARNESS_TLS_*` e `docker compose ... exec proxy nginx -s reload`                                                                                                                                                                  |
 

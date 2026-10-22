@@ -1,0 +1,20 @@
+# Third stack (images rebuilt again: runtime sha256:98d75099..., web sha256:13a2b5a5...),
+# after the REVOKE CREATE that closes the G5 window. hc = compose.production + compose.onprem.
+== hc up -d api (config unchanged)
+Container api Running; Container migrate Starting/Started/Waiting;
+service "migrate" didn't complete successfully: exit 1
+state: api Up (healthy); migrate Exited (1)
+== hc up -d --force-recreate api (what a secret rotation does)
+Container api Recreate/Recreated; Container migrate Starting/Started/Waiting;
+service "migrate" didn't complete successfully: exit 1
+state: api Created (NOT running); migrate Exited (1)
+== hc up -d --no-deps --force-recreate api
+Container api Recreate/Recreated/Starting/Started
+state: api Up (healthy) after 10 s
+https://localhost:4457/live -> 200 200 200 (then hc restart proxy -> 200 200 200)
+migrate log: {"event":"migration.failed","message":"permission denied for database cvg"} (2 occurrences)
+== earlier, second stack: hc stop worker ; hc start worker -> same migrate failure, worker stayed Exited;
+   hc up -d --no-deps worker -> worker Up (healthy)
+Conclusion: outside the GRANT/REVOKE window every compose command that walks the
+dependency tree re-runs migrate and fails (G5). Single-service operations need
+--no-deps (and a proxy restart after recreating api), or the window opened again.

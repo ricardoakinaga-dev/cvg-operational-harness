@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "kind": "cvg-production-target-smoke",
+  "task": "PLAN0374-B-FABLE-20261007",
+  "plan": "docs/03_build/0374_plano_producao_harness.md, Fase C",
+  "items": [
+    "C5",
+    "C7",
+    "C8",
+    "C9"
+  ],
+  "target": {
+    "origin": "https://localhost:4457",
+    "plainHttp": "http://localhost:3457"
+  },
+  "startedAt": "2026-10-22T03:13:58.535Z",
+  "finishedAt": "2026-10-22T03:13:59.295Z",
+  "dataPolicy": "no secrets or personal data: tokens and cookies are never recorded; operator ids only as a sha256 prefix",
+  "checks": [
+    {
+      "name": "config.target_https",
+      "items": [
+        "C5"
+      ],
+      "verdict": "PASS"
+    },
+    {
+      "name": "c5.plain_http_426",
+      "items": [
+        "C5"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "live": 426,
+        "session": 426,
+        "upgrade": "TLS/1.2"
+      }
+    },
+    {
+      "name": "c5.https_live_200",
+      "items": [
+        "C5",
+        "C7"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "name": "c7.https_ready_200",
+      "items": [
+        "C7"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "name": "c5.security_headers",
+      "items": [
+        "C5"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "contentSecurityPolicy": true,
+        "nosniff": true,
+        "frameDeny": true,
+        "noReferrer": true,
+        "hsts": true,
+        "hstsMaxAge": 31536000,
+        "server": "nginx"
+      }
+    },
+    {
+      "name": "c5.cors_hostile_origin_refused",
+      "items": [
+        "C5"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "simple": 403,
+        "preflight": 403
+      }
+    },
+    {
+      "name": "c5.cors_allowed_origin_preflight",
+      "items": [
+        "C5"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "status": 204
+      }
+    },
+    {
+      "name": "c8.no_session_401",
+      "items": [
+        "C8"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "path": "/v1/tasks",
+        "status": 401
+      }
+    },
+    {
+      "name": "c8.operator_a_login",
+      "items": [
+        "C8"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "status": 200,
+        "role": "Admin",
+        "operatorIdSha256": "25ba833ec6b0",
+        "cookie": {
+          "httpOnly": true,
+          "secure": true,
+          "sameSiteStrict": true
+        },
+        "reuse": 200,
+        "protected": 200
+      }
+    },
+    {
+      "name": "c8.operator_b_login",
+      "items": [
+        "C8"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "status": 200,
+        "role": "Operator",
+        "operatorIdSha256": "c96d884b1077",
+        "cookie": {
+          "httpOnly": true,
+          "secure": true,
+          "sameSiteStrict": true
+        },
+        "reuse": 200,
+        "protected": 200
+      }
+    },
+    {
+      "name": "c8.distinct_roles",
+      "items": [
+        "C8"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "logins": 2,
+        "roles": [
+          "Admin",
+          "Operator"
+        ]
+      }
+    },
+    {
+      "name": "c8.role_enforcement",
+      "items": [
+        "C8"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "path": "/v1/admin/agents",
+        "observed": [
+          {
+            "label": "A",
+            "role": "Admin",
+            "expected": 200,
+            "status": 200
+          },
+          {
+            "label": "B",
+            "role": "Operator",
+            "expected": 403,
+            "status": 403
+          }
+        ]
+      }
+    },
+    {
+      "name": "c7.metrics_exposure",
+      "items": [
+        "C7"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "expected": false,
+        "status": 404
+      }
+    },
+    {
+      "name": "c9.image_digest_match",
+      "items": [
+        "C9"
+      ],
+      "verdict": "PASS",
+      "detail": {
+        "expected": "sha256:40d0fc8ee053795faae70725a0f7799507f72f1a5301da1571ef9117f3fa9a0e",
+        "deployed": "sha256:40d0fc8ee053795faae70725a0f7799507f72f1a5301da1571ef9117f3fa9a0e"
+      }
+    },
+    {
+      "name": "c5.rate_limit_observation",
+      "items": [
+        "C5"
+      ],
+      "verdict": "PASS",
+      "reason": "observation only; anonymous budget is 300 requests/min per client IP (apps/api/src/server.ts)",
+      "detail": {
+        "path": "/v1/tasks",
+        "requests": 40,
+        "statuses": {
+          "401": 40
+        },
+        "first429At": null
+      }
+    }
+  ],
+  "summary": {
+    "pass": 15,
+    "fail": 0,
+    "skipped": 0
+  },
+  "complete": true,
+  "cleanup": [
+    {
+      "label": "A",
+      "logout": 200
+    },
+    {
+      "label": "B",
+      "logout": 200
+    }
+  ],
+  "status": "PASS"
+}

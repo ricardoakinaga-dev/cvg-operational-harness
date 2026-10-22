@@ -1,0 +1,91 @@
+{
+  "round": 1,
+  "task": "RELEASE-CI-0253-20261021",
+  "reviewer": "crítico de código independente (contexto novo, sem participação na SPEC nem no BUILD)",
+  "at": "2026-10-22",
+  "spec": "docs/02_spec/0253_release_image_ghcr.md",
+  "specSha256": "e69dfe057ed4ce141f74ead3ac570837140e87a00948fbdeeecb23e3910c4109",
+  "base": "cd0b50c1b",
+  "commits": ["b991d4d07", "6e313fb44"],
+  "verdict": "APPROVE",
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "tags/list 200 com corpo ilegível vira lista vazia ou página omitida, e não error (§3.2 regra 8)",
+      "evidence": "scripts/release-image-gate.mjs:735 (const pageTags = body?.tags ?? []); reprodução com curl falso no scratchpad: página única com HTML dá missing_or_inaccessible/package_tags_empty; página 2 com 'garbage' ou {\"tags\":null} dá ok/absent com lista parcial",
+      "risk": "baixo: falha fechado na página única, mas com motivo enganoso (pré-requisito da §9); com várias páginas, enfraquece só a conferência 'sha-S listada com manifesto 404'; o absent continua exigindo manifesto 404 MANIFEST_UNKNOWN; não há teste e um mutante sobrevive",
+      "fix": "corpo que não é JSON, ou tags que não é lista nem null, marca unreadable:true (error) em qualquer página; casos P3/L5 com curl falso (HTML nas páginas 1 e 2) esperando package=error"
+    },
+    {
+      "id": "O2",
+      "title": "Higiene de strings de rede no log: ::add-mask:: antes de validar o token e motivos crus no stderr",
+      "evidence": "scripts/release-image-gate.mjs:673-681 (mask(issued) antes de curlConfigValue); scripts/release-image-gate.mjs:971-972 e :1047 (reasons crus no stderr, com errors[0].code do GHCR e conclusion/status da API, gate.mjs:84, 99, 153, 288, 355)",
+      "risk": "muito baixo: as fontes são GHCR e API sob TLS, e o token é base64 sem CR/LF; com um token 'abc\\ndef', o runner mascararia só 'abc' e imprimiria 'def' em claro; os passos com motivos crus já falham e as saídas vêm de arquivo",
+      "fix": "validar o token (ASCII imprimível, sem CR/LF) antes do ::add-mask:: e não imprimi-lo se for inválido; emitir reasons no stderr com JSON.stringify ou sanear \\r\\n"
+    },
+    {
+      "id": "O3",
+      "title": "curl sem -q como primeiro argumento (lê ~/.curlrc)",
+      "evidence": "scripts/release-image-gate.mjs:571-582",
+      "risk": "baixo: o runner hospedado não tem .curlrc, e só passos anteriores do próprio job poderiam criá-lo; um .curlrc com user=/proxy= mudaria a semântica da sonda anônima, que hoje falha fechado",
+      "fix": "argv começando por '-q', mais '--proto =https'; teste conferindo argv[0] === '-q'"
+    },
+    {
+      "id": "O4",
+      "title": "Tamanho de build-record.json e release-image.json só é conferido depois do push",
+      "evidence": "scripts/release-image-record.mjs:280-283 (build grava sem conferir o limite); scripts/release-image-contract.mjs:102-103 (1 MiB cada); scripts/release-image-record.mjs:346-353 (primeira leitura com limite, em publish, depois do push e dos attest); release-image.json contém o build-record inteiro, com fullReport.findings",
+      "risk": "baixo: com muitos HIGH/CRITICAL sem correção, publish falha depois do push (publicação incompleta e triagem da §8); sem impacto de integridade",
+      "fix": "em build, conferir o tamanho antes de gravar (ou readEvidenceFile logo depois), com margem para release-image.json; ou limitar/resumir findings"
+    },
+    {
+      "id": "O5",
+      "title": "P1 deixou de enxergar curl/wget no workflow depois do desvio (a)",
+      "evidence": "tests/release-image-workflow-contract.test.js:271-274 (proibições de host sem curl/wget); o mutante de token no argv só é morto no teste do gate, no script",
+      "risk": "baixo: um curl com token no argv acrescentado depois no YAML passaria em P1",
+      "fix": "P1 exige ausência de curl/wget em todo run: do workflow, já que a sondagem é do script"
+    },
+    {
+      "id": "O6",
+      "title": "Lacunas de prova menores (sem invariante de segurança descoberto)",
+      "evidence": "scripts/release-image-gate.mjs:1023-1050 (wait/superseded pela CLI sem teste L5); tests/release-image-gate.test.js:1204-1207 e scripts/release-image-gate.mjs:833 (o teste do collect não confere --paginate --slurp); scripts/release-image-contract.mjs:221-229 (conferência ino/dev do fstat sem teste)",
+      "risk": "baixo: mutantes 'wait sai 1', 'sem paginação' e 'sem conferência de inode' sobrevivem; nenhum leva a publish indevido",
+      "fix": "L5 com wait/superseded esperando saída 0 e publish=false; asserção de --paginate --slurp nos endpoints de lista; teste com stub de fs.lstatSync devolvendo outro ino"
+    },
+    {
+      "id": "O7",
+      "title": "Registro do BUILD: desvios, nota O7 da r4 e evidências não versionadas",
+      "evidence": "docs/04_audit/evidence/RELEASE-CI-0253-20261021/ (first-red.json, frontend-pin.json, l2-build-record.json, local-proofs.json, mutants.json e readme-c9-proposal.md não rastreados; sem relatório com os desvios (a)–(i))",
+      "risk": "processo: rastreabilidade da auditoria",
+      "fix": "o relatório do BUILD registra os desvios (a)–(i), a correção de texto O7 da r4 (§9 passo 3), a migração dos mutantes de sondagem de P1 para o teste do gate e os resíduos (janela entre o passo 14 e o push, reexecução parcial, Trivy com comandos de workflow no próprio passo); o Lead versiona as evidências"
+    }
+  ],
+  "checked": [
+    "SHA-256 da SPEC r4 conferido (e69dfe05…)",
+    "npx vitest run tests/release-image-*.test.js com Node 22 (env -i): 223/223 verdes",
+    "P5 e demais testes que leem workflows ou o Dockerfile (ci-workflow-contract, runtime-image-contract, security-scan-config, ci-bar-contract, ci-bar-provenance, construction-readiness): verdes",
+    "prettier --check nos arquivos do BUILD: limpo",
+    "escopo: diff cd0b50c1b..6e313fb44 só no conjunto de escrita; Dockerfile só na linha 1; verify.yml, security.yml, ci-bar*, runtime-image-*, lockfile, compose e .env.example intocados",
+    "tokens: só por env:; docker login --password-stdin com printf; curl --config - pelo stdin; ::add-mask:: do token de registro; nada de token em probe.json, release-gate.json ou anonymous-pull.json; DOCKER_CONFIG temporário 0700 no gate e no release-verify; logout e limpeza com if: always() só nos três passos nomeados",
+    "injeção: nenhum ${{ }} em run:; payload do workflow_run só por env:; $GITHUB_OUTPUT só com valores validados ou JSON.stringify (gate_record); $GITHUB_ENV só com valores do runner; config do curl sem aspas, barras invertidas nem controles",
+    "gatilho e origem: workflow_run só de Verify/Security, completed, main; if: com as cinco condições; regras 1–9 na ordem (superseded, proteção = REQUIRED_CHECKS, uma execução de push por dono, wait, check de maior id com nome exato, app 15368 e suíte, PR filtrado antes da contagem, checks do head do PR)",
+    "pacote: classifyPackageProbe conforme a regra 8 e O5; package-precondition imediatamente antes do docker login, sem if nem continue-on-error, saída 1 fora de ok/absent (O4 provado com curl falso); Accept com índice; Link restrito a ghcr.io/v2/<nome>/tags/list",
+    "Trivy: imagem pinada por índice só no env: dos passos; cinco chamadas, só o download com rede e sem /in; --read-only, --cap-drop=ALL, no-new-privileges, tmpfs, pids e memória; sem -v, -e, socket ou --output; bind só do tarball readonly; volume nunca lido pelo host; head -c com pipefail; passos sem id; nada de docker.io/aquasec ou mirror.gcr.io",
+    "âncoras: só o passo anchors escreve; config_digest do manifest.json do tarball com hash do blob; passo 17 confere SHA-256 = digest, image manifest único e config.digest = âncora antes do attest; build lê User/Cmd/labels/diff_ids do blob do tarball (O3)",
+    "readRegularFile: lstat, nlink, tamanho, O_NOFOLLOW, fstat com mesmo ino/dev e limite na leitura; inventário exato de evidence/; upload sem diretório, glob ou image.tar, com reconferência imediatamente antes",
+    "gate record (O2): saída do job gate, passada por env: e copiada sem recálculo; validação contra REQUIRED_CHECKS, execuções e suítes, mais igualdade canônica com a saída do gate",
+    "attest/verify: subject-name/subject-digest, push-to-registry true, create-storage-record false, sbom-path em evidence/; release-verify com download exato, login temporário, pull por digest, quatro verificações (--signer-workflow, --source-digest, --source-ref, --deny-self-hosted-runners, API e --bundle-from-oci), sonda anônima e SBOM canônico igual ao artefato",
+    "actions/attest@1e69f48a (src/main.ts e action.yml por gh api GET): bundle-path em mkdtemp, um por attest; create-storage-record existe; CycloneDX exige serialNumber, presente no SBOM real do L2",
+    "actions/setup-node@49933ea5 = v4.4.0 (sem cache automático); pins iguais aos de verify.yml/security.yml",
+    "fixtures: push-runs, pr-runs e pulls idênticos ao api-snapshot-24cdb463.json; suítes com os check-runs das suítes donas; branch-main = proteção anônima do snapshot",
+    "provas do executor: first red, L1 (PyYAML × parser textual sem divergência estrutural), L2 (Trivy 0.75.0 real, ImageID = âncora nos três arquivos, 11 deb e 119 npm), L3, L4 (registry:2, raw SHA-256 = digest), L5; 114 mutantes mortos (dois redefinidos de forma legítima para remover camadas redundantes)",
+    "YAML e shell: PyYAML reproduz a estrutura (10/23/9 passos); bash -e padrão; pipefail onde há pipe relevante; mapfile seguido de contagem = 1; gh api --paginate --slurp tratado nos dois formatos"
+  ],
+  "firstRealRunOnly": [
+    "docker save no store clássico do Docker 28 (Config em blobs/sha256) e config.digest = âncora no GHCR",
+    "respostas reais do GHCR (token autenticado, tags/list, Link, MANIFEST_UNKNOWN, sonda anônima DENIED para pacote privado existente)",
+    "saída JSON real do gh attestation verify com o SBOM no predicado e igualdade canônica",
+    "digest do docker push, imagetools --raw, bundle-path e referrers sha256-<hex>",
+    "wait seguido de publish nos dois disparos, e already_published num segundo disparo"
+  ]
+}

@@ -613,6 +613,7 @@ Task com código só encerra com gate de sua trilha, evidência do candidato cer
 - **Gate/autoridade:** Conferir SPEC/decisão existente no hash e escopo atuais; preparar delta e obter gate adicional quando necessário. Nenhuma aprovação nova é inferida deste plano.
 - **Próxima ação:** Preparar pipeline build uma vez, pin por digest, SBOM/licenças/provenance/assinatura e verificador negativo; após034 e gates de código, executar no CI autorizado sobre candidato limpo e demonstrar promoção do mesmo digest sem rebuild.
 - **Pronto/prova específica:** Imagem assinada e manifestos ligados a SHA/config/run; main protegida com checks; deploy recusa assinatura/digest inválidos; rollback ensaiado sem recompilar candidato.
+- **Progresso 22/10/2026 (RELEASE-CI-0253):** BUILD local da [SPEC0253](../02_spec/0253_release_image_ghcr.md): o workflow `release-image.yml` publica no GHCR privado só `sha-<commit>` de um commit da `main` com os 5 checks obrigatórios verdes, com proveniência SLSA e SBOM CycloneDX atestados no digest e verificados pelo `release-verify`. Fica aberto neste cartão: deploy que recusa digest sem attestation (contrato no runbook C9, sem implementação), assinatura além das attestations, promoção sem rebuild ensaiada no destino e rollback. [Relatório](../04_audit/evidence/RELEASE-CI-0253-20261021/build-report.md).
 - **Rastreio:** tasks de origem PR-003, PR-008, PR-009, PR-009-PROV, PR-010, PR-305, PR-602; achados A91-02, A91-18; critérios C06, C12, C25, C33, C34; gates de produção G04.
 
 <a id="up91-036"></a>

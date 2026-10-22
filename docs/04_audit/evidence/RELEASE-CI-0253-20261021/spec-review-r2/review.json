@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "kind": "spec-review",
+  "task": "RELEASE-CI-0253-20261021",
+  "round": 2,
+  "date": "2026-10-22",
+  "reviewer": "crítico independente, contexto novo (Claude Code, subagente)",
+  "target": "docs/02_spec/0253_release_image_ghcr.md",
+  "specRevision": "r2",
+  "specSha256": "bdb058ae4a891a4f3b430e710d647c39b95fadab4ea7fe9cfc8029b919ce5142",
+  "baseSha": "24cdb463faa1010da5fd78b6d923950ac2741713",
+  "verdict": "REVISE",
+  "r1MandatoryStatus": {
+    "M1": {
+      "status": "PARTIAL",
+      "note": "Transporte resolvido: job único, nenhum upload de image.tar, Trivy em contêiner pinado por digest (be1190af… conferido), tarball 0444 com montagem readonly, sem socket nem env do runner, login depois. A propriedade 'Trivy sem token' (R4) não se sustenta por causa das montagens graváveis /out e /cache lidas e publicadas depois do login (R2-M1)."
+    },
+    "M2": {
+      "status": "RESOLVED",
+      "note": "Passo id: anchors logo após docker save e antes do pull da Trivy; saídas presas ao id do passo; passos 9, 10 e 14 só comparam; P1 cobre ordem e escritor único; P4 cobre GITHUB_OUTPUT intacto; config.digest do manifesto bruto amarra os bytes publicados, que saem do daemon fora do alcance da Trivy."
+    },
+    "M3": {
+      "status": "PARTIAL",
+      "note": "Regra 8 e P3 corretos (proveniência + CycloneDX + sonda anônima DENIED; incompleto dá refuse), mas o gate não autentica no GHCR e gh attestation verify oci:// exige credencial do Docker; already_published fica inalcançável (R2-M2)."
+    }
+  },
+  "mandatory": [
+    {
+      "id": "R2-M1",
+      "title": "A Trivy grava em diretórios do host que o job privilegiado lê e publica depois do login",
+      "evidence": [
+        "SPEC §3.3 passo 7 (linhas 268-277): /out e /cache são bind mounts graváveis, com o mesmo uid do runner",
+        "SPEC §3.3 passos 10, 16 (sbom-path: out/sbom.cdx.json) e 17 (upload do SBOM e dos dois relatórios), e linha 299 (registrar o repositório do banco no build-record): o host lê e publica esses diretórios sem barreira",
+        "SPEC §3.3 passo 12: o docker login grava github.token (packages: write) em ~/.docker/config.json antes do upload (passo 17); o job tem id-token: write",
+        "actions/upload-artifact@ea165f8d src/shared/search.ts:14-21: followSymbolicLinks: true",
+        "Repositório público: o artefato é baixável por qualquer conta autenticada (§1.7)",
+        "R4 (linhas 96-100) e §8 (linhas 510-513) afirmam que a Trivy não recebe token e que o resíduo é só falsear varredura e SBOM",
+        "GHSA-69fq-xp46-6x23 (21/03/2026, crítico): ecossistema Trivy comprometido com malware que rouba credencial de CI",
+        "GHSA-mcj4-mphf-j9ff (15/06/2026, alto, < 0.71.1, afeta a 0.70.0): artefato OCI de banco forjado escreve fora do destino, inclusive em arquivos consumidos por passos seguintes"
+      ],
+      "correction": "Nenhum passo do host lê, escreve ou publica caminho gravável pelo contêiner. Opções: (a) a Trivy escreve no stdout, que o shell do host redireciona para $RUNNER_TEMP/release/evidence/, nunca montado, sem montagem /out; metadados do banco vêm de 'trivy --version --format json'; ou (b) saneador próprio com lista exata de nomes, lstat de arquivo regular, nlink=1, limite de tamanho e cópia com O_NOFOLLOW para evidence/ antes do passo 10 e do login. trivy-cache nunca é lido, só removido. Os passos 10, 14, 16 e 17 usam só evidence/, com upload por lista explícita. Recomendado: docker logout logo após o último attest e antes do upload. Atualizar R4 e §8. P1 (nenhuma referência a release/out ou trivy-cache fora da chamada da Trivy e do saneador; sbom-path e upload em evidence/), P4 (saneador recusa symlink, FIFO, entrada extra e hardlink), L3 (contêiner de controle planta symlink para /proc/self/environ e ~/.docker/config.json) e mutantes correspondentes."
+    },
+    {
+      "id": "R2-M2",
+      "title": "O gate não autentica no GHCR, e already_published fica inalcançável",
+      "evidence": [
+        "SPEC §3.2 passo 4 (linhas 187-189): gh attestation verify oci://… no gate sem docker login",
+        "cli/cli pkg/cmd/attestation/artifact/oci/client.go (último commit a4f0de06): GetImageDigest usa remote.Get com authn.DefaultKeychain e o comentário 'The user must already be authenticated with the container registry'; GH_TOKEN não entra na keychain; referrers (--bundle-from-oci) também",
+        "Pacote privado (G6, R8): verificação falha com ErrRegistryAuthz, e a regra 8 dá refuse",
+        "SPEC §3.4 linha 318 (Re-run all jobs cai em already_published) e §6 linha 493 (segundo disparo precisa dar already_published): impossíveis como especificado; L1-L4 não cobrem"
+      ],
+      "correction": "No gate, quando a tag estiver present, fazer docker login ghcr.io de leitura com github.token (packages: read), de preferência com DOCKER_CONFIG temporário, e logout ou remoção no fim. As verificações gravam saída e código de retorno em arquivo para evaluateReleaseGate decidir. Verificar os dois predicados pela API e por --bundle-from-oci, para cobrir 'gravada no GHCR' (R7). P1 confere o login antes do primeiro gh attestation verify do gate. Mutante: gate sem login."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "R10 contra a rede da Trivy",
+      "detail": "A 0.70.0 chama https://check.trivy.dev/updates, com telemetria, salvo com --skip-version-check e --disable-telemetry juntos (pkg/notification/notice.go:39,51-58). Pôr os dois flags em toda chamada. Fixar --db-repository (de preferência ghcr.io/aquasecurity/trivy-db:2; o padrão começa por mirror.gcr.io/aquasec/trivy-db:2). Registrar digest e UpdatedAt do banco a partir do stdout de trivy --version --format json."
+    },
+    {
+      "id": "O2",
+      "title": "Separar rede de dados",
+      "detail": "Baixar o banco com --download-db-only num contêiner com rede e sem /in; varredura e SBOM com --network none --skip-db-update. Uma Trivy comprometida ou um banco forjado fica sem rede para levar os bytes (R8). §8 cita o log como resíduo."
+    },
+    {
+      "id": "O3",
+      "title": "Versão da Trivy e advisories",
+      "detail": "Registrar GHSA-69fq-xp46-6x23 e GHSA-mcj4-mphf-j9ff e proibir docker.io/aquasec/trivy, também em L2. Ou justificar a 0.70.0 (padrão não afetado, R4 impede override, --db-repository explícito), ou subir para >= 0.71.1 pinada por digest (última imutável: v0.76.1, de 21/10)."
+    },
+    {
+      "id": "O4",
+      "title": "Contradição sobre always()",
+      "detail": "§3.1, linha 157, P1 e o mutante proíbem always() em release, mas o passo 18 exige if: always(). Restringir a regra ao if: do job e nomear a única exceção de passo."
+    },
+    {
+      "id": "O5",
+      "title": "Ordem em P1 por passo",
+      "detail": "'Primeira menção a aquasecurity/trivy' quebra se TRIVY_IMAGE ficar no env: do job. Medir pelo índice do passo do docker pull/run da Trivy, ou proibir a declaração no nível do job."
+    },
+    {
+      "id": "O6",
+      "title": "Sem npm no host",
+      "detail": "Proibir npm ci, npm install e npx nos três jobs. Exigir que release-image-*.mjs importem só node: e os contratos locais. P1 confere."
+    },
+    {
+      "id": "O7",
+      "title": "Fixture da proteção",
+      "detail": "branchMainAnonymous não tem enabled nem enforcement_level, que a regra 3 exige. Recapturar protection inteiro (em 22/10: enabled true, enforcement_level everyone)."
+    },
+    {
+      "id": "O8",
+      "title": "Accept da sondagem com tipos de índice",
+      "detail": "Incluir application/vnd.oci.image.index.v1+json e application/vnd.docker.distribution.manifest.list.v2+json. Assim um índice em sha-S é present, e não um 404 que vira absent e leva à sobrescrita (R5)."
+    },
+    {
+      "id": "O9",
+      "title": "Download único no release-verify",
+      "detail": "O padrão cvg-release-image-* pode casar tentativas anteriores. Exigir exatamente um artefato, o da tentativa que publicou."
+    },
+    {
+      "id": "O10",
+      "title": "Ciência do usuário sobre metadados públicos",
+      "detail": "§8/§9 pedem ciência, mas a decisão de 21/10 não a registra. Não bloqueia o BUILD. O Lead repassa no relatório, incluindo que a entrada no Rekor é permanente."
+    }
+  ],
+  "newPremise": {
+    "answer": "NO",
+    "reason": "As correções de R2-M1 (stdout ou saneamento com o próprio código) e de R2-M2 (docker login de leitura com o github.token já previsto) não trazem segredo, conta, credencial, ferramenta, action nem mudança de proteção. A imagem da Trivy pinada por digest é a mesma ferramenta e versão do image-scan. A chamada a check.trivy.dev (O1) se desliga por flag, e a ciência sobre metadados públicos (O10) é informativa."
+  },
+  "verifiedFacts": [
+    "GET /repos/ricardoakinaga-dev/cvg-operational-harness/branches/main anônimo (22/10): protected true, enabled true, enforcement_level everyone, 5 checks com app_id 15368, commit 24cdb463",
+    "ghcr.io/aquasecurity/trivy:0.70.0 = índice sha256:be1190af…, linux/amd64 sha256:85e87be1…; Entrypoint trivy, WorkingDir /, sem USER",
+    "docker/dockerfile:1.7 = sha256:a57df69d…",
+    "actions/attest@1e69f48a: storage record só com create-storage-record true; push-to-registry usa a credencial do Docker (@sigstore/oci getRegistryCredentials)",
+    "actions/upload-artifact@ea165f8d: followSymbolicLinks true",
+    "Trivy v0.70.0: --db-repository padrão [mirror.gcr.io/aquasec/trivy-db:2, ghcr.io/aquasecurity/trivy-db:2]; --disable-telemetry e --skip-version-check existem"
+  ]
+}

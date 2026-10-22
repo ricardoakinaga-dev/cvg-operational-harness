@@ -1,0 +1,478 @@
+name: Release image
+
+# SPEC0253 (RELEASE-CI-0253-20261021): after Verify or Security completes on
+# a push to main, the gate checks that the merged SHA has its five required
+# checks green (and its PR head too), that the live protection still requires
+# exactly them, and that the private GHCR package created once by the user
+# exists with sha-<SHA> absent. Only then the release job builds the runtime
+# image from the root Dockerfile, scans it with a digest-pinned Trivy
+# container (no network, no host writes, no token), attests SLSA provenance
+# and the CycloneDX SBOM with actions/attest and pushes only sha-<SHA>.
+# The release never creates the package and grants no deploy.
+on:
+  workflow_run:
+    workflows: [Verify, Security]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release-image-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Release gate
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      packages: read
+      attestations: read
+    outputs:
+      decision: ${{ steps.decide.outputs.decision }}
+      publish: ${{ steps.decide.outputs.publish }}
+      sha: ${{ steps.decide.outputs.sha }}
+      digest: ${{ steps.decide.outputs.digest }}
+      gate_record: ${{ steps.decide.outputs.gate_record }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Read protection, runs, checks and pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: node scripts/release-image-gate.mjs collect --dir "$RUNNER_TEMP/release-gate"
+
+      - name: Probe package and tag
+        id: probe
+        env:
+          PROBE_TOKEN: ${{ github.token }}
+        run: node scripts/release-image-gate.mjs probe --dir "$RUNNER_TEMP/release-gate" --sha "$GITHUB_SHA"
+
+      - name: Registry login for read-only verification
+        if: steps.probe.outputs.tag == 'present'
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/gate-docker
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -m 0700 "$DOCKER_CONFIG"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Verify published attestations
+        if: steps.probe.outputs.tag == 'present'
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/gate-docker
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.probe.outputs.digest }}
+        run: |
+          OUT="$RUNNER_TEMP/release-gate/verifications"
+          mkdir -m 0700 "$OUT"
+          SUBJECT="oci://ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
+          VERIFY=(gh attestation verify "$SUBJECT" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-image.yml" \
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main \
+            --deny-self-hosted-runners --format json)
+          status=0
+          "${VERIFY[@]}" > "$OUT/provenance-api.json" || status=$?
+          echo "$status" > "$OUT/provenance-api.exit"
+          status=0
+          "${VERIFY[@]}" --bundle-from-oci > "$OUT/provenance-oci.json" || status=$?
+          echo "$status" > "$OUT/provenance-oci.exit"
+          status=0
+          "${VERIFY[@]}" --predicate-type https://cyclonedx.org/bom > "$OUT/sbom-api.json" || status=$?
+          echo "$status" > "$OUT/sbom-api.exit"
+          status=0
+          "${VERIFY[@]}" --predicate-type https://cyclonedx.org/bom --bundle-from-oci > "$OUT/sbom-oci.json" || status=$?
+          echo "$status" > "$OUT/sbom-oci.exit"
+
+      - name: Anonymous pull probe of the published tag
+        if: steps.probe.outputs.tag == 'present'
+        run: node scripts/release-image-gate.mjs anonymous --out "$RUNNER_TEMP/release-gate/anonymous-pull.json"
+
+      - name: Cleanup gate registry login
+        if: always()
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/gate-docker
+        run: |
+          if [ -d "$DOCKER_CONFIG" ]; then docker logout ghcr.io || true; fi
+          rm -rf "$DOCKER_CONFIG"
+
+      - name: Decide
+        id: decide
+        run: node scripts/release-image-gate.mjs decide --dir "$RUNNER_TEMP/release-gate"
+
+      - name: Upload gate record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cvg-release-gate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-gate/release-gate.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Build, scan, attest and push image
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      artifact_name: ${{ steps.paths.outputs.artifact_name }}
+    env:
+      TRIVY_VOLUME: cvg-release-trivy-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout gated commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          persist-credentials: false
+
+      - name: Confirm gated commit and resolve paths
+        id: paths
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$S" =~ ^[0-9a-f]{40}$ ]]
+          test "$S" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$S"
+          {
+            echo "RELEASE_DIR=$RUNNER_TEMP/release"
+            echo "TARBALL=$RUNNER_TEMP/release/in/image.tar"
+            echo "EVIDENCE=$RUNNER_TEMP/release/evidence"
+            echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}"
+          } >> "$GITHUB_ENV"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=cvg-release-image-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Build runtime image from the root Dockerfile
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+        run: |
+          docker build --pull --target runtime --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${S}" \
+            --tag "cvg-operational-harness:release-${S}" .
+
+      - name: Non-root runtime smoke
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp --cap-drop=ALL --security-opt no-new-privileges "cvg-operational-harness:release-${S}" node scripts/runtime-image-smoke.mjs
+
+      - name: Save image tarball
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RELEASE_DIR" "$RELEASE_DIR/in" "$RELEASE_DIR/registry"
+          install -d -m 0700 "$EVIDENCE"
+          docker save --output "$TARBALL" "cvg-operational-harness:release-${S}"
+          chmod 0444 "$TARBALL"
+
+      - name: Integrity anchors
+        id: anchors
+        run: node scripts/release-image-record.mjs anchors --tarball "$TARBALL"
+
+      - name: Pull Trivy image anonymously
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        run: docker pull "$TRIVY_IMAGE"
+
+      - name: Download Trivy DB (network, without the image)
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+        run: |
+          set -euo pipefail
+          docker volume create "$TRIVY_VOLUME"
+          docker run --rm --read-only --cap-drop=ALL --security-opt no-new-privileges --tmpfs /tmp \
+            --pids-limit 512 --memory 4g \
+            --mount type=volume,src="$TRIVY_VOLUME",dst=/cache \
+            "$TRIVY_IMAGE" image --download-db-only --cache-dir /cache \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 --skip-java-db-update \
+            --skip-version-check --disable-telemetry --quiet
+
+      - name: Trivy DB metadata (no network)
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+          VERSION_MAX: 65536
+        run: |
+          set -euo pipefail
+          docker run --rm --network none --read-only --cap-drop=ALL \
+            --security-opt no-new-privileges --tmpfs /tmp \
+            --pids-limit 512 --memory 4g \
+            --mount type=volume,src="$TRIVY_VOLUME",dst=/cache \
+            "$TRIVY_IMAGE" version --format json --cache-dir /cache \
+            | head -c "$((VERSION_MAX + 1))" > "$EVIDENCE/trivy-version.json"
+
+      - name: Trivy gate, full report and SBOM (no network)
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+          GATE_MAX: 16777216
+          FULL_MAX: 16777216
+          SBOM_MAX: 16777216
+        run: |
+          set -euo pipefail
+          TRIVY_RUN=(docker run --rm --network none --read-only --cap-drop=ALL \
+            --security-opt no-new-privileges --tmpfs /tmp \
+            --pids-limit 512 --memory 4g \
+            --mount type=bind,src="$TARBALL",dst=/in/image.tar,readonly \
+            --mount type=volume,src="$TRIVY_VOLUME",dst=/cache \
+            "$TRIVY_IMAGE" image --input /in/image.tar --cache-dir /cache \
+            --skip-db-update --skip-java-db-update --offline-scan \
+            --skip-version-check --disable-telemetry --quiet)
+          gate_status=0
+          "${TRIVY_RUN[@]}" --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --format json | head -c "$((GATE_MAX + 1))" > "$EVIDENCE/trivy-gate.json" || gate_status=$?
+          if [ "$gate_status" -ne 0 ]; then
+            node scripts/release-image-record.mjs trivy-summary --evidence "$EVIDENCE" >> "$GITHUB_STEP_SUMMARY" || true
+            exit "$gate_status"
+          fi
+          "${TRIVY_RUN[@]}" --scanners vuln --severity HIGH,CRITICAL --exit-code 0 --format json | head -c "$((FULL_MAX + 1))" > "$EVIDENCE/trivy-full.json"
+          "${TRIVY_RUN[@]}" --format cyclonedx | head -c "$((SBOM_MAX + 1))" > "$EVIDENCE/sbom.cdx.json"
+
+      - name: Confirm tarball after Trivy
+        env:
+          ANCHOR_TARBALL_SHA256: ${{ steps.anchors.outputs.tarball_sha256 }}
+        run: test "$(sha256sum "$TARBALL" | cut -d ' ' -f1)" = "$ANCHOR_TARBALL_SHA256"
+
+      - name: Build record
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+          ANCHOR_TARBALL_SHA256: ${{ steps.anchors.outputs.tarball_sha256 }}
+          ANCHOR_CONFIG_DIGEST: ${{ steps.anchors.outputs.config_digest }}
+        run: node scripts/release-image-record.mjs build --tarball "$TARBALL" --evidence "$EVIDENCE" --sha "$S" --repository "$GITHUB_REPOSITORY" --dockerfile Dockerfile
+
+      - name: Package precondition (exists, private, sha tag absent)
+        id: package-precondition
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+          PROBE_TOKEN: ${{ github.token }}
+        run: node scripts/release-image-gate.mjs precondition --dir "$RELEASE_DIR/precondition" --sha "$S"
+
+      - name: Registry login
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push sha tag
+        id: push
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          REF="${IMAGE}:sha-${S}"
+          docker tag "cvg-operational-harness:release-${S}" "$REF"
+          docker push "$REF" | tee "$RELEASE_DIR/registry/push.log"
+          mapfile -t digests < <(grep -oE 'digest: sha256:[0-9a-f]{64}' "$RELEASE_DIR/registry/push.log" | cut -d ' ' -f2 | sort -u)
+          test "${#digests[@]}" -eq 1
+          echo "digest=${digests[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Check registry manifest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          ANCHOR_CONFIG_DIGEST: ${{ steps.anchors.outputs.config_digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" > "$RELEASE_DIR/registry/manifest.json"
+          node scripts/release-image-record.mjs manifest --manifest "$RELEASE_DIR/registry/manifest.json" --digest "$DIGEST"
+
+      - name: Attest provenance
+        id: attest-provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.paths.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest SBOM
+        id: attest-sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ steps.paths.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/release/evidence/sbom.cdx.json
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Registry logout
+        run: docker logout ghcr.io
+
+      - name: Release record
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          ANCHOR_TARBALL_SHA256: ${{ steps.anchors.outputs.tarball_sha256 }}
+          ANCHOR_CONFIG_DIGEST: ${{ steps.anchors.outputs.config_digest }}
+          GATE_RECORD: ${{ needs.gate.outputs.gate_record }}
+          PROVENANCE_BUNDLE: ${{ steps.attest-provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.attest-sbom.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          node scripts/release-image-record.mjs publish --tarball "$TARBALL" --evidence "$EVIDENCE" \
+            --sha "$S" --repository "$GITHUB_REPOSITORY" --dockerfile Dockerfile \
+            --digest "$DIGEST" --manifest "$RELEASE_DIR/registry/manifest.json" \
+            --provenance-bundle "$PROVENANCE_BUNDLE" --sbom-bundle "$SBOM_BUNDLE"
+          {
+            echo "### Release image"
+            echo
+            echo "- tag: \`sha-${S}\` (somente leitura humana)"
+            echo "- digest: \`${DIGEST}\`"
+            echo
+            echo '```'
+            echo "CVG_HARNESS_IMAGE_REPOSITORY=${IMAGE}"
+            echo "CVG_HARNESS_IMAGE_DIGEST=${DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.paths.outputs.artifact_name }}
+          path: |
+            ${{ runner.temp }}/release/evidence/build-record.json
+            ${{ runner.temp }}/release/evidence/release-image.json
+            ${{ runner.temp }}/release/evidence/sbom.cdx.json
+            ${{ runner.temp }}/release/evidence/trivy-gate.json
+            ${{ runner.temp }}/release/evidence/trivy-full.json
+            ${{ runner.temp }}/release/evidence/trivy-version.json
+            ${{ runner.temp }}/release/evidence/provenance.sigstore.json
+            ${{ runner.temp }}/release/evidence/sbom.sigstore.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cleanup release
+        if: always()
+        run: |
+          docker logout ghcr.io || true
+          docker volume rm --force "$TRIVY_VOLUME" || true
+          rm -rf "$RUNNER_TEMP/release"
+
+  release-verify:
+    name: Verify released image independently
+    needs: [gate, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      attestations: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Download release evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.release.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release-verify/artifact
+
+      - name: Registry login (read only) and pull by digest
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/verify-docker
+          REGISTRY_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.release.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 "$DOCKER_CONFIG"
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker pull "ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
+
+      - name: Verify provenance and SBOM through the API and the registry
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/verify-docker
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.release.outputs.digest }}
+          S: ${{ needs.gate.outputs.sha }}
+        run: |
+          OUT="$RUNNER_TEMP/release-verify/checks"
+          mkdir -m 0700 "$OUT"
+          SUBJECT="oci://ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
+          VERIFY=(gh attestation verify "$SUBJECT" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-image.yml" \
+            --source-digest "$S" --source-ref refs/heads/main \
+            --deny-self-hosted-runners --format json)
+          status=0
+          "${VERIFY[@]}" > "$OUT/provenance-api.json" || status=$?
+          echo "$status" > "$OUT/provenance-api.exit"
+          status=0
+          "${VERIFY[@]}" --bundle-from-oci > "$OUT/provenance-oci.json" || status=$?
+          echo "$status" > "$OUT/provenance-oci.exit"
+          status=0
+          "${VERIFY[@]}" --predicate-type https://cyclonedx.org/bom > "$OUT/sbom-api.json" || status=$?
+          echo "$status" > "$OUT/sbom-api.exit"
+          status=0
+          "${VERIFY[@]}" --predicate-type https://cyclonedx.org/bom --bundle-from-oci > "$OUT/sbom-oci.json" || status=$?
+          echo "$status" > "$OUT/sbom-oci.exit"
+
+      - name: Anonymous pull probe after publication
+        run: node scripts/release-image-gate.mjs anonymous --out "$RUNNER_TEMP/release-verify/checks/anonymous-pull.json"
+
+      - name: Verification record
+        env:
+          S: ${{ needs.gate.outputs.sha }}
+          DIGEST: ${{ needs.release.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -m 0700 "$RUNNER_TEMP/release-verify/out"
+          node scripts/release-image-record.mjs verify --artifact "$RUNNER_TEMP/release-verify/artifact" \
+            --checks "$RUNNER_TEMP/release-verify/checks" --sha "$S" --repository "$GITHUB_REPOSITORY" \
+            --digest "$DIGEST" --out "$RUNNER_TEMP/release-verify/out"
+
+      - name: Upload verification record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cvg-release-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-verify/out/release-verification.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cleanup verify registry login
+        if: always()
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/verify-docker
+        run: |
+          if [ -d "$DOCKER_CONFIG" ]; then docker logout ghcr.io || true; fi
+          rm -rf "$DOCKER_CONFIG"

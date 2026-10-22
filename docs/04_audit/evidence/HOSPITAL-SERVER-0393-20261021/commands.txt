@@ -1,0 +1,55 @@
+# HOSPITAL-SERVER-0393-20261021 — commands run (synthetic data only).
+# Worktree: /mnt/dados/cvg-work/cvg-d9ef-prodpath-20261021 (detached 24cdb463f).
+# <S> = session scratchpad; env files with synthetic secrets lived only there.
+# Node: env -i HOME=$HOME PATH=/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/bin:/bin
+
+## Images (Dockerfile targets, same recipe as the CI image gate, without --pull)
+docker build --target runtime --tag cvg-d9ef-sizing-runtime:24cdb463 .   # 59.6 s
+docker build --target web --tag cvg-d9ef-sizing-web:24cdb463 .           # 13.5 s
+docker image inspect <image> --format '{{.Id}} {{.Size}} {{.RepoDigests}}'
+docker images  # SIZE column (disk, containerd store)
+
+## Load gate (in-memory contract) in a scratch copy, so certification/ is untouched
+<S>/loadroot: symlinks to packages/ and node_modules/, copy of scripts/phase10-load.ts (same sha256)
+/usr/bin/time -v node node_modules/.bin/tsx scripts/phase10-load.ts --events=10000
+
+## On-prem stack (compose.production.yaml + compose.onprem.yaml + tools/override.yaml)
+hc() { docker compose -p cvg-d9ef-sizing -f deploy/harness/compose.production.yaml \
+  -f deploy/harness/compose.onprem.yaml -f <S>/override.yaml --env-file <S>/etc/harness.env "$@"; }
+hc config -q && echo CONFIG_OK ; hc config | grep -c DATABASE_MIGRATION_URL   # CONFIG_OK ; 1
+hc up -d postgres ; wait for "select 1" twice
+hc exec -T postgres psql -U postgres -d cvg -X -v database=cvg -v data_schema=cvg_data \
+  -v migration_role=cvg_migration -v runtime_role=cvg_runtime -v auth_owner_role=cvg_auth_owner \
+  -v session_role=cvg_session -v backup_role=cvg_backup -f /cvg-postgres/roles.sql
+ALTER ROLE ... PASSWORD :'var'   # synthetic only; production uses \password
+GRANT CREATE ON DATABASE cvg TO cvg_auth_owner ; hc up -d postgres migrate api worker proxy alert-relay ; REVOKE ...
+hc exec -T postgres psql -U cvg_migration -d cvg -X ... -f /cvg-postgres/backup-grants.sql
+hc exec -T postgres psql -U cvg_runtime -d cvg -X -P pager=off ... -f /cvg-postgres/verify-roles.sql
+curl http://127.0.0.1:3457/live (426) ; curl --cacert fullchain.pem https://localhost:4457/{live,ready,health/metrics,/}
+hc exec -T api node scripts/runtime-healthcheck.mjs ; hc run --rm --no-deps -e DATABASE_MIGRATION_URL=postgres://refusal-probe@127.0.0.1:1/refusal_probe api
+
+## Load and resources
+tools/orchestrate.sh: 60 s idle, 3 x (tools/load.mjs 280 webhooks, concurrency 20; tools/drain.sh; tools/sizes.sh), 60 s idle
+tools/sampler.sh: docker stats --no-stream for ^cvg-d9ef-sizing- every ~3 s
+python3 aggregate (docker-stats-summary.json)
+
+## Backup and restore (repository scripts, real)
+deploy/harness/backup/backup.sh --env-file <S>/etc/backup.env   # before and after load; mirror dir local, REQUIRE_MOUNT=false
+deploy/harness/backup/restore-drill.sh --env-file <S>/etc/backup.env
+
+## Second stack (rebuilt images: new digests) for the target smoke and the alert drill
+npx tsx scripts/production-target-smoke.ts --output <S>/out/production-target-smoke.json  # tokens minted with createTrustedOperatorIdentityToken
+GET /v1/session (Admin token) then /v1/cases, /v1/conversations, /v1/tasks, /v1/admin/agents
+hc stop worker ; wait for relay event ; hc start worker (fails: re-runs migrate) ; hc up -d --no-deps worker (works)
+
+## Vault (hashicorp/vault@sha256:e0acd3c6..., v2.2.0), raft + TLS, tools/vault.hcl
+vault operator init -key-shares=3 -key-threshold=2 ; unseal 1 of 3 (sealed) ; 2 of 3 (unsealed)
+vault secrets enable -path=secret kv-v2 ; vault policy write cvg-harness-deploy deploy/harness/vault/cvg-harness-policy.hcl
+vault auth enable approle ; role cvg-harness-deploy (token_ttl=15m, secret_id_num_uses=1) ; login
+deploy token: kv put denied ; read outside cvg-harness/* denied
+render-env.sh harness (bash + jq added with apk in a throwaway container) -> keys=2, mode 600
+vault operator raft snapshot save ; docker restart -> sealed=true
+
+## Others
+Keycloak start-dev idle footprint ; cloudflared image size and version
+nft -c -f tools/cvg-host.nft and nft -f inside a throwaway container namespace (never on the host)

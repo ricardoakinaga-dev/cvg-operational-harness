@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 1,
+  "kind": "hospital-server-0393-sizing",
+  "task": "HOSPITAL-SERVER-0393-20261021",
+  "source": {
+    "worktree": "/mnt/dados/cvg-work/cvg-d9ef-prodpath-20261021",
+    "commit": "24cdb463f"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 7 5700 (8 cores / 16 threads)",
+    "memTotalGiB": 62.6,
+    "os": "Linux Mint 22.3 (base Ubuntu 24.04), kernel 7.0.0-38",
+    "docker": "29.1.3 (containerd image store)",
+    "compose": "2.40.3",
+    "node": "22.23.2",
+    "sharedWithOtherWorkloads": "yes; load average 5-7 before the run (other projects running)"
+  },
+  "stack": {
+    "composeFiles": [
+      "deploy/harness/compose.production.yaml",
+      "deploy/harness/compose.onprem.yaml",
+      "tools/override.yaml (own network name, PG on 127.0.0.1:56271, api.telegram.org pinned to loopback)"
+    ],
+    "project": "cvg-d9ef-sizing",
+    "ports": {
+      "http": 3457,
+      "https": 4457,
+      "postgres": 56271
+    },
+    "servicesStarted": [
+      "postgres",
+      "migrate",
+      "api",
+      "worker",
+      "proxy",
+      "alert-relay"
+    ],
+    "notStarted": {
+      "tunnel": "needs a Cloudflare account and credentials"
+    },
+    "images": {
+      "runtime": {
+        "firstBuildDigest": "sha256:4b63f40bb66c04ed5117cfc51c0b973a83b857bdbabb5174f53cdeff0f3816b9",
+        "rebuildDigest": "sha256:40d0fc8ee053795faae70725a0f7799507f72f1a5301da1571ef9117f3fa9a0e",
+        "note": "same commit, three builds, three digests: the server must pull the CI digest, never rebuild",
+        "thirdBuildDigest": "sha256:98d7509932de337969a3ec744a3b64604cc14e06c8b707a9f6165308b5e30585"
+      },
+      "web": {
+        "firstBuildDigest": "sha256:9f9e2e2cc730c1b2394ef20dabdd4e6fb88eb8c9fecd598808ab19d9a50c1910",
+        "rebuildDigest": "sha256:9e1952232bfe3f0e9a05c8e27d8296c72fa3dd142955d750cc1a15016570215c",
+        "thirdBuildDigest": "sha256:13a2b5a528df725c1ab1782656d61858408ee423611d7bacc6cdfa6eb5e42081"
+      }
+    }
+  },
+  "imageSizes": {
+    "note": "inspectSizeBytes = content size reported by docker image inspect (what a pull downloads, compressed); diskMB = SIZE column of docker images on the containerd store (content + unpacked)",
+    "harness-runtime": {
+      "inspectSizeBytes": 66893559,
+      "diskMB": 319
+    },
+    "harness-web (proxy)": {
+      "inspectSizeBytes": 21312880,
+      "diskMB": 74.7
+    },
+    "postgres:16-alpine": {
+      "inspectSizeBytes": 116084812,
+      "diskMB": 420,
+      "digest": "sha256:3c5c8892d184f738f4fe282d14ddaa613a38f00f4189d2d94725ebe6f2909ddb",
+      "version": "PostgreSQL 16.15"
+    },
+    "cloudflare/cloudflared": {
+      "inspectSizeBytes": 29675103,
+      "diskMB": 98.6,
+      "version": "2026.10.3"
+    },
+    "hashicorp/vault": {
+      "inspectSizeBytes": 201735247,
+      "diskMB": 762,
+      "version": "Vault v2.2.0",
+      "digest": "sha256:e0acd3c681bdf57f002d7214e5d050b876e1704678005c6b0406dd96a65be919"
+    },
+    "quay.io/keycloak/keycloak": {
+      "inspectSizeBytes": 265690421,
+      "diskMB": 752,
+      "version": "Keycloak 26.8.1"
+    },
+    "node:22.23.2-bookworm-slim (external monitor)": {
+      "diskMB": 329
+    }
+  },
+  "composeLimits": {
+    "harnessCore": {
+      "api": {
+        "cpus": 1.0,
+        "memMiB": 512,
+        "pids": 256
+      },
+      "worker": {
+        "cpus": 1.0,
+        "memMiB": 512,
+        "pids": 256
+      },
+      "postgres": {
+        "cpus": 2.0,
+        "memMiB": 2048,
+        "pids": null
+      },
+      "migrate (job at each up)": {
+        "cpus": 0.5,
+        "memMiB": 256,
+        "pids": 128
+      }
+    },
+    "supportServices": {
+      "proxy": {
+        "cpus": 0.5,
+        "memMiB": 128,
+        "pids": 128
+      },
+      "alert-relay": {
+        "cpus": 0.25,
+        "memMiB": 128,
+        "pids": 64
+      },
+      "tunnel": {
+        "cpus": 0.25,
+        "memMiB": 128,
+        "pids": 64
+      }
+    },
+    "sumSteady": {
+      "cpus": 5.0,
+      "memMiB": 3456
+    },
+    "sumWithMigrate": {
+      "cpus": 5.5,
+      "memMiB": 3712
+    },
+    "notLimitedInRepo": [
+      "Vault",
+      "backup.sh containers (anchors, pg_dump)",
+      "restore-drill disposable PostgreSQL",
+      "Keycloak (future)"
+    ]
+  },
+  "load": {
+    "shape": "3 rounds x 280 signed synthetic webhooks (record.update turns) through the TLS proxy, concurrency 20, rounds 90 s apart; 843 messages in the database at the end",
+    "admissionCeiling": "300 requests/min per client IP (apps/api/src/server.ts, onRequest rate limit); webhooks arriving through the tunnel share one client IP",
+    "ingest": [
+      {
+        "round": "round-1",
+        "requestsPerSecond": 57.2,
+        "statuses": {
+          "200": 280
+        },
+        "latencyMs": {
+          "p50": 282.1,
+          "p95": 1717.6,
+          "p99": 1737.7,
+          "max": 1741
+        }
+      },
+      {
+        "round": "round-2",
+        "requestsPerSecond": 87.1,
+        "statuses": {
+          "200": 280
+        },
+        "latencyMs": {
+          "p50": 164.5,
+          "p95": 372.2,
+          "p99": 431.6,
+          "max": 453.1
+        }
+      },
+      {
+        "round": "round-3",
+        "requestsPerSecond": 57.7,
+        "statuses": {
+          "200": 280
+        },
+        "latencyMs": {
+          "p50": 375.7,
+          "p95": 423.6,
+          "p99": 619.3,
+          "max": 654.7
+        }
+      }
+    ],
+    "workerDrainMessagesPerSecond": [
+      6.72,
+      6.26,
+      4.77
+    ],
+    "workerNote": "one worker processes the queue serially; its CPU peaked at 41% of one CPU, so more cores do not raise this rate"
+  },
+  "resources": {
+    "perContainerPeak": {
+      "alert-relay": {
+        "cpuPercentMax": 7.9,
+        "memMiBMax": 15.3
+      },
+      "api": {
+        "cpuPercentMax": 45.5,
+        "memMiBMax": 72.6
+      },
+      "postgres": {
+        "cpuPercentMax": 81.7,
+        "memMiBMax": 108.4
+      },
+      "proxy": {
+        "cpuPercentMax": 2.1,
+        "memMiBMax": 23.8
+      },
+      "worker": {
+        "cpuPercentMax": 41.3,
+        "memMiBMax": 67.6
+      }
+    },
+    "stackPeakInstant": {
+      "cpuPercentMaxSum": 129.3,
+      "memMiBMaxSum": 272.8,
+      "cpuPercentAvgSum": 24.1,
+      "sampleInstants": 88
+    },
+    "stackIdle": {
+      "cpuPercentMaxSum": 28.0,
+      "memMiBMaxSum": 191.3,
+      "cpuPercentAvgSum": 2.6,
+      "sampleInstants": 20
+    },
+    "vaultIdle": {
+      "cpuPercent": 0.3,
+      "memMiB": 40.9,
+      "pids": 17,
+      "raftDataBytes": 33615872,
+      "raftSnapshotBytes": 26120
+    },
+    "keycloakIdleDevMode": {
+      "cpuPercent": 0.2,
+      "memGiB": 1.05,
+      "pids": 67,
+      "note": "start-dev with embedded H2, no memory limit, JVM sized by the 62 GiB host; production mode with PostgreSQL not measured"
+    },
+    "cpuNote": "docker stats CPUPerc, 100% = one logical CPU; sampled every ~3 s"
+  },
+  "dataGrowth": {
+    "messages": 840,
+    "pgDatabaseSizeBytes": {
+      "baseline": 11803671,
+      "after": 26868759,
+      "perMessage": 17935
+    },
+    "cvgDataRelationsBytes": {
+      "baseline": 2310144,
+      "after": 16949248,
+      "perMessage": 17428
+    },
+    "pgDataDirBytes": {
+      "baseline": 52278493,
+      "after": 101093093,
+      "walBaseline": 16777216,
+      "walAfter": 50331648,
+      "note": "WAL can reach max_wal_size = 1GB (PostgreSQL default, raw/pg-settings.txt)"
+    },
+    "rowsPerMessage": {
+      "audit_events": 6.0,
+      "outbox_events": 1,
+      "runtime_approvals": 1
+    },
+    "dump": {
+      "baselineBytes": 288654,
+      "afterBytes": 1662386,
+      "perMessage": 1635
+    },
+    "postgresBlockWriteBytes": {
+      "total": 212000000,
+      "note": "docker stats BlockIO write of the postgres container over the whole run, about 0.25 MB per message including WAL and checkpoints"
+    },
+    "proxyNetworkBytes": {
+      "in": 3010000,
+      "out": 3020000,
+      "note": "whole run, about 3.6 KB per webhook each way"
+    },
+    "caveat": "synthetic short turns; real message sizes and mix are unknown (docs/01_prd/0014: volume UNKNOWN)"
+  },
+  "backupRestore": {
+    "backupSeconds": [
+      8.6,
+      5.7
+    ],
+    "restoreDrillSeconds": 19.5,
+    "restoreDrill": "PASS, chain 3372 events matched anchors (restore-drill-report.json)",
+    "mirror": "exercised with CVG_BACKUP_MIRROR_REQUIRE_MOUNT=false on a local directory (no TrueNAS here)"
+  },
+  "loadGate": {
+    "command": "npm run test:load (scripts/phase10-load.ts --events=10000), run in a scratch copy so certification/load-report.json was not touched",
+    "scope": "in-memory outbox contract, not a stack benchmark (docs/08_runtime/0803)",
+    "report": "load-gate-report.json",
+    "maxRssKiB": 178124,
+    "wallSeconds": 12.14
+  },
+  "dataPolicy": "synthetic only; secrets generated per run with openssl rand, kept in the scratchpad and deleted; no value copied here",
+  "rehearsal": {
+    "productionTargetSmoke": "15/15 PASS, complete=true (production-target-smoke.json), second stack",
+    "caseReads": "GET /v1/cases and /v1/conversations -> 503 configuration_error; /v1/tasks and /v1/admin/agents -> 200 (raw/case-read-probe.json)",
+    "alertDrill": "worker stopped 03:14:26Z, relay received signed worker_down 03:16:41Z (135 s), answered 502 because api.telegram.org was pinned to loopback (raw/alert-drill.txt)",
+    "singleServiceUp": "outside the G5 window, hc start/up -d <service> re-runs migrate and fails; --force-recreate left api Created; --no-deps works (raw/single-service-up.txt)",
+    "vault": "raft+TLS, Shamir 3/2, kv-v2, repository policy, AppRole, render-env.sh keys=2 mode 600, deploy token write denied, restart -> sealed (raw/vault-steps.txt)",
+    "nft": "tools/cvg-host.nft: nft -c OK, loaded twice in a throwaway namespace, 20 counters (raw/nft-validate.log)"
+  }
+}
