@@ -567,8 +567,13 @@ function curlConfigValue(value, label) {
   return value
 }
 
+// O3: -q (first argument) keeps ~/.curlrc out; --proto =https refuses
+// anything but HTTPS.
 function curl(url, { config, accept } = {}) {
   const argv = [
+    '-q',
+    '--proto',
+    '=https',
     '--silent',
     '--show-error',
     '--max-time',
@@ -621,9 +626,17 @@ function jsonBody(response) {
   }
 }
 
+// O2: registry error codes are upper-case identifiers; anything else becomes
+// a fixed marker, so network strings never reach files or logs raw.
 function errorCode(body) {
   const code = body?.errors?.[0]?.code
-  return typeof code === 'string' ? code : null
+  if (typeof code !== 'string') return null
+  return /^[A-Z0-9_]{1,64}$/.test(code) ? code : 'UNRECOGNIZED_CODE'
+}
+
+// O2: one line, control characters escaped, for stderr and the job summary.
+function oneLine(value) {
+  return JSON.stringify(String(value)).slice(1, -1)
 }
 
 function tokenUrl(name) {
@@ -671,7 +684,6 @@ export function probePackage({ name, tagName, actor, token, mask }) {
     const issued = typeof body?.token === 'string' ? body.token : null
     let valid = false
     if (issued) {
-      mask(issued)
       try {
         curlConfigValue(issued, 'registry_token')
         valid = true
@@ -679,6 +691,9 @@ export function probePackage({ name, tagName, actor, token, mask }) {
         valid = false
       }
     }
+    // O2: only a validated single-line token is masked (and later used); an
+    // invalid one is never printed nor sent anywhere.
+    if (valid) mask(issued)
     if (valid && auth.status === 200) registryToken = issued
     probe.authToken = {
       status: auth.status,
@@ -732,7 +747,16 @@ export function probePackage({ name, tagName, actor, token, mask }) {
         }
         break
       }
-      const pageTags = body?.tags ?? []
+      // O1: a 200 whose body is not a JSON object, or whose tags is neither a
+      // list nor null, is unreadable (error) on any page.
+      const readable =
+        body !== null &&
+        typeof body === 'object' &&
+        !Array.isArray(body) &&
+        (body.tags === undefined ||
+          body.tags === null ||
+          Array.isArray(body.tags))
+      const pageTags = readable ? (body.tags ?? []) : null
       if (!Array.isArray(pageTags)) {
         probe.tagsList = {
           status: 200,
@@ -968,7 +992,9 @@ function preconditionCommand(args) {
   const probe = runProbe(args)
   process.stdout.write(`${JSON.stringify(probe)}\n`)
   if (probe.package === 'ok' && probe.tag === 'absent') return 0
-  const message = `release_precondition_failed:package=${probe.package}:tag=${probe.tag}:${probe.reasons.join('+')}`
+  const message = oneLine(
+    `release_precondition_failed:package=${probe.package}:tag=${probe.tag}:${probe.reasons.join('+')}`
+  )
   process.stderr.write(`${message}\n`)
   appendSummary([
     '### Release precondition failed (no login, no push)',
@@ -1038,13 +1064,15 @@ function decideCommand(args) {
     ...(result.reasons.includes('package_missing_or_inaccessible')
       ? [`- ${PACKAGE_MISSING_SUMMARY}`]
       : []),
-    ...result.reasons.map((reason) => `- ${reason}`)
+    ...result.reasons.map((reason) => `- ${oneLine(reason)}`)
   ])
   process.stdout.write(
     `${JSON.stringify({ decision: result.decision, reasons: result.reasons })}\n`
   )
   if (result.decision === 'refuse') {
-    process.stderr.write(`release_gate_refused:${result.reasons.join(',')}\n`)
+    process.stderr.write(
+      `release_gate_refused:${oneLine(result.reasons.join(','))}\n`
+    )
     return 1
   }
   return 0
@@ -1073,7 +1101,7 @@ if (
     process.exitCode = main(process.argv.slice(2))
   } catch (error) {
     process.stderr.write(
-      `${error instanceof Error ? error.message : String(error)}\n`
+      `${oneLine(error instanceof Error ? error.message : String(error))}\n`
     )
     process.exitCode = 1
   }

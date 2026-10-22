@@ -273,6 +273,12 @@ describe('SPEC0253 P1: actions, host tooling and job rules', () => {
     expect(workflow).not.toMatch(/\bnpm (?:ci|install|i|exec)\b|\bnpx\b/)
   })
 
+  it('leaves every HTTP request with a token to the probe script (O5)', () => {
+    for (const step of allSteps) {
+      expect(step.run, step.name).not.toMatch(/\b(?:curl|wget)\b/)
+    }
+  })
+
   it('applies the job rules to every job and step', () => {
     const timeouts = { gate: '15', release: '60', 'release-verify': '15' }
     for (const [name, text] of Object.entries(jobs)) {

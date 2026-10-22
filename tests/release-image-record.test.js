@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   EVIDENCE_FILES,
   PROVENANCE_PREDICATE,
@@ -1071,5 +1071,51 @@ describe('SPEC0253 O10: Trivy gate diagnostics', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('CVE-2026-0001')
     expect(result.stdout).toContain('openssl')
+  })
+})
+
+describe('SPEC0253 code review r1: record hardening (O4, O6)', () => {
+  it('refuses in build, before any login or push, a record that would not fit release-image.json (O4)', () => {
+    const ctx = setup()
+    const findings = Array.from({ length: 8000 }, (_, index) => ({
+      VulnerabilityID: `CVE-2026-${String(index).padStart(5, '0')}`,
+      PkgName: `pkg-${index}`,
+      Severity: 'HIGH',
+      InstalledVersion: '1.0.0'
+    }))
+    fs.writeFileSync(
+      path.join(ctx.evidence, 'trivy-full.json'),
+      json(trivyReport(ctx.image.configDigest, findings))
+    )
+    const result = runBuild(ctx)
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('release_build_record_too_large')
+    expect(fs.existsSync(path.join(ctx.evidence, 'build-record.json'))).toBe(
+      false
+    )
+  })
+
+  it('refuses a file whose inode changed between lstat and open (O6)', () => {
+    const directory = tempDir('cvg-release-inode-')
+    const target = path.join(directory, 'trivy-version.json')
+    const other = path.join(directory, 'other.json')
+    fs.writeFileSync(target, '{}')
+    fs.writeFileSync(other, '{}')
+    const original = fs.lstatSync
+    const spy = vi
+      .spyOn(fs, 'lstatSync')
+      .mockImplementation((file, ...rest) =>
+        original(file === target ? other : file, ...rest)
+      )
+    try {
+      expect(() => readEvidenceFile(directory, 'trivy-version.json')).toThrow(
+        /replaced/
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(readEvidenceFile(directory, 'trivy-version.json').toString()).toBe(
+      '{}'
+    )
   })
 })

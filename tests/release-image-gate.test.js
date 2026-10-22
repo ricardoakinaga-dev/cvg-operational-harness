@@ -1204,6 +1204,152 @@ describe('SPEC0253 §3.2 step 2: collect writes the gate layout with GET-only gh
     for (const argv of calls) {
       expect(argv.slice(0, 3)).toEqual(['api', '--method', 'GET'])
       expect(argv.join(' ')).not.toContain(JOB_TOKEN)
+      // O6: list endpoints are paginated and slurped; the branch is one object.
+      const endpoint = argv.at(-1)
+      if (endpoint.endsWith('/branches/main')) {
+        expect(argv).not.toContain('--paginate')
+      } else {
+        expect(argv.slice(3, 5)).toEqual(['--paginate', '--slurp'])
+      }
+    }
+  })
+})
+
+describe('SPEC0253 code review r1: probe hardening (O1, O2, O3)', () => {
+  const okScenario = {
+    auth: AUTH_OK,
+    tags: TAGS_ONE_PAGE,
+    anonymous: ANON_DENIED,
+    manifest: MANIFEST_UNKNOWN
+  }
+
+  it('starts every curl argv with -q and HTTPS-only protocols (O3)', () => {
+    const run = probeRun('probe', okScenario)
+    expect(run.result.status).toBe(0)
+    expect(run.calls).toHaveLength(4)
+    for (const call of run.calls) {
+      expect(call.argv.slice(0, 3)).toEqual(['-q', '--proto', '=https'])
+    }
+  })
+
+  it.each([
+    [
+      'HTML body on the only page',
+      { tags: { status: 200, body: '<html>proxy</html>' } }
+    ],
+    [
+      'unreadable second page',
+      {
+        tags: {
+          status: 200,
+          headers: {
+            link: `</v2/${REPO}/tags/list?last=placeholder-20261022&n=100>; rel="next"`
+          },
+          body: { name: REPO, tags: ['placeholder-20261022'] }
+        },
+        tags2: { status: 200, body: 'garbage' }
+      }
+    ],
+    [
+      'tags that is not a list',
+      { tags: { status: 200, body: { name: REPO, tags: 'x' } } }
+    ]
+  ])('classifies a tags/list 200 with %s as error (O1)', (_label, extra) => {
+    const run = probeRun('probe', { ...okScenario, ...extra })
+    expect(run.result.status).toBe(0)
+    expect(outputs(run.githubOutput).package).toBe('error')
+    const precondition = probeRun('precondition', { ...okScenario, ...extra })
+    expect(precondition.result.status).not.toBe(0)
+  })
+
+  it('never masks nor prints a token that is not a single printable line (O2)', () => {
+    const run = probeRun('precondition', {
+      ...okScenario,
+      auth: { status: 200, body: { token: 'abc\ndef-secret-part' } }
+    })
+    expect(run.result.status).not.toBe(0)
+    expect(run.result.stdout).not.toContain('::add-mask::')
+    expect(run.result.stdout + run.result.stderr).not.toContain(
+      'def-secret-part'
+    )
+    expect(run.calls.map((call) => call.url)).not.toContain(
+      `https://ghcr.io/v2/${REPO}/tags/list?n=100`
+    )
+  })
+
+  it('keeps registry error codes and reasons on one sanitized line (O2)', () => {
+    const run = probeRun('precondition', {
+      ...okScenario,
+      auth: {
+        status: 403,
+        body: { errors: [{ code: 'DENIED\n::warning::injected' }] }
+      }
+    })
+    expect(run.result.status).not.toBe(0)
+    const probe = readJson(path.join(run.probeDir, 'probe.json'))
+    expect(probe.authToken.code).toBe('UNRECOGNIZED_CODE')
+    for (const stream of [run.result.stdout, run.result.stderr]) {
+      expect(stream.split('\n').some((line) => line.startsWith('::'))).toBe(
+        false
+      )
+      expect(stream).not.toContain('injected')
+    }
+  })
+})
+
+describe('SPEC0253 code review r1: wait and superseded through the CLI (O6)', () => {
+  it.each([
+    [
+      'wait',
+      (gate) => {
+        const file = path.join(gate, 'push-runs.json')
+        const pages = readJson(file)
+        const verify = pages[0].workflow_runs.find((r) => r.name === 'Verify')
+        verify.status = 'in_progress'
+        verify.conclusion = null
+        fs.writeFileSync(file, JSON.stringify(pages))
+      }
+    ],
+    [
+      'superseded',
+      (gate) => {
+        const file = path.join(gate, 'context.json')
+        const context = readJson(file)
+        context.workflowRun.head_sha = 'f'.repeat(40)
+        fs.writeFileSync(file, JSON.stringify(context))
+      }
+    ]
+  ])('decides %s with exit 0 and publish=false', (decision, mutate) => {
+    const run = gateDir(mutate)
+    const result = runCli(['decide', '--dir', run.gate], {
+      GITHUB_OUTPUT: run.githubOutput,
+      GITHUB_STEP_SUMMARY: run.summary
+    })
+    expect(result.status).toBe(0)
+    expect(outputs(run.githubOutput)).toMatchObject({
+      decision,
+      publish: 'false'
+    })
+    expect(fs.readFileSync(run.githubOutput, 'utf8')).not.toContain(
+      'gate_record='
+    )
+  })
+
+  it('keeps API strings in refuse reasons on one line in stderr and the summary (O2)', () => {
+    const run = gateDir((gate) => {
+      const file = path.join(gate, 'push-runs.json')
+      const pages = readJson(file)
+      pages[0].workflow_runs.find((r) => r.name === 'Verify').conclusion =
+        'failure\n::warning::injected'
+      fs.writeFileSync(file, JSON.stringify(pages))
+    })
+    const result = runCli(['decide', '--dir', run.gate], {
+      GITHUB_OUTPUT: run.githubOutput,
+      GITHUB_STEP_SUMMARY: run.summary
+    })
+    expect(result.status).toBe(1)
+    for (const text of [result.stderr, fs.readFileSync(run.summary, 'utf8')]) {
+      expect(text.split('\n').some((line) => line.startsWith('::'))).toBe(false)
     }
   })
 })

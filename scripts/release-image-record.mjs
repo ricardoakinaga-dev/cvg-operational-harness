@@ -52,6 +52,9 @@ import {
 } from './release-image-contract.mjs'
 
 const MiB = 1024 * 1024
+// Room in release-image.json for everything besides the embedded build
+// record (gate record, attestations, manifest fields).
+const RELEASE_RECORD_MARGIN = 128 * 1024
 
 function hashFile(file) {
   const stat = fs.lstatSync(file)
@@ -277,10 +280,17 @@ function buildCommand(args) {
   const inputs = { sha, repository, anchors, config, scan }
   const record = makeBuildRecord(inputs)
   validateBuildRecord(record, buildExpected(inputs))
-  writeNewFile(
-    path.join(evidence, 'build-record.json'),
-    `${JSON.stringify(record, null, 2)}\n`
-  )
+  const text = `${JSON.stringify(record, null, 2)}\n`
+  // O4: release-image.json embeds this record; refuse here, before any login
+  // or push, if it would not fit the release-image.json limit with margin.
+  if (
+    Buffer.byteLength(text) >
+    evidenceLimit('release-image.json') - RELEASE_RECORD_MARGIN
+  ) {
+    throw new Error('release_build_record_too_large')
+  }
+  writeNewFile(path.join(evidence, 'build-record.json'), text)
+  readEvidenceFile(evidence, 'build-record.json')
   process.stdout.write(
     `${JSON.stringify({ commitSha: sha, configDigest: anchors.configDigest, sbom: record.sbom })}\n`
   )
