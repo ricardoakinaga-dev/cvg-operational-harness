@@ -1,0 +1,13 @@
+// Campos da assinatura que mudam numa troca ABA (dados sintéticos). Uso: node critic-probe-r2-aba-fields.cjs <tmpbase>
+const fs = require('node:fs'), path = require('node:path')
+const base = fs.realpathSync(fs.mkdtempSync(path.join(process.argv[2], 'aba-fields-')))
+const K = ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeNs', 'ctimeNs']
+const root = path.join(base, 'root'), skill = path.join(root, 'skill'), outside = path.join(base, 'outside')
+fs.mkdirSync(skill, { recursive: true }); fs.mkdirSync(outside); fs.writeFileSync(path.join(skill, 'SKILL.md'), 'x')
+const t0 = Date.now(); while (Date.now() - t0 < 30) {}
+const s0 = fs.lstatSync(skill, { bigint: true }), r0 = fs.lstatSync(root, { bigint: true })
+fs.renameSync(skill, path.join(base, 'parked')); fs.symlinkSync(outside, skill); fs.unlinkSync(skill); fs.renameSync(path.join(base, 'parked'), skill)
+const s1 = fs.lstatSync(skill, { bigint: true }), r1 = fs.lstatSync(root, { bigint: true })
+const diff = (a, b) => K.filter((k) => a[k] !== b[k])
+console.log(JSON.stringify({ kernelWaitMs: 30, skillDirChangedFields: diff(s0, s1), rootChangedFields: diff(r0, r1) }))
+fs.rmSync(base, { recursive: true, force: true })

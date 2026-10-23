@@ -1,0 +1,170 @@
+// Sonda do crítico da SPEC0255 r1. Dados sintéticos; grava só no diretório
+// temporário dentro do scratchpad. Uso: node critic-probe.mjs <worktree> <tmpbase>
+import {
+  mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync,
+  realpathSync, renameSync, unlinkSync, lstatSync, statSync, openSync,
+  fstatSync, readSync, closeSync, readdirSync, readlinkSync, opendirSync,
+  constants as C
+} from 'node:fs'
+import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+
+const [worktree, tmpBase] = process.argv.slice(2)
+const base = realpathSync(mkdtempSync(join(tmpBase, 'c100-critic-')))
+const out = { node: process.version, platform: process.platform }
+
+// Implementação mínima e fiel do §7.4 (com toggles para mutantes).
+function readSpec(p, cap, opts = {}, hooks = {}) {
+  let st
+  try { st = opts.useStat ? statSync(p) : lstatSync(p) } catch (e) { return { code: 'READ_FAILED', errno: e.code } }
+  if (st.isSymbolicLink()) return { code: 'SYMLINK_REFUSED' }
+  if (!st.isFile()) return { code: 'SPECIAL_FILE_REFUSED' }
+  if (!opts.noNlink && st.nlink !== 1) return { code: 'HARDLINK_REFUSED' }
+  if (st.size > cap) return { code: 'CAP_EXCEEDED' }
+  hooks.afterLstat?.()
+  const flags = C.O_RDONLY | (opts.noNofollow ? 0 : C.O_NOFOLLOW) | C.O_NONBLOCK
+  let fd
+  try { fd = openSync(p, flags) } catch (e) {
+    return e.code === 'ELOOP' ? { code: 'SYMLINK_REFUSED' } : { code: 'READ_FAILED', errno: e.code }
+  }
+  try {
+    const f = fstatSync(fd)
+    if (f.dev !== st.dev || f.ino !== st.ino || !f.isFile() || (!opts.noNlink && f.nlink !== 1)) {
+      return { code: 'FILE_CHANGED_DURING_READ' }
+    }
+    if (opts.procRoot) {
+      const real = readlinkSync(`/proc/self/fd/${fd}`)
+      if (!real.startsWith(opts.procRoot + '/')) return { code: 'OUTSIDE_ROOT_BY_FD_PATH' }
+    }
+    const buf = Buffer.alloc(Math.min(st.size, cap) + 1)
+    let n = 0
+    for (;;) { const r = readSync(fd, buf, n, buf.length - n, null); if (!r) break; n += r; if (n > cap) return { code: 'CAP_EXCEEDED' } }
+    if (n !== f.size) return { code: 'FILE_CHANGED_DURING_READ' }
+    return { code: 'OK', text: buf.subarray(0, n).toString('utf8'), bytes: n }
+  } finally { closeSync(fd) }
+}
+
+// §7.5 mínimo: registra dev/ino do diretório da skill, lê SKILL.md, refaz lstat no fim.
+function acquireSkill(root, name, opts = {}, hooks = {}) {
+  const dir = join(root, name)
+  const d0 = lstatSync(dir)
+  if (!d0.isDirectory()) return { item: 'REFUSED' }
+  const names = readdirSync(dir).sort()
+  hooks.afterListing?.()
+  const files = {}
+  for (const n of names) files[n] = readSpec(join(dir, n), 1 << 20, opts)
+  hooks.afterRead?.()
+  const d1 = lstatSync(dir)
+  const changed = d1.isSymbolicLink() || d1.dev !== d0.dev || d1.ino !== d0.ino
+  return { coverage: changed ? 'INCOMPLETE(TREE_CHANGED_DURING_READ)' : 'COMPLETE', files }
+}
+
+// ---- A: corrida ABA no diretório da skill (troca por symlink e volta) ----
+{
+  const root = join(base, 'A-root'); const outside = join(base, 'A-outside', 'evil')
+  mkdirSync(join(root, 'skill'), { recursive: true }); mkdirSync(outside, { recursive: true })
+  writeFileSync(join(root, 'skill', 'SKILL.md'), '---\nname: skill\ndescription: Inside.\n---\nINSIDE_BODY\n')
+  writeFileSync(join(outside, 'SKILL.md'), '---\nname: skill\ndescription: OUTSIDE_MARKER.\n---\nOUTSIDE_BODY\n')
+  const swapOut = () => { renameSync(join(root, 'skill'), join(base, 'A-parked')); symlinkSync(outside, join(root, 'skill')) }
+  const swapBack = () => { unlinkSync(join(root, 'skill')); renameSync(join(base, 'A-parked'), join(root, 'skill')) }
+  const spec = acquireSkill(root, 'skill', {}, { afterListing: swapOut, afterRead: swapBack })
+  const withProc = (() => { swapOut(); const r = readSpec(join(root, 'skill', 'SKILL.md'), 1 << 20, { procRoot: root }); swapBack(); return r })()
+  // Emulação de openat: fd do diretório + /proc/self/fd/<dfd>/<nome>.
+  const dfd = openSync(join(root, 'skill'), C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW)
+  swapOut()
+  const pinnedList = readdirSync(`/proc/self/fd/${dfd}`)
+  const pinned = readSpec(`/proc/self/fd/${dfd}/SKILL.md`, 1 << 20)
+  swapBack(); closeSync(dfd)
+  let dirSymlinkOpen
+  try { const fd = openSync(join(base, 'A-dirlink'), 0); closeSync(fd) } catch {}
+  symlinkSync(join(root, 'skill'), join(base, 'A-dirlink'))
+  try { openSync(join(base, 'A-dirlink'), C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW); dirSymlinkOpen = 'opened' } catch (e) { dirSymlinkOpen = e.code }
+  out.A_abaRace = {
+    spec74_75: { coverage: spec.coverage, bodyCode: spec.files['SKILL.md'].code, outsideMarkerRead: String(spec.files['SKILL.md'].text).includes('OUTSIDE_MARKER') },
+    fdPathCheck: withProc.code,
+    dirFdPinning: { listedNames: pinnedList, readCode: pinned.code, readInside: String(pinned.text).includes('INSIDE_BODY') },
+    openDirSymlinkWithNofollow: dirSymlinkOpen,
+    O_DIRECTORY: typeof C.O_DIRECTORY, O_NOFOLLOW: typeof C.O_NOFOLLOW
+  }
+}
+
+// ---- B: mutante M01 contra os casos do SK05 (arquivo symlink, estático) ----
+{
+  const root = join(base, 'B-root'); const outsideFile = join(base, 'B-outside.md')
+  mkdirSync(join(root, 's'), { recursive: true })
+  writeFileSync(outsideFile, 'OUTSIDE_FILE_MARKER')
+  symlinkSync(outsideFile, join(root, 's', 'SKILL.md'))
+  const p = join(root, 's', 'SKILL.md')
+  const correct = readSpec(p, 1 << 20)
+  const statMutant = readSpec(p, 1 << 20, { useStat: true })
+  const noNofollowMutant = readSpec(p, 1 << 20, { noNofollow: true })
+  // troca arquivo -> symlink entre lstat e open (SK07b-like)
+  const swapTarget = join(base, 'B-outside2.md'); writeFileSync(swapTarget, 'OUTSIDE2')
+  const mk = () => { const q = join(root, 's', 'ref.md'); try { unlinkSync(q) } catch {} ; writeFileSync(q, 'inside'); return q }
+  const raceCorrect = readSpec(mk(), 1 << 20, {}, { afterLstat: () => { const q = join(root, 's', 'ref.md'); unlinkSync(q); symlinkSync(swapTarget, q) } })
+  const raceNoNofollow = readSpec(mk(), 1 << 20, { noNofollow: true }, { afterLstat: () => { const q = join(root, 's', 'ref.md'); unlinkSync(q); symlinkSync(swapTarget, q) } })
+  // hardlink: remover só uma das duas checagens de nlink
+  const hl = join(root, 's', 'hard.md'); linkSync(outsideFile, hl)
+  out.B_mutantM01 = {
+    sk05_staticSymlinkFile: { correct: correct.code, statInsteadOfLstat: statMutant.code, withoutONofollow: noNofollowMutant.code },
+    swapFileToSymlinkBetweenLstatAndOpen: { correct: raceCorrect.code, withoutONofollow: raceNoNofollow.code },
+    hardlink: { correct: readSpec(hl, 1 << 20).code, bothNlinkChecksRemoved: readSpec(hl, 1 << 20, { noNlink: true }).code }
+  }
+}
+
+// ---- C: mutante M11 com a fixture do SK08b (5 MiB + FIFO) ----
+{
+  const root = join(base, 'C-root')
+  mkdirSync(join(root, 'chosen'), { recursive: true }); mkdirSync(join(root, 'other'), { recursive: true })
+  writeFileSync(join(root, 'chosen', 'SKILL.md'), '---\nname: chosen\ndescription: Chosen.\n---\nBODY\n')
+  writeFileSync(join(root, 'other', 'SKILL.md'), Buffer.alloc(5 * 1024 * 1024, 0x61))
+  execFileSync('mkfifo', [join(root, 'other', 'pipe')])
+  const cap = 256 * 1024
+  const acquire = (names) => { let bytesRead = 0, filesOpened = 0
+    for (const s of names) for (const f of readdirSync(join(root, s)).sort()) { const r = readSpec(join(root, s, f), cap); if (r.code === 'OK') { bytesRead += r.bytes; filesOpened++ } }
+    return { bytesRead, filesOpened } }
+  out.C_mutantM11 = { selectionOnlyChosen: acquire(['chosen']), mutantAcquireAll: acquire(['chosen', 'other']) }
+}
+
+// ---- D: mensagem do JSON.parse traz trecho do conteúdo ----
+{
+  let msg; try { JSON.parse('{"description": "api_key=SYNTH-SECRET-123" oops}') } catch (e) { msg = e.message }
+  out.D_jsonParseMessage = { message: msg, containsSourceExcerpt: /SYNTH-SECRET/.test(msg) }
+}
+
+// ---- E: tamanho do lstat de symlink depende do alvo (caminho absoluto) ----
+{
+  const t1 = join(base, 'E1'); const t2 = join(base, 'E2-longer-location')
+  mkdirSync(t1); mkdirSync(t2)
+  symlinkSync(join(t1, 'target.md'), join(t1, 'link.md')); symlinkSync(join(t2, 'target.md'), join(t2, 'link.md'))
+  out.E_symlinkLstatSize = { tree1: lstatSync(join(t1, 'link.md')).size, tree2: lstatSync(join(t2, 'link.md')).size, dirSizeExt: lstatSync(t1).size }
+}
+
+// ---- F: cobertura do redator real ----
+{
+  const { redactSensitiveText } = await import(join(worktree, 'packages/shared/src/audit-governance.ts'))
+  const samples = {
+    keyValue: 'Use api_key=SYNTHabc123 here',
+    bearer: 'Bearer SYNTHtoken123',
+    email: 'mail synth@example.com',
+    githubToken: 'token ghp_SYNTH0123456789abcdefghijABCDEFGHIJ',
+    anthropicLike: 'key sk-ant-api03-SYNTHabcdef0123456789',
+    awsAccessKey: 'aws AKIASYNTH0123456789',
+    jwt: 'jwt ' + ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiJzeW50aCJ9', 'c3ludGhzaWc'].join('.'),
+    privateKeyPem: '-----BEGIN PRIVATE KEY----- MIISYNTH'
+  }
+  out.F_redactor = Object.fromEntries(Object.entries(samples).map(([k, v]) => [k, { leaked: redactSensitiveText(v) === v, output: redactSensitiveText(v) }]))
+}
+
+// ---- G: listagem limitada é possível (opendir) ----
+{
+  const d = join(base, 'G'); mkdirSync(d)
+  for (let i = 0; i < 100; i++) writeFileSync(join(d, `f${i}`), '')
+  const dir = opendirSync(d); let seen = 0
+  while (dir.readSync() && seen < 11) seen++
+  dir.closeSync()
+  out.G_boundedListing = { capPlusOneReadThenStop: seen }
+}
+
+rmSync(base, { recursive: true, force: true })
+console.log(JSON.stringify(out, null, 2))

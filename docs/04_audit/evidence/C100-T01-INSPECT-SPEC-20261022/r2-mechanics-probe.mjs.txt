@@ -1,0 +1,66 @@
+// Sonda das primitivas da SPEC0255 r2. Dados sintéticos em diretório temporário.
+// Uso: node r2-mechanics-probe.mjs <tmpbase>
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, renameSync,
+  unlinkSync, lstatSync, openSync, fstatSync, readSync, closeSync, readlinkSync, opendirSync,
+  linkSync, appendFileSync, constants as C } from 'node:fs'
+import { join } from 'node:path'
+const base = realpathSync(mkdtempSync(join(process.argv[2], 'r2-')))
+const out = { node: process.version, platform: process.platform,
+  constants: { O_DIRECTORY: typeof C.O_DIRECTORY, O_NOFOLLOW: typeof C.O_NOFOLLOW, O_NONBLOCK: typeof C.O_NONBLOCK } }
+const sig = (s) => ['dev','ino','mode','nlink','size','mtimeNs','ctimeNs'].map((k) => String(s[k])).join(':')
+const DIRF = C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW
+const FILEF = C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK
+const root = join(base, 'root'); const outside = join(base, 'outside', 'skill')
+mkdirSync(join(root, 'skill'), { recursive: true }); mkdirSync(outside, { recursive: true })
+writeFileSync(join(root, 'skill', 'SKILL.md'), 'INSIDE_BODY\n')
+writeFileSync(join(outside, 'SKILL.md'), 'OUTSIDE_MARKER\n')
+// 1. root fd e caminho canônico pelo fd
+const rfd = openSync(root, DIRF)
+out.rootFdPathEqualsRoot = readlinkSync(`/proc/self/fd/${rfd}`) === root
+const root0 = sig(fstatSync(rfd, { bigint: true }))
+// 2. lstat do filho pelo fd do root e abertura do diretório da skill pelo fd
+const childPath = `/proc/self/fd/${rfd}/skill`
+const l0 = lstatSync(childPath, { bigint: true })
+const sfd = openSync(childPath, DIRF)
+out.childFdMatchesLstat = sig(fstatSync(sfd, { bigint: true })) === sig(l0)
+// 3. ABA: troca o diretório por symlink para fora; listagem e leitura pelo fd fixado
+renameSync(join(root, 'skill'), join(base, 'parked')); symlinkSync(outside, join(root, 'skill'))
+const dir = opendirSync(`/proc/self/fd/${sfd}`); const names = []; let e
+while ((e = dir.readSync()) !== null) names.push(e.name); dir.closeSync()
+const ffd = openSync(`/proc/self/fd/${sfd}/SKILL.md`, FILEF)
+const buf = Buffer.alloc(64); const n = readSync(ffd, buf, 0, 64, null); closeSync(ffd)
+out.pinnedReadDuringSwap = { names, readsInside: buf.subarray(0, n).toString().includes('INSIDE_BODY') }
+// abrir o nome trocado (agora symlink) com O_DIRECTORY|O_NOFOLLOW
+try { closeSync(openSync(childPath, DIRF)); out.openSwappedNameAsDir = 'opened' } catch (err) { out.openSwappedNameAsDir = err.code }
+// abrir um symlink de arquivo com O_NOFOLLOW
+symlinkSync(join(outside, 'SKILL.md'), join(base, 'filelink'))
+try { closeSync(openSync(join(base, 'filelink'), FILEF)); out.openFileSymlink = 'opened' } catch (err) { out.openFileSymlink = err.code }
+// volta (ABA completo)
+unlinkSync(join(root, 'skill')); renameSync(join(base, 'parked'), join(root, 'skill'))
+const l1 = lstatSync(childPath, { bigint: true })
+out.abaDetected = { childDevIno: `${l0.dev}:${l0.ino}` === `${l1.dev}:${l1.ino}`, childFullSignatureChanged: sig(l0) !== sig(l1),
+  rootFullSignatureChanged: root0 !== sig(fstatSync(rfd, { bigint: true })) }
+closeSync(sfd); closeSync(rfd)
+// 4. listagem limitada a cap+1 com opendir
+const big = join(base, 'big'); mkdirSync(big); for (let i = 0; i < 200; i++) writeFileSync(join(big, `f${i}`), '')
+const d2 = opendirSync(big, { bufferSize: 32 }); let seen = 0; while (seen < 65 && d2.readSync() !== null) seen++; d2.closeSync()
+out.boundedListingStoppedAt = seen
+// 5. hardlink e assinatura após link entre lstat e open
+const hf = join(root, 'skill', 'h.md'); writeFileSync(hf, 'x'); const h0 = lstatSync(hf, { bigint: true }); linkSync(hf, join(base, 'h2'))
+const hfd = openSync(hf, FILEF); out.linkAddedBetweenLstatAndOpenDetected = sig(h0) !== sig(fstatSync(hfd, { bigint: true })); closeSync(hfd)
+// 6. crescimento depois do fstat (append durante a leitura)
+const gf = join(root, 'skill', 'g.md'); writeFileSync(gf, 'abc'); const gfd = openSync(gf, FILEF); const g0 = fstatSync(gfd, { bigint: true })
+appendFileSync(gf, 'defgh'); const gb = Buffer.alloc(16); let gn = 0; for (;;) { const r = readSync(gfd, gb, gn, gb.length - gn, null); if (!r) break; gn += r }
+out.growthAfterFstat = { readBytes: gn, sizeAtFstat: Number(g0.size), signatureChanged: sig(g0) !== sig(fstatSync(gfd, { bigint: true })) }; closeSync(gfd)
+// 7. BOM e UTF-8 estrito
+const bom = Buffer.from([0xef, 0xbb, 0xbf, 0x2d, 0x2d, 0x2d, 0x0a])
+out.textDecoder = { defaultStripsBom: new TextDecoder('utf-8', { fatal: true }).decode(bom).startsWith('---'),
+  ignoreBomKeepsIt: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bom).charCodeAt(0) === 0xfeff }
+try { new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from([0x61, 0xff])); out.textDecoder.fatalOnInvalid = false } catch { out.textDecoder.fatalOnInvalid = true }
+// 8. propriedades Unicode
+const forbidden = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Noncharacter_Code_Point}]/u
+out.forbiddenClass = Object.fromEntries([['U+202E','‮'],['U+2066','⁦'],['U+200B','​'],['U+FEFF','﻿'],['U+0085','\u0085'],['U+2028',' '],['U+2029',' '],['U+0009','\t'],['U+FFFE','￾'],['U+00E9','é'],['U+00A0',' ']].map(([k, v]) => [k, forbidden.test(v)]))
+// 9. chave duplicada com escape
+out.jsonDuplicateEscaped = JSON.parse('{"id":"a","\\u0069d":"b"}').id
+rmSync(base, { recursive: true, force: true })
+console.log(JSON.stringify(out, null, 2))

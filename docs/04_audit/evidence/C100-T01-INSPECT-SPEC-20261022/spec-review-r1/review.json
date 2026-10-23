@@ -1,0 +1,187 @@
+{
+  "spec": "docs/02_spec/0255_c100_skill_plugin_offline_inspection.md",
+  "specSha256": "2bb4e54155150293f4bf29058dc2ed451977d62e018b3c4675fcdbe5b7f9d828",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "A releitura por dev/ino não detecta troca ABA; I3, A05 e A15 não valem com escritor concorrente",
+      "evidence": "SPEC:517-534, 74, 709, 719, 762. O_NOFOLLOW só no último componente; lstat e open seguem diretório intermediário. Sonda do crítico A (Node v22.23.2, §7.4-7.5 literal): coverage COMPLETE e outsideMarkerRead true depois de trocar o diretório da skill por symlink e devolver. Precedente mais forte no repo: scripts/boundary-installed-identity.mjs:227-276 (assinatura bigint com ctimeNs); a sonda mostra que o rename ABA muda ctimeNs (fullSignatureChanged true). No Linux, fd de diretório com O_DIRECTORY|O_NOFOLLOW e /proc/self/fd/<dfd>/<nome> leu o original (readInside true); readlink de /proc/self/fd/<fd> recusou o ABA.",
+      "fix": "Trocar dev/ino pela assinatura completa bigint (dev, ino, mode, nlink, size, mtimeNs, ctimeNs) do root, do diretório da skill e de cada subdiretório, antes e depois do item, e por arquivo (lstat, fstat antes e depois da leitura, novo lstat), como readPhysical. Declarar o modelo de ameaça e o risco residual. Opcional: fd via /proc no Linux, com recusa se faltar. Acrescentar o caso ABA ao SK07b e o mutante 'recheck só dev/ino'."
+    },
+    {
+      "id": "M2",
+      "title": "Listagem de diretório sem teto contradiz I4 e A06",
+      "evidence": "SPEC:501-502 (readdir completo, ordena e depois trunca), SPEC:532, SPEC:440, SPEC:75, SPEC:201, SPEC:211 e 527 (prazo só entre arquivos). readdirSync lê todos os nomes numa chamada síncrona. Sonda G: opendirSync permite parar em cap+1.",
+      "fix": "Ler no máximo cap+1 entradas com opendirSync; se passar, CAP_EXCEEDED, cobertura INCOMPLETE e nenhum item daquele diretório processado. Vale para o root, os subdiretórios e a seleção. Ajustar SPEC:201 e o SK06."
+    },
+    {
+      "id": "M3",
+      "title": "Caps e códigos contraditórios; JSON inválido sem código nem prova; cobertura do relatório sem definição",
+      "evidence": "SPEC:209-210 (frontmatter e descrição acima do cap dão INVALID) contra SK06 SPEC:656 (todo cap dá CAP_EXCEEDED e INCOMPLETE) e §8 SPEC:570 (sem código para frontmatter). JSON com sintaxe inválida não tem código em SPEC:561-578; A03 SPEC:707 promete; SK03 SPEC:653 não testa; o loader copia error.message (loader.ts:138-140), e o V8 inclui trecho: \"Unexpected token 'S', \\\"{\\\"a\\\": SYNTH-SECRET}\\\" is not valid JSON\". O coverage do relatório (SPEC:285) não tem regra de agregação; a condição 1 (SPEC:421) e o mutante M04 dependem dela; a relação com a cobertura da seleção (SPEC:442) não está escrita.",
+      "fix": "Um efeito por cap, alinhando §6.3, §8 e SK06. Criar MANIFEST_SYNTAX_INVALID sem copiar mensagem, com caso no SK03 e mutante. Definir a agregação do coverage do relatório e a relação com a seleção."
+    },
+    {
+      "id": "M4",
+      "title": "Gramática e decodificação deixam reinterpretação aberta",
+      "evidence": "Decodificação de SKILL.md e referências não especificada (só o skill.json tem regra, SPEC:237). Sonda: o TextDecoder padrão remove o BOM e entrega '---\\n'; Buffer.toString troca byte inválido por U+FFFD. 'Controle' não definido (SPEC:250): Cf/bidi/zero-width, U+0085, U+2028 e U+2029 (quebras no YAML 1.1). A descrição do skill.json não tem restrição, e a projeção P14 (SPEC:406) é contexto permanente: uma quebra de linha forja outra entrada. Delimitadores e valor terminado em ':' sem regra. P15 (SPEC:241, 792) sem comparar a chave decodificada: no JSON.parse, {\"id\":\"a\",\"i\\u0064\":\"b\"} fica com \"b\".",
+      "fix": "UTF-8 fatal com BOM proibido para SKILL.md e referências (ENCODING_INVALID). Lista fechada de code points proibidos (Cc, Cf, Zl, Zp, U+0085, não-caracteres), com código. Regra exata de abertura e fechamento. Valor não termina em ':'. Chave JSON comparada depois de decodificar. Mesmo conjunto proibido na descrição do skill.json; a projeção não aceita quebra. Casos no SK03."
+    },
+    {
+      "id": "M5",
+      "title": "Provas e mutantes que não fecham",
+      "evidence": "Sonda B: nos casos estáticos do SK05, o correto, o stat no lugar de lstat e o sem O_NOFOLLOW dão SYMLINK_REFUSED; o mutante M01 (SPEC:675) não morre pelo SK05. Só a troca entre lstat e open separa os códigos (FILE_CHANGED_DURING_READ). Sonda C: com a fixture do SK08b (5 MiB acima do teto e FIFO), a seleção só da escolhida e o mutante 'adquire todas' dão o mesmo bytesRead (47) e filesOpened (1); o mutante M11 (SPEC:685) sobrevive. O SK10c (SPEC:664) diz 'verde na base', mas inclui seleção, que não existe na base. Sem prova: REDACTION_FAILED, REDACTOR_MISSING, KNOWLEDGE_NOT_AVAILABLE/EVALUATED, MANIFEST_FRONTMATTER_CONFLICT e FORMAT_NOT_ENABLED; o mutante M19 precisa de um erro de FS explícito. 0383:315 pede negativos no boundary público; só SK11 e SK13 usam o dist.",
+      "fix": "Dividir o mutante M01 em dois testes (gancho de troca esperando ELOOP→SYMLINK_REFUSED; diretório-symlink esperando marcador ausente). Explicitar que M02 e M03 tiram as duas checagens. No SK08b, skill.json pequeno na outra skill, ou espião de lstat/open. Separar o SK10c. Casos e mutantes para redator que lança, redator que devolve não-string, redator ausente, conhecimento, conflito manifesto/frontmatter, formato não habilitado e erro de FS. Um negativo por aceite de segurança (A05, A07, A10 e A11) no teste de consumidor do dist."
+    },
+    {
+      "id": "M6",
+      "title": "P1 e P2 se contradizem e pressupõem uma SPEC da PAR-T07 que não existe",
+      "evidence": "SPEC:742, 778-779, 788, 800. P1 exige a PAR-T07 integrada antes do BUILD; P2 põe a 0255-A como fatia da T07 'sem fechar a T07'. O resultado é ciclo, ou a admissão própria (digest do chamador, P11) vira avaliador paralelo ao 'hash aprovado' e ao grant da T07 (0380:537), contra 0383:13 e 0394:7. grep -rln PAR-T07 docs/02_spec/ só acha a 0255. 0383:13: 'quando compatível; ampliação exige novo gate'. A T07 depende da K05 (0380:536).",
+      "fix": "Tirar o default combinado e apresentar ao usuário e ao dono do programa duas opções: (A) a 0255-A é a primeira SPEC da PAR-T07, com aceite do dono, gate da K05 e itemDigest como hash canônico; (B) esperar a T07 e consumir o hash e o catálogo aprovados dela (P11 muda). Pôr no §13 o aceite do dono da PAR-T07 e do integrador Claude100 (0394:69)."
+    },
+    {
+      "id": "M7",
+      "title": "P8 (endurecer o loader) é contraditório e subespecificado",
+      "evidence": "SK14 (SPEC:669) exige 'sem caminho absoluto', mas SkillManifestLoadError.skillPath é absoluto (loader.ts:6, 107, 114, 120, 137; caso E da sonda do executor; PUBLIC_API.md:99), e o §6.11 (SPEC:487) só fala das mensagens. 'Cap como erro' contra 'resultado para JSON válido não muda' (SPEC:486-489), sem dizer quais caps valem. Regra de root (relativo, canônico) não definida. pdsh-031-core-coverage.test.ts:398-403 exige 'entrada inacessível' para symlink quebrado. A mensagem do V8 em 'skill.json ilegível' vaza trecho do JSON.",
+      "fix": "Escrever a tabela do loader endurecido: skillPath (relativo ou mantido, com nota no PUBLIC_API), caps e valores, regra de root, symlink mapeado para 'entrada inacessível', mensagem de JSON sem error.message. Ou adotar a alternativa: manter o loader e marcá-lo como fora da fronteira de segurança."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "bytes do lstat em entradas não regulares depende do local e do FS",
+      "evidence": "Sonda E: o mesmo symlink em dois lugares deu 181 e 197 bytes. O tamanho de diretório varia por FS. Contradiz I6 (SPEC:78) e SPEC:551 para itens com recusa.",
+      "fix": "bytes só para arquivo regular; null nos demais."
+    },
+    {
+      "id": "O2",
+      "title": "Redator real cobre pouco e identificadores não passam por ele",
+      "evidence": "Sonda F: redactSensitiveText deixou passar ghp_, sk-ant-, AKIA, JWT e PEM. O SK11 usa só formatos cobertos. O charset do field de MANIFEST_INVALID não está definido (SPEC:395).",
+      "fix": "Restringir A11 e I9 aos padrões do redator do host; definir o charset de field; documentar o token sem prefixo como limitação; mensagem de SkillInspectionInputError só com código e campo."
+    },
+    {
+      "id": "O3",
+      "title": "Relatório passa do teto de nós do canonicalizeJson dentro dos defaults",
+      "evidence": "canonical-json.ts:14 (20.000 nós). Um item mínimo tem 53 nós, então cabem cerca de 376 itens; os defaults permitem 512. Contradiz SPEC:401.",
+      "fix": "Teto total de itens (por exemplo, 256) ou retirar a afirmação."
+    },
+    {
+      "id": "O4",
+      "title": "0255-B se sobrepõe ao inventário da PAR-H04",
+      "evidence": "0380:818 ('inventário somente leitura do que está carregado'); SPEC:746 exige a H04 antes do BUILD da 0255-B.",
+      "fix": "Na r2, projetar sobre o inventário da H04; acrescentar às pendências do §9."
+    },
+    {
+      "id": "O5",
+      "title": "A 'seleção autorizada' é autorizada pelo chamador; o corpo sai do mesmo buffer",
+      "evidence": "P11 (SPEC:788); SPEC:443-444.",
+      "fix": "Dizer isso no texto e exigir autoridade da T07 ou da H04 na 0255-C. Escrever que o corpo vem do buffer hasheado, sem releitura, com mutante."
+    },
+    {
+      "id": "O6",
+      "title": "Segundo avaliador de grant",
+      "evidence": "SPEC:425 contra kernel-runtime.ts:84-96.",
+      "fix": "Usar agentExposesTool mais a exclusão explícita do curinga. Consultar approvedItemDigests só por propriedade própria ('constructor' casa o ID_PATTERN)."
+    },
+    {
+      "id": "O7",
+      "title": "Precedente citado é o mais fraco; cópia da primitiva de leitura",
+      "evidence": "exam-egress.ts:127-149 não faz lstat, nlink nem compara inode; boundary-installed-identity.mjs:227-276 é o mais forte. Há outras cópias em scripts/build-installed-reference.mjs e scripts/release-image-record.mjs. Não é executor, policy nem avaliador paralelo (0394:7).",
+      "fix": "Manter privada em acquisition.ts, reusar os vetores de teste e registrar a consolidação como achado."
+    },
+    {
+      "id": "O8",
+      "title": "Constantes de FS ausentes devem falhar fechado",
+      "evidence": "No Windows, fs.constants.O_NOFOLLOW é undefined, e 0 | undefined vira 0.",
+      "fix": "Recusar com código próprio quando O_NOFOLLOW, O_NONBLOCK ou O_DIRECTORY não forem números."
+    },
+    {
+      "id": "O9",
+      "title": "Precedência da classificação e do refusal",
+      "evidence": "SPEC:219-229 (SKILL.md com bit de execução, oculto e executável, diretório oculto).",
+      "fix": "Dizer a ordem das regras e qual refusal vai para o fileEntry."
+    },
+    {
+      "id": "O10",
+      "title": "Corpo presente e vazio",
+      "evidence": "estimateTokens('') = 1 (context-engine.ts:39-41) contra 'texto ausente vale 0' (SPEC:405).",
+      "fix": "Definir se é BODY com 1 token."
+    },
+    {
+      "id": "O11",
+      "title": "Escalares que o YAML leria como outro tipo",
+      "evidence": "name e description com true, null, ~, 1.0 ou yes viram texto (SPEC:257, 765).",
+      "fix": "Considerar recusar, para não haver divergência entre ferramentas."
+    },
+    {
+      "id": "O12",
+      "title": "Gate, item 3, inclui a colisão 0029 como critério da Q01",
+      "evidence": "SPEC:741 contra 0383:194; a lista de reusos da Q01 omite Q03 e Q04.",
+      "fix": "Tratar a 0029 como risco e observação ao integrador; listar os nove reusos."
+    },
+    {
+      "id": "O13",
+      "title": "Função síncrona com prazo de até 60 s",
+      "evidence": "SPEC:121, 211.",
+      "fix": "Dizer que não roda no caminho de requisição da API."
+    },
+    {
+      "id": "O14",
+      "title": "Achado da migration 0029 confirmado; contagem do recon diverge",
+      "evidence": "0380:59 e 0380:101 reservam a 0029 para a composição 0217 (0029_controlled_published_kernel.sql em a72422bee e refs/backup/pare100-spec0217-r5-snapshot). A main 420b97b3 tem 0029_case_assignment_authorization.sql (48c8607c9, PR #13 24cdb463f), em postgres-migrations.ts:50. O runner usa o nome completo como PK: não há choque de chave, mas há choque de número e de ordem com 0029→0030→0031 e com a SPEC0239. Nenhum registro nos ledgers. São 2.147 linhas em 1.367 arquivos de docs/, não 1.635.",
+      "fix": "Nenhuma ação nesta SPEC (a 0255-A não tem migration). Encaminhar ao integrador da fundação; corrigir a contagem no recon."
+    }
+  ],
+  "premises": [
+    {
+      "id": "P1/P2",
+      "decision": "Escolher a opção A (0255-A como primeira SPEC da PAR-T07, com aceite do dono e gate da K05) ou a opção B (esperar a T07 e consumir o hash e o catálogo dela). Os defaults atuais não convivem (M6).",
+      "owner": "usuário com o dono do programa Claude100"
+    },
+    {
+      "id": "P8",
+      "decision": "Endurecer com a tabela de comportamento escrita (M7), ou manter o loader e marcá-lo como fora da fronteira de segurança.",
+      "owner": "usuário"
+    },
+    {
+      "id": "H1-modelo-de-ameaça",
+      "decision": "Premissa escondida: o root pode ter escritor concorrente não confiável? Se não, I3, A05 e A15 dizem 'árvore estática garantida pelo host'. Se sim, é preciso a assinatura completa ou o fd via /proc (M1).",
+      "owner": "usuário"
+    },
+    {
+      "id": "H2-plataforma",
+      "decision": "Premissa escondida: a fronteira vale só para Linux? A resposta decide o uso de /proc e a recusa por constante ausente (M1, O8).",
+      "owner": "usuário"
+    },
+    {
+      "id": "H3-dono-PAR-T07",
+      "decision": "Premissa escondida: não há SPEC nem claim da PAR-T07. Definir quem aceita A01, A05, A07 e A10 como ampliação do aceite da T07 (0383:13).",
+      "owner": "usuário com o dono do programa"
+    },
+    {
+      "id": "P4",
+      "decision": "Aceitar que SKILL.md com license ou metadata fica INVALID (compatibilidade quase nula), ou registrar chaves inertes como achado, sem conceder nada.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P11",
+      "decision": "Digests vindos do chamador até a T07; aceitável se a 0255-C não usar a seleção sem a autoridade da T07 ou da H04 (O5).",
+      "owner": "usuário"
+    },
+    {
+      "id": "P12",
+      "decision": "Com o M2, o estouro de listagem passa a não processar nenhum item daquele diretório.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P15",
+      "decision": "Recusar a chave duplicada comparando a chave decodificada (M4d).",
+      "owner": "usuário"
+    },
+    {
+      "id": "P3,P5,P6,P7,P9,P10,P13,P14,P16",
+      "decision": "Defaults seguros como estão (P14 com o M4b).",
+      "owner": "usuário"
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+// Sonda do crítico contra o mecanismo da SPEC0255 r2 (§8.2–8.7, §7.9.7, §7.10).
+// Dados sintéticos; grava só em diretório temporário no scratchpad.
+// Uso: node critic-probe-r2.mjs <worktree> <tmpbase>
+import {
+  mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync,
+  renameSync, unlinkSync, lstatSync, openSync, fstatSync, readSync, writeSync,
+  closeSync, readlinkSync, opendirSync, constants as C
+} from 'node:fs'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+
+const [worktree, tmpBase] = process.argv.slice(2)
+const out = { node: process.version, platform: process.platform }
+const DIRF = C.O_RDONLY | C.O_DIRECTORY | C.O_NOFOLLOW
+const FILEF = C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK
+const P = (fd, name) => (name === undefined ? `/proc/self/fd/${fd}` : `/proc/self/fd/${fd}/${name}`)
+const B = { bigint: true }
+const sig = (s) => ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeNs', 'ctimeNs'].map((k) => String(s[k])).join(':')
+
+function openRoot(path) {
+  const fd = openSync(path, DIRF)
+  if (readlinkSync(P(fd)) !== path) { closeSync(fd); return { code: 'ROOT_NOT_CANONICAL' } }
+  return { fd, sig0: sig(fstatSync(fd, B)) }
+}
+function list(dfd, cap) {
+  const d = opendirSync(P(dfd), { bufferSize: 32 }); const names = []; let e
+  while (names.length <= cap && (e = d.readSync()) !== null) names.push(e.name)
+  d.closeSync()
+  return names.length > cap ? null : names.sort()
+}
+function readFileAt(dfd, name, st, cap, h) {
+  h.beforeFileOpen?.(name)
+  let fd
+  try { fd = openSync(P(dfd, name), FILEF) } catch (e) { return { code: e.code === 'ELOOP' ? 'SYMLINK_REFUSED' : 'READ_FAILED', errno: e.code } }
+  try {
+    const f0 = fstatSync(fd, B)
+    if (sig(f0) !== sig(st) || f0.nlink !== 1n) return { code: 'FILE_CHANGED_DURING_READ' }
+    h.afterFstat?.(name)
+    const buf = Buffer.alloc(Number(st.size) + 1); let n = 0
+    for (;;) { const r = readSync(fd, buf, n, buf.length - n, null); if (!r) break; n += r; if (n > cap) return { code: 'CAP_EXCEEDED' } }
+    if (n !== Number(st.size) || sig(fstatSync(fd, B)) !== sig(st) || sig(lstatSync(P(dfd, name), B)) !== sig(st)) return { code: 'FILE_CHANGED_DURING_READ' }
+    return { code: 'OK', text: buf.subarray(0, n).toString('utf8'), sha256: createHash('sha256').update(buf.subarray(0, n)).digest('hex') }
+  } finally { closeSync(fd) }
+}
+// §8.4–8.7 para um item.
+function acquireItem(rootFd, name, h = {}) {
+  const st = lstatSync(P(rootFd, name), B)
+  if (st.isSymbolicLink()) return { item: 'REFUSED', code: 'SYMLINK_REFUSED' }
+  if (!st.isDirectory()) return { item: 'IGNORED' }
+  h.afterItemLstat?.()
+  let cfd
+  try { cfd = openSync(P(rootFd, name), DIRF) } catch (e) { return { item: 'REFUSED', code: ['ENOTDIR', 'ELOOP'].includes(e.code) ? 'SYMLINK_REFUSED' : 'READ_FAILED' } }
+  const dirs = [{ fd: cfd, sig0: sig(fstatSync(cfd, B)) }]
+  const files = {}; let coverage = 'COMPLETE'
+  if (dirs[0].sig0 !== sig(st)) coverage = 'INCOMPLETE(TREE_CHANGED_DURING_READ)'
+  const walk = (dfd, prefix) => {
+    const names = list(dfd, 32)
+    for (const n of names) {
+      const s = lstatSync(P(dfd, n), B)
+      if (s.isSymbolicLink()) { files[prefix + n] = { code: 'SYMLINK_REFUSED' }; coverage = 'INCOMPLETE'; continue }
+      if (s.isDirectory()) {
+        h.beforeSubdirOpen?.(prefix + n)
+        let sfd
+        try { sfd = openSync(P(dfd, n), DIRF) } catch (e) { files[prefix + n + '/'] = { code: ['ENOTDIR', 'ELOOP'].includes(e.code) ? 'SYMLINK_REFUSED' : 'READ_FAILED' }; coverage = 'INCOMPLETE'; continue }
+        const s0 = sig(fstatSync(sfd, B))
+        if (s0 !== sig(s)) coverage = 'INCOMPLETE(TREE_CHANGED_DURING_READ)'
+        dirs.push({ fd: sfd, sig0: s0 })
+        h.afterSubdirPin?.(prefix + n)
+        walk(sfd, prefix + n + '/')
+        continue
+      }
+      files[prefix + n] = readFileAt(dfd, n, s, 1 << 20, h)
+      if (files[prefix + n].code !== 'OK') coverage = 'INCOMPLETE'
+    }
+  }
+  walk(cfd, '')
+  h.afterRead?.()
+  for (const d of dirs) { if (sig(fstatSync(d.fd, B)) !== d.sig0) coverage = 'INCOMPLETE(TREE_CHANGED_DURING_READ)'; closeSync(d.fd) }
+  let after; try { after = sig(lstatSync(P(rootFd, name), B)) } catch { after = 'gone' }
+  if (after !== sig(st)) coverage = 'INCOMPLETE(TREE_CHANGED_DURING_READ)'
+  return { item: 'ITEM', coverage, files }
+}
+const markerSeen = (r, m) => Object.values(r.files ?? {}).some((f) => String(f.text ?? '').includes(m))
+
+const base = realpathSync(mkdtempSync(join(tmpBase, 'c100-critic-r2-')))
+function fixture(tag) {
+  const root = join(base, tag, 'root'); const outside = join(base, tag, 'outside')
+  mkdirSync(join(root, 'skill', 'references'), { recursive: true }); mkdirSync(join(outside, 'references'), { recursive: true })
+  writeFileSync(join(root, 'skill', 'SKILL.md'), '---\nname: skill\ndescription: Inside.\n---\nINSIDE_BODY\n')
+  writeFileSync(join(root, 'skill', 'references', 'a.md'), 'INSIDE_REF\n')
+  writeFileSync(join(outside, 'SKILL.md'), '---\nname: skill\ndescription: OUTSIDE_MARKER.\n---\nOUTSIDE_BODY\n')
+  writeFileSync(join(outside, 'references', 'a.md'), 'OUTSIDE_REF\n')
+  return { root, outside, parked: join(base, tag, 'root', '.parked') }
+}
+
+// 1. ABA no diretório da skill depois de fixado (ataque da r1)
+{
+  const f = fixture('t1'); const r = openRoot(f.root)
+  const res = acquireItem(r.fd, 'skill', {
+    afterSubdirPin: () => {},
+    beforeFileOpen: (n) => { if (n === 'SKILL.md' && !f.done) { f.done = 1; renameSync(join(f.root, 'skill'), f.parked); symlinkSync(f.outside, join(f.root, 'skill')) } },
+    afterRead: () => { unlinkSync(join(f.root, 'skill')); renameSync(f.parked, join(f.root, 'skill')) }
+  })
+  out.t1_abaAfterPin = { coverage: res.coverage, outsideRead: markerSeen(res, 'OUTSIDE'), insideRead: markerSeen(res, 'INSIDE_BODY'), rootChanged: sig(fstatSync(r.fd, B)) !== r.sig0 }
+  closeSync(r.fd)
+}
+// 2. diretório vira symlink entre o lstat (§8.4) e o open (§8.5)
+{
+  const f = fixture('t2'); const r = openRoot(f.root)
+  const res = acquireItem(r.fd, 'skill', { afterItemLstat: () => { renameSync(join(f.root, 'skill'), f.parked); symlinkSync(f.outside, join(f.root, 'skill')) } })
+  out.t2_dirToSymlinkBetweenLstatAndOpen = { result: res.code ?? res.coverage, outsideRead: markerSeen(res, 'OUTSIDE') }
+  closeSync(r.fd)
+}
+// 3. diretório trocado por outro diretório real entre lstat e open
+{
+  const f = fixture('t3'); const r = openRoot(f.root)
+  mkdirSync(join(f.root, 'other')); writeFileSync(join(f.root, 'other', 'SKILL.md'), 'OTHER_BODY\n')
+  const res = acquireItem(r.fd, 'skill', { afterItemLstat: () => { renameSync(join(f.root, 'skill'), f.parked); renameSync(join(f.root, 'other'), join(f.root, 'skill')) } })
+  out.t3_dirReplacedByRealDir = { coverage: res.coverage }
+  closeSync(r.fd)
+}
+// 4. references vira symlink antes de ser aberto (pai já fixado)
+{
+  const f = fixture('t4'); const r = openRoot(f.root)
+  const res = acquireItem(r.fd, 'skill', { beforeSubdirOpen: (p) => { if (p === 'references') { renameSync(join(f.root, 'skill', 'references'), join(f.root, 'skill', '.refparked')); symlinkSync(join(f.outside, 'references'), join(f.root, 'skill', 'references')) } } })
+  out.t4_refToSymlinkBeforeOpen = { refEntry: res.files['references/']?.code, outsideRead: markerSeen(res, 'OUTSIDE'), coverage: res.coverage }
+  closeSync(r.fd)
+}
+// 5. ABA em references depois de fixado
+{
+  const f = fixture('t5'); const r = openRoot(f.root)
+  const ref = join(f.root, 'skill', 'references'); const pk = join(f.root, 'skill', '.refparked')
+  const res = acquireItem(r.fd, 'skill', {
+    afterSubdirPin: (p) => { if (p === 'references') { renameSync(ref, pk); symlinkSync(join(f.outside, 'references'), ref) } },
+    afterRead: () => { unlinkSync(ref); renameSync(pk, ref) }
+  })
+  out.t5_abaOnReferencesAfterPin = { coverage: res.coverage, outsideRead: markerSeen(res, 'OUTSIDE'), insideRefRead: markerSeen(res, 'INSIDE_REF') }
+  closeSync(r.fd)
+}
+// 6/7. arquivo vira symlink; arquivo trocado por outro arquivo do mesmo tamanho
+{
+  const f = fixture('t6'); const r = openRoot(f.root); const p = join(f.root, 'skill', 'SKILL.md')
+  const res6 = acquireItem(r.fd, 'skill', { beforeFileOpen: (n) => { if (n === 'SKILL.md') { unlinkSync(p); symlinkSync(join(f.outside, 'SKILL.md'), p) } } })
+  closeSync(r.fd)
+  const g = fixture('t7'); const r7 = openRoot(g.root); const q = join(g.root, 'skill', 'SKILL.md')
+  const res7 = acquireItem(r7.fd, 'skill', { beforeFileOpen: (n) => { if (n === 'SKILL.md') { const t = q + '.new'; writeFileSync(t, '---\nname: skill\ndescription: Insidf.\n---\nINSIDE_BODY\n'); renameSync(t, q) } } })
+  closeSync(r7.fd)
+  out.t6_fileToSymlink = res6.files['SKILL.md'].code
+  out.t7_fileReplacedSameSize = res7.files['SKILL.md'].code
+}
+// 8. escrita no mesmo inode, mesmo tamanho, logo depois do fstat (resíduo de timestamp)
+{
+  const f = fixture('t8'); const r = openRoot(f.root); const p = join(f.root, 'skill', 'SKILL.md')
+  const res = acquireItem(r.fd, 'skill', { afterFstat: (n) => { if (n === 'SKILL.md') { const w = openSync(p, 'r+'); writeSync(w, 'X', 0); closeSync(w) } } })
+  out.t8_inPlaceSameSizeWrite = res.files['SKILL.md'].code
+  closeSync(r.fd)
+}
+// 9. unicidade: duplicata em outro root some durante a busca e volta
+{
+  const a = join(base, 't9', 'A'); const b = join(base, 't9', 'B')
+  mkdirSync(join(a, 'foo'), { recursive: true }); mkdirSync(join(b, 'foo'), { recursive: true })
+  const ra = openRoot(a); const rb = openRoot(b)
+  renameSync(join(b, 'foo'), join(base, 't9', 'foo-parked'))
+  let lookup; try { lstatSync(P(rb.fd, 'foo')); lookup = 'FOUND' } catch (e) { lookup = e.code }
+  const rootBCheckedBeforeRestore = sig(fstatSync(rb.fd, B)) !== rb.sig0
+  renameSync(join(base, 't9', 'foo-parked'), join(b, 'foo'))
+  out.t9_uniquenessRace = { lookupDuringRemoval: lookup, rootBChangedAtEnd: sig(fstatSync(rb.fd, B)) !== rb.sig0, rootBChangedIfCheckedBeforeRestore: rootBCheckedBeforeRestore }
+  closeSync(ra.fd); closeSync(rb.fd)
+}
+// 10. I13: diretório 'foo' em A e arquivo regular 'foo' em B
+{
+  const a = join(base, 't10', 'A'); const b = join(base, 't10', 'B')
+  mkdirSync(join(a, 'foo'), { recursive: true }); mkdirSync(b, { recursive: true }); writeFileSync(join(b, 'foo'), 'not a skill')
+  const roots = [openRoot(a), openRoot(b)]
+  const kinds = roots.map((r) => { try { const s = lstatSync(P(r.fd, 'foo'), B); return s.isDirectory() ? 'DIR' : s.isSymbolicLink() ? 'SYMLINK' : s.isFile() ? 'FILE' : 'OTHER' } catch (e) { return e.code } })
+  // §7.9 condição 7: qualquer resultado diferente de ENOENT em outro root dá DUPLICATE_ID
+  const admission = kinds[1] !== 'ENOENT' ? 'DUPLICATE_ID' : 'UNIQUE'
+  // §7.10 passo 2: nenhum diretório → NOT_FOUND; mais de um → DUPLICATE_ID; symlink/especial/montagem → BLOCKING
+  const dirs = kinds.filter((k) => k === 'DIR').length
+  const selection = dirs === 0 ? 'NOT_FOUND' : dirs > 1 ? 'DUPLICATE_ID' : kinds.some((k) => k === 'SYMLINK' || k === 'OTHER') ? 'BLOCKING_RISK_FINDING' : 'PROCEEDS_TO_SELECTED'
+  out.t10_i13_regularFileInOtherRoot = { kinds, admission, selection }
+  roots.forEach((r) => closeSync(r.fd))
+}
+
+// 11. redator real: falsos positivos da P18 e marcador <redacted:12hex>
+{
+  const { redactSensitiveText } = await import(join(worktree, 'packages/shared/src/audit-governance.ts'))
+  const ids = ['1.0.0', '10.20.30', '2024.10.22', '2024.10.22.md', 'token:refresh', 'secret:read', 'credential:lookup', 'fs.read', '123.456.789-09']
+  out.t11_p18Redaction = Object.fromEntries(ids.map((v) => [v, redactSensitiveText(v) === v ? 'unchanged' : 'SECRET_PATTERN_IN_IDENTIFIER']))
+  // Busca exaustiva num espaço reduzido (10^6) para medir a taxa; o espaço de CPF válido é ~10^9.
+  const target = '123.456.789-09'
+  const h12 = (s) => createHash('sha256').update(s).digest('hex').slice(0, 12)
+  const marker = h12(target)
+  const t0 = process.hrtime.bigint(); let found = null
+  for (let i = 0; i < 1_000_000 && !found; i++) {
+    const d = String(i).padStart(6, '0')
+    const cand = `123.${d.slice(0, 3)}.${d.slice(3, 6)}-09`
+    if (h12(cand) === marker) found = cand
+  }
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6
+  out.t11_redactedMarkerBruteForce = { recovered: found === target, searchSpace: 1e6, ms: Math.round(ms), extrapolated1e9SingleCoreMinutes: Math.round((ms * 1000) / 60000) }
+}
+// 12. regex de escalar ambíguo (P19)
+{
+  const amb = (v) => /^(true|false|yes|no|on|off|y|n|null|~)$/i.test(v) || /^[-+]?[0-9][0-9_.:eExXoObB+-]*$/.test(v) || /^[-+]?\.(inf|nan)$/i.test(v)
+  out.t12_ambiguousScalar = Object.fromEntries(['1b', '2fa', '3d', '7zip', '1-0-0', '2024-10', '12', '.5', '+.5', '1e3', '0x1f', 'v1'].map((v) => [v, amb(v)]))
+}
+rmSync(base, { recursive: true, force: true })
+console.log(JSON.stringify(out, null, 2))
