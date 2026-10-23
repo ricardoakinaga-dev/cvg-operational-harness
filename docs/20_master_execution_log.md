@@ -1,3 +1,25 @@
+# Merges, CI e SPEC0255 — 22–23/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- Merge squash no SHA exato, com os 5 checks obrigatórios verdes: #19 (fastify), #16 (Annex B), #20 (UP91-025) e #21 (REA). O #18 foi fechado: o squash dele seria vazio, porque o commit entrou pelo #16.
+- **Barra de CI:**
+  - O limite de 300 min funcionou: a barra do #18 passou de 180 min sem ser cancelada.
+  - O gate de certificação exige zero vulnerabilidades. Por isso, cada aviso novo (vitest e depois fastify) pediu um PR próprio, autorizado pelo usuário.
+  - No #22, o teste `gitleaks-reviewed-boundaries` falhou de forma intermitente, porque usa fixtures aleatórias. O delta não mexe na configuração do gitleaks, então o job foi rodado de novo.
+- **Gitleaks:**
+  - Na publicação da SPEC0255 r3, um JWT sintético da sonda do crítico subiu numa branch temporária, porque o comando conferia o código de saída do `tail`.
+  - Ele foi neutralizado sem afrouxar regra. A branch foi apagada antes do PR, e o commit limpo foi refeito.
+  - O Codex confirmou o intervalo limpo e preparou um procedimento que preserva o código de saída do scanner (`docs/04_audit/evidence/UNBLOCK-CLAUDE-20261022/scan-before-publish.sh`, no checkout dele).
+- **SPEC0255:**
+  - r1 a r3 com o crítico;
+  - revisão do Codex com REVISE e patch;
+  - replanejamento;
+  - r4 aprovada pelo crítico numa rodada única.
+  - O pedido de conferência ao Codex está em `docs/08_runtime/handoffs/c100_t01_spec0255_codex_review_20261022.md` (PR #22).
+- **Codex (UNBLOCK-CLAUDE-20261022, sem commit):**
+  - os 43 FAIL eram históricos, e as suítes atuais passaram 93/93, mas isso não fecha a Q01;
+  - fez a SPEC0256 r1 da PAR-K05;
+  - triou o CodeQL #33.
+
 # REA-CLAUDE-INTEGRATION-20261022 — incorporação do plano REA do Claude — 22/10/2026 (Claude Code, CONT-20261018-D9EF)
 
 - Codex, `REA-CLAUDE-20261022`: REA do Claude 2.1.308 sem execução de provider, canal, MCP ou cloud reais. O resultado foi o relatório 0623, a matriz CC22 e o contrato SI01–SI12. O Codex não fez commit.

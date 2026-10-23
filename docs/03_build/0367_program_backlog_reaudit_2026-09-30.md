@@ -470,6 +470,8 @@ Task com código só encerra com gate de sua trilha, evidência do candidato cer
 - **Rastreio:** tasks de origem PR-301, PR-302, PR-204; achados A91-10; critérios C12, C20, C21, C37; gates de produção G05.
 - **Dependência registrada em 21/10/2026 (AUD0621, F01):** com a SPEC0176, toda composição trusted responde 503 nos readers de caso e no registro até existir o produtor verificado de `case_principals` (`PrincipalProvisioningPort.applyVerifiedPrincipalState`) ligado ao login OIDC/MFA; `buildServerFromEnv` ainda não configura `casePrincipalAuthority`. É falha fechada por desenho; ligar o produtor é condição para qualquer uso trusted. [Plano 0392](0392_aud0621_remediation.md).
 
+- **Progresso 22–23/10/2026 (UP91-025-OIDC, fatia A):** [SPEC0254](../02_spec/0254_oidc_login_case_principals.md) r2 aprovada pelo crítico, com as decisões P1–P4 do usuário, e BUILD mergeado no PR #20. Entregue: login OIDC com MFA pelo entrypoint só em `NODE_ENV=test`, com IdP sintético HTTPS; produtor verificado de `case_principals` ligado ao login; `casePrincipalAuthority` só junto com o login; store PG de sessão e de state; CSRF por `Origin`; configuração inválida recusada. Fica aberto neste cartão: fatia B (console e hosts distintos, SPEC0150) e fatia C (IdP real e produção). [Relatório](../04_audit/evidence/UP91-025-OIDC-20261022/build/build-report.md).
+
 <a id="up91-026"></a>
 
 ### UP91-026 — Substituir sessão atomicamente e validar autoridade/RLS
