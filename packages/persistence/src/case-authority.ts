@@ -235,6 +235,12 @@ export interface CaseReadSnapshot {
    */
   scopedAuthorityAvailable(): Promise<boolean>
   principal(operatorId: string): Promise<CasePrincipalRecord | null>
+  /**
+   * SPEC0254 §4.8 step 6: whether any principal of the snapshot tenant has an
+   * authority version that starts with `prefix` and differs from `current`
+   * (matrix edited without raising its version). Read-only, no new state.
+   */
+  hasPrincipalVersionMismatch(prefix: string, current: string): Promise<boolean>
   coreConversationExists(conversationId: string): Promise<boolean>
   coreConversationCase(conversationId: string): Promise<CaseLookup | null>
   coreSessionCase(
@@ -705,6 +711,13 @@ export class InMemoryCaseAuthority implements CaseAuthorityPort {
         const principal = this.state.principals.get(key(tenantId, operatorId))
         return principal ? { ...principal } : null
       },
+      hasPrincipalVersionMismatch: async (prefix, current) =>
+        [...this.state.principals.values()].some(
+          (principal) =>
+            principal.tenantId === tenantId &&
+            principal.authorityVersion.startsWith(prefix) &&
+            principal.authorityVersion !== current
+        ),
       coreConversationExists: async (conversationId) =>
         this.conversation(tenantId, conversationId) !== undefined,
       coreConversationCase: async (conversationId) => {

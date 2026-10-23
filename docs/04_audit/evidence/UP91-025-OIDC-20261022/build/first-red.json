@@ -1,0 +1,106 @@
+{
+  "task": "UP91-025-OIDC-20261022",
+  "spec": "docs/02_spec/0254_oidc_login_case_principals.md (r2, sha256 3c804dc22c34b736b6d0c6bb5d683b6144a1d7d34dd083d33926d34afef49694)",
+  "base": {
+    "head": "693fec0ef441f03409be29fb84994ab0982d2abe",
+    "productionCodeChanged": false,
+    "workingTreeAtRun": "apenas testes novos, oidc-identity.test.ts reescrito, apps/api/package.json e package-lock.json com openid-client 6.8.8 (ainda sem import em código de produção)"
+  },
+  "environment": {
+    "node": "v22.23.2",
+    "postgres": "container cvg-d9ef-up91025-pg (postgres:16-alpine, 127.0.0.1:56270), TEST_DATABASE_URL só nos arquivos PG",
+    "command": "env -i HOME PATH=<node22> TMPDIR=<scratch> TEST_DATABASE_URL=postgres://…@127.0.0.1:56270/cvg_test npx vitest run <9 arquivos> --no-file-parallelism --reporter=json"
+  },
+  "testFilesSha256AtRun": {
+    "apps/api/src/__tests__/oidc-authority.test.ts": "af0340bdbbc462bf17e1b571894594ea17eff6295bae5a525055c8a2a636b9ff",
+    "apps/api/src/__tests__/oidc-identity.test.ts": "996ea6cad93b6467f2f300500abb778e11a90b0f134475e67bddc11d1ad55be8",
+    "apps/api/src/__tests__/oidc-login-boundary.test.ts": "f146f9786d5a660fcb3a3e73b33bb1506b7b109ec10c1a12248c29aeb336d905",
+    "apps/api/src/__tests__/oidc-login-config.test.ts": "95350087fa8060bf211f16baf6d854a39d14e3e2b29d235f819ce3e26fb70478",
+    "apps/api/src/__tests__/oidc-login-guards.test.ts": "9575880fcc04b1df29481e3467658c306a10a24a5d109d9541b937abfa20524a",
+    "apps/api/src/__tests__/oidc-login-postgres.test.ts": "974abb58f21f056e269383d8f399e21f4a100a7cf948915db69333a8b958e6f9",
+    "apps/api/src/__tests__/oidc-login-routes.test.ts": "0414592d152780a6bce3233a0acbc186ad978012c488b043fc4f78d944018a61",
+    "apps/api/src/__tests__/case-principal-producer.test.ts": "85c22928d51499cc6b847a4598852f30948058a57258d31599ec6fbbb5a949ad",
+    "apps/api/src/__tests__/support/oidc-postgres-fixture.ts": "7990438d01d0cc14e55764b242c410ab16d5d105c6e2ea1d449bf2289923dd02",
+    "apps/api/src/__tests__/support/synthetic-oidc-issuer.ts": "2cadb27a5c4068f6d9049713f0321e906b1fbadf33a6c42a3443d5f1b4e1b3de"
+  },
+  "totals": {
+    "tests": 157,
+    "passed": 7,
+    "failed": 150,
+    "filesFailingAtImport": 4,
+    "note": "os 7 verdes na base são guardas que a SPEC marca como verdes na base (O12: 4; O7/O8: fixture de teste aceita, webhook sem cookie inalterado, probes independentes do token)"
+  },
+  "byProof": [
+    {
+      "id": "O1",
+      "file": "oidc-login-config.test.ts",
+      "expectedReason": "o boot ignora as variáveis e segue",
+      "observed": "97/97 falham: 91 com 'connect ECONNREFUSED 127.0.0.1:1' (a base ignorou a configuração e abriu o pool), 5 com 'boot accepted the configuration' (modo memória e operatorLogin sem configuração) e 1 com 'Production requires an injected operator identity resolver' (caso production, sem a recusa do OIDC)",
+      "rightReason": true
+    },
+    {
+      "id": "O2",
+      "file": "oidc-authority.test.ts",
+      "expectedReason": "rota e módulo inexistentes",
+      "observed": "falha no import: Cannot find module '../oidc-authority.ts'",
+      "rightReason": true
+    },
+    {
+      "id": "O3, O4, O5, O11 (em processo)",
+      "file": "oidc-login-routes.test.ts",
+      "expectedReason": "POST /v1/auth/oidc/start 404",
+      "observed": "falha no import (Cannot find module '../oidc-authority.ts'); sonda de comportamento na base (arquivo temporário, não versionado, fonte em first-red-probe.test.ts.txt): buildServer trusted com store de sessão → POST /v1/auth/oidc/start 404 e GET /v1/auth/oidc/callback 404",
+      "rightReason": true
+    },
+    {
+      "id": "O6 (memória)",
+      "file": "case-principal-producer.test.ts",
+      "expectedReason": "módulo inexistente",
+      "observed": "falha no import: Cannot find module '../case-principal-producer.ts'",
+      "rightReason": true
+    },
+    {
+      "id": "O6 (PG) e O9",
+      "file": "oidc-login-postgres.test.ts",
+      "expectedReason": "404 / módulo inexistente",
+      "observed": "falha no import (Cannot find module '../case-principal-producer.ts'); sonda na base com o PG próprio: buildApiWithProductionSessions com o ambiente §7 + variáveis OIDC sobe (boot aceito) e POST /v1/auth/oidc/start responde 404",
+      "rightReason": true
+    },
+    {
+      "id": "O7",
+      "file": "oidc-login-guards.test.ts",
+      "expectedReason": "construção aceita",
+      "observed": "6 testes de recusa falham com 'expected [Function] to throw an error' (I3, I6, versão diferente, trusted/store exigidos, development e production); a guarda 'continua 503 para todas as roles' falhou por erro do teste: na base, Operator e Approver recebem 403 em /v1/cases (falta a permissão do registro antes do escopo). O teste foi corrigido para a resposta real da base (503, e 403 nesses dois casos), sem afrouxar: continua exigindo falha fechada para todas as roles. Desvio registrado no build-report.",
+      "rightReason": true
+    },
+    {
+      "id": "O8",
+      "file": "oidc-login-guards.test.ts",
+      "expectedReason": "200/201 sem Origin",
+      "observed": "mutações com cookie sem Origin seguem o fluxo (ex.: 'cvg_operator_session=%%%: expected 200 to be 403'; PUT de atribuição 503 em vez de 403); token HMAC no modo OIDC respondeu 'A trusted operator identity resolver…' em vez de 'Bootstrap tokens are disabled', com Set-Cookie; GET /v1/session sem cookie com a mensagem antiga. Para Origin nula, http: e repetida a base já dava 403 pelo hook HTTP, sem cache-control: no-store; o teste passou a exigir no-store só nas respostas do próprio hook de CSRF (sem Origin e origem irmã).",
+      "rightReason": true
+    },
+    {
+      "id": "O10",
+      "file": "oidc-login-entrypoint-postgres.test.ts",
+      "expectedReason": "start 404 / boot ignora a configuração",
+      "observed": "teste principal: 'expected 404 to be 200' no start; teste de configurações: o processo filho segue vivo 20 s depois ('expected timeout to be 1'). Primeira tentativa usava a sonda /health/live (inexistente, 404) e falhou pelo motivo errado; a sonda foi corrigida para /live antes deste registro.",
+      "rightReason": true
+    },
+    {
+      "id": "O12",
+      "file": "oidc-login-boundary.test.ts",
+      "expectedReason": "guarda (verde na base)",
+      "observed": "4/4 verdes",
+      "rightReason": true
+    },
+    {
+      "id": "ajuste oidc-identity.test.ts",
+      "file": "oidc-identity.test.ts",
+      "expectedReason": "mapeador por política inexistente",
+      "observed": "34/34 falham: mapVerifiedOidcIdentity is not a function",
+      "rightReason": true
+    }
+  ],
+  "probeSource": "first-red-probe.test.ts.txt (executado em apps/api/src/__tests__/zz-first-red-probe.test.ts e apagado em seguida; nunca versionado como teste)"
+}

@@ -829,6 +829,19 @@ export class PostgresCaseAuthority implements CaseAuthorityPort {
           )
           return result.rows[0] ? mapPrincipal(result.rows[0]) : null
         }),
+      hasPrincipalVersionMismatch: (prefix, current) =>
+        scoped(async () => {
+          const result = await client.query<{ mismatch: boolean }>(
+            `SELECT EXISTS (
+               SELECT 1 FROM case_principals
+                WHERE tenant_id = $1
+                  AND left(authority_version, length($2)) = $2
+                  AND authority_version <> $3
+             ) AS mismatch`,
+            [tenantId, prefix, current]
+          )
+          return result.rows[0]?.mismatch === true
+        }),
       coreConversationExists: (conversationId) =>
         plain(async () => {
           const result = await client.query(

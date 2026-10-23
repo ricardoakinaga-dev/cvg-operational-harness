@@ -1,0 +1,847 @@
+{
+  "task": "UP91-025-OIDC-20261022",
+  "spec": "SPEC0254 r2 §8 (M1–M29) + R2-O1 (M30) + mutantes do crítico de código r1 (C1–C6)",
+  "checkedCommit": "aa91c86f89e10f7749adaa021e3640e83a15310a",
+  "method": "cada mutante aplicado sozinho (uma ou mais edições ancoradas, contagem exata 1), teste que deve matá-lo executado com Node 22 e filtro -t (PG: container 127.0.0.1:56270 com OIDC0254_PG_REQUIRED=1), bytes restaurados e sha256 conferido arquivo a arquivo e contra o blob de HEAD; runner: mutants-runner.py",
+  "specMutants": {
+    "total": 30,
+    "killed": 30,
+    "survived": 0
+  },
+  "criticMutants": {
+    "total": 6,
+    "killed": 5,
+    "equivalent": [
+      "C1"
+    ],
+    "note": "C7–C9 do crítico morreram já na r1 (C7 tokenizador só por ;, C8 sessão de 15 min ignorando exp, C9 M20 no caminho PG), segundo code-review-r1/review.json; não foram reaplicados aqui"
+  },
+  "history": "primeira execução sobre ad9b1aefa: 30/30 mortos (M25 reexecutado depois da troca de rejects.toThrow por captura explícita no O9); esta execução é a final, sobre o commit dos opcionais da r1",
+  "mutants": [
+    {
+      "id": "M1",
+      "mutant": "sessão sem chamar o produtor",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O3",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"logs in with password\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O3 — OIDC login happy path in process > logs in with password + TOTP, restores by cookie and reads the tenant as Supervisor"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.2
+    },
+    {
+      "id": "M2",
+      "mutant": "produtor depois da sessão",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O6 (rota)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"principal write fails\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O6 — producer through the callback (memory) > answers 503 without a session when the principal write fails"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M3",
+      "mutant": "identitySource 'synthetic_fixture' no produtor",
+      "files": [
+        "apps/api/src/case-principal-producer.ts"
+      ],
+      "proof": "O3",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"logs in with password\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O3 — OIDC login happy path in process > logs in with password + TOTP, restores by cookie and reads the tenant as Supervisor"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/case-principal-producer.ts": "fcfa1a568fca6e53642e92477779dbc0f4396d81cd6ef29043f7169597cc54d6"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M4",
+      "mutant": "versão de autoridade sem o N da matriz",
+      "files": [
+        "apps/api/src/oidc-config.ts"
+      ],
+      "proof": "O2",
+      "test": "apps/api/src/__tests__/oidc-authority.test.ts -t \"carries the matrix version\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 34",
+      "killedBy": [
+        "SPEC0254 O2 — ordered authority version (P5) > carries the matrix version N and a 64-hex digest within 80 characters"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-config.ts": "36e8cf38aae59752d2aa5d753d7181e883b77c424818214443c89a1a3c0214ee"
+      },
+      "seconds": 1.1
+    },
+    {
+      "id": "M5",
+      "mutant": "aceitar amr sem otp",
+      "files": [
+        "apps/api/src/oidc-identity.ts"
+      ],
+      "proof": "O5",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"amr without otp\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses an ID token with amr without otp"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-identity.ts": "1f41571a9e9ab008264ff8ec30c01321610aabee264493c475b2418b737c86e8"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M6",
+      "mutant": "primeiro grupo elegível ganha",
+      "files": [
+        "apps/api/src/oidc-identity.ts"
+      ],
+      "proof": "O5",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"two eligible groups\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses two eligible groups"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-identity.ts": "1f41571a9e9ab008264ff8ec30c01321610aabee264493c475b2418b737c86e8"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M7",
+      "mutant": "ignorar entrada inativa",
+      "files": [
+        "apps/api/src/case-principal-producer.ts"
+      ],
+      "proof": "O6",
+      "test": "apps/api/src/__tests__/case-principal-producer.test.ts -t \"row 2|row 4|row 5\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 3 / passed 0 / total 22",
+      "killedBy": [
+        "SPEC0254 O6 — producer table (memory) > row 2: refuses an absent principal for an inactive entry without writing",
+        "SPEC0254 O6 — producer table (memory) > row 4: deactivates an active principal on an inactive entry and refuses (P4)",
+        "SPEC0254 O6 — producer table (memory) > row 5: refuses an inactive principal on an inactive entry without writing"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/case-principal-producer.ts": "fcfa1a568fca6e53642e92477779dbc0f4396d81cd6ef29043f7169597cc54d6"
+      },
+      "seconds": 1.5
+    },
+    {
+      "id": "M8",
+      "mutant": "reativar inativo com mesmo N",
+      "files": [
+        "apps/api/src/case-principal-producer.ts"
+      ],
+      "proof": "O6",
+      "test": "apps/api/src/__tests__/case-principal-producer.test.ts -t \"row 6\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 22",
+      "killedBy": [
+        "SPEC0254 O6 — producer table (memory) > row 6: never reactivates an inactive principal under the same version"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/case-principal-producer.ts": "fcfa1a568fca6e53642e92477779dbc0f4396d81cd6ef29043f7169597cc54d6"
+      },
+      "seconds": 1.5
+    },
+    {
+      "id": "M9",
+      "mutant": "atualizar role por deriva com mesmo N",
+      "files": [
+        "apps/api/src/case-principal-producer.ts"
+      ],
+      "proof": "O6",
+      "test": "apps/api/src/__tests__/case-principal-producer.test.ts -t \"row 9\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 22",
+      "killedBy": [
+        "SPEC0254 O6 — producer table (memory) > row 9: refuses a role drift under the same version without writing (P3)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/case-principal-producer.ts": "fcfa1a568fca6e53642e92477779dbc0f4396d81cd6ef29043f7169597cc54d6"
+      },
+      "seconds": 1.6
+    },
+    {
+      "id": "M10",
+      "mutant": "casePrincipalAuthority aceito sem login OIDC fora de teste",
+      "files": [
+        "apps/api/src/server.ts"
+      ],
+      "proof": "O7",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"I3\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O7 — composition refusals > refuses casePrincipalAuthority without the OIDC login outside NODE_ENV=test (I3)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/server.ts": "e48a53a31e4ea0dc31a9cb9c0ea4841b9121708dd2c934b286694aabb81b353c"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M11",
+      "mutant": "CSRF só quando o cookie é válido",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O8",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"M11, M28\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O8 — CSRF by exact Origin in the OIDC mode > detects the cookie name exactly like the session parser (M11, M28)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M12",
+      "mutant": "Origin ausente aceito",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O8",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"with no Origin\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O8 — CSRF by exact Origin in the OIDC mode > refuses every cookie mutation with no Origin before any effect"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M13",
+      "mutant": "state consumido depois da troca do code",
+      "files": [
+        "apps/api/src/oidc-login-transaction.ts",
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O5 (replay sem chamada nova a token)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"invalid parameters\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses invalid parameters, cookies and states without calling the token endpoint"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-login-transaction.ts": "918cfb66ee2f4f62ebfcc666a8f7d340569f4c12022b7b450761c8d7b0db41eb",
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M14",
+      "mutant": "expectedNonce omitido",
+      "files": [
+        "apps/api/src/oidc-authority.ts"
+      ],
+      "proof": "O3",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"logs in with password\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O3 — OIDC login happy path in process > logs in with password + TOTP, restores by cookie and reads the tenant as Supervisor"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-authority.ts": "e5b5c298de362fd6cc8c814d6a9bd815ac072d4cf2302581fbbbbd8f32458e60"
+      },
+      "seconds": 2.2
+    },
+    {
+      "id": "M15",
+      "mutant": "pendente mantido em falha depois do consumo",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O5",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"IdP error after consuming\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses an IdP error after consuming the state"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M16",
+      "mutant": "token HMAC aceito no modo OIDC",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O8",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"x-cvg-operator-token\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10) > refuses x-cvg-operator-token on /v1/session with and without a valid cookie, without Set-Cookie",
+        "SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10) > refuses x-cvg-operator-token on /v1/cases with and without a valid cookie, without Set-Cookie"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M17",
+      "mutant": "modo OIDC aceito em production ou development",
+      "files": [
+        "apps/api/src/oidc-config.ts"
+      ],
+      "proof": "O1",
+      "test": "apps/api/src/__tests__/oidc-login-config.test.ts -t \"refuses production|refuses development\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 0 / total 98",
+      "killedBy": [
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses production in buildServerFromEnv and buildApiWithProductionSessions",
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses development in buildServerFromEnv and buildApiWithProductionSessions"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-config.ts": "36e8cf38aae59752d2aa5d753d7181e883b77c424818214443c89a1a3c0214ee"
+      },
+      "seconds": 1.9
+    },
+    {
+      "id": "M18",
+      "mutant": "store em memória aceito no modo OIDC",
+      "files": [
+        "apps/api/src/oidc-config.ts"
+      ],
+      "proof": "O1",
+      "test": "apps/api/src/__tests__/oidc-login-config.test.ts -t \"memory persistence|persistence absent\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 0 / total 98",
+      "killedBy": [
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses memory persistence in buildServerFromEnv and buildApiWithProductionSessions",
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses persistence absent (memory default) in buildServerFromEnv and buildApiWithProductionSessions"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-config.ts": "36e8cf38aae59752d2aa5d753d7181e883b77c424818214443c89a1a3c0214ee"
+      },
+      "seconds": 1.9
+    },
+    {
+      "id": "M19",
+      "mutant": "comparação de issuer só pela biblioteca",
+      "files": [
+        "apps/api/src/oidc-authority.ts"
+      ],
+      "proof": "O2",
+      "test": "apps/api/src/__tests__/oidc-authority.test.ts -t \"upper-case host|:443|trailing slash\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 3 / passed 0 / total 34",
+      "killedBy": [
+        "SPEC0254 O2 — OIDC discovery > refuses issuer with an upper-case host",
+        "SPEC0254 O2 — OIDC discovery > refuses issuer with :443",
+        "SPEC0254 O2 — OIDC discovery > refuses issuer with a trailing slash"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-authority.ts": "e5b5c298de362fd6cc8c814d6a9bd815ac072d4cf2302581fbbbbd8f32458e60"
+      },
+      "seconds": 1.3
+    },
+    {
+      "id": "M20",
+      "mutant": "create em vez de switchIdentity com sessão anterior",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O4 (memória; O10 cobre o PG, C9 do crítico)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"retires the previous browser session\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O4 — POST /v1/auth/oidc/start > retires the previous browser session when a valid cookie starts a new login (D7)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.2
+    },
+    {
+      "id": "M21",
+      "mutant": "corpo de 401 diferente por motivo",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O5",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"invalid parameters\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses invalid parameters, cookies and states without calling the token endpoint"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M22",
+      "mutant": "authorityVersion dependente do segredo",
+      "files": [
+        "apps/api/src/oidc-config.ts"
+      ],
+      "proof": "O2",
+      "test": "apps/api/src/__tests__/oidc-authority.test.ts -t \"client secret\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 34",
+      "killedBy": [
+        "SPEC0254 O2 — ordered authority version (P5) > does not change with the client secret"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-config.ts": "36e8cf38aae59752d2aa5d753d7181e883b77c424818214443c89a1a3c0214ee"
+      },
+      "seconds": 1.1
+    },
+    {
+      "id": "M23",
+      "mutant": "sem enableNonRepudiationChecks",
+      "files": [
+        "apps/api/src/oidc-authority.ts"
+      ],
+      "proof": "O5",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"another key with a known kid|an unknown kid\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses an ID token signed with another key with a known kid",
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses an ID token signed with an unknown kid"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-authority.ts": "e5b5c298de362fd6cc8c814d6a9bd815ac072d4cf2302581fbbbbd8f32458e60"
+      },
+      "seconds": 2.4
+    },
+    {
+      "id": "M24",
+      "mutant": "troca do code antes de validar o state",
+      "files": [
+        "apps/api/src/oidc-login-transaction.ts",
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O5 (zero chamadas a token antes do consumo; sequência)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"invalid parameters\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > refuses invalid parameters, cookies and states without calling the token endpoint"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-login-transaction.ts": "918cfb66ee2f4f62ebfcc666a8f7d340569f4c12022b7b450761c8d7b0db41eb",
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "M25",
+      "mutant": "boot sem a checagem de versão",
+      "files": [
+        "apps/api/src/server.ts"
+      ],
+      "proof": "O9",
+      "test": "apps/api/src/__tests__/oidc-login-postgres.test.ts -t \"edited matrix\"",
+      "postgres": true,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 6",
+      "killedBy": [
+        "SPEC0254 O9 — ordered matrix version at boot and login (P5) > refuses an edited matrix without a higher N, invalidates on a higher N and never rewrites on rollback"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/server.ts": "e48a53a31e4ea0dc31a9cb9c0ea4841b9121708dd2c934b286694aabb81b353c"
+      },
+      "seconds": 5.5
+    },
+    {
+      "id": "M26",
+      "mutant": "produtor compara versão por diferença, não por ordem",
+      "files": [
+        "apps/api/src/case-principal-producer.ts"
+      ],
+      "proof": "O6",
+      "test": "apps/api/src/__tests__/case-principal-producer.test.ts -t \"row 3\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 2 / total 22",
+      "killedBy": [
+        "SPEC0254 O6 — producer table (memory) > row 3: refuses Np > N, active entry without writing (rollback, P5)",
+        "SPEC0254 O6 — producer table (memory) > row 3: refuses Np > N, inactive entry without writing (rollback, P5)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/case-principal-producer.ts": "fcfa1a568fca6e53642e92477779dbc0f4396d81cd6ef29043f7169597cc54d6"
+      },
+      "seconds": 1.6
+    },
+    {
+      "id": "M27",
+      "mutant": "erro de transporte classificado como 401",
+      "files": [
+        "apps/api/src/oidc-authority.ts"
+      ],
+      "proof": "O5",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"answers 503 for\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 5 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > answers 503 for token endpoint 500, clearing only the pending cookie",
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > answers 503 for token endpoint 429 (R2-O7), clearing only the pending cookie",
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > answers 503 for JWKS 500 (fresh configuration), clearing only the pending cookie",
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > answers 503 for JWKS unreachable (fresh configuration), clearing only the pending cookie",
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > answers 503 for IdP unreachable, clearing only the pending cookie"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-authority.ts": "e5b5c298de362fd6cc8c814d6a9bd815ac072d4cf2302581fbbbbd8f32458e60"
+      },
+      "seconds": 2.6
+    },
+    {
+      "id": "M28",
+      "mutant": "tokenizador do CSRF mais estrito que o parser",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O8",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"M11, M28\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O8 — CSRF by exact Origin in the OIDC mode > detects the cookie name exactly like the session parser (M11, M28)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M29",
+      "mutant": "claim da matriz aceita __proto__, constructor ou prototype",
+      "files": [
+        "apps/api/src/oidc-config.ts"
+      ],
+      "proof": "O1",
+      "test": "apps/api/src/__tests__/oidc-login-config.test.ts -t \"matrix claim\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 3 / passed 13 / total 98",
+      "killedBy": [
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses matrix claim \"__proto__\" in buildServerFromEnv and buildApiWithProductionSessions",
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses matrix claim \"constructor\" in buildServerFromEnv and buildApiWithProductionSessions",
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses matrix claim \"prototype\" in buildServerFromEnv and buildApiWithProductionSessions"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-config.ts": "36e8cf38aae59752d2aa5d753d7181e883b77c424818214443c89a1a3c0214ee"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "M30",
+      "mutant": "claim de grupos lido sem Object.hasOwn (R2-O1)",
+      "files": [
+        "apps/api/src/oidc-identity.ts"
+      ],
+      "proof": "O5 (R2-O1)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"M30\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 52",
+      "killedBy": [
+        "SPEC0254 O5 — GET /v1/auth/oidc/callback refusals > reads the groups claim only as an own property (M30, prototype pollution)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-identity.ts": "1f41571a9e9ab008264ff8ec30c01321610aabee264493c475b2418b737c86e8"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "C1",
+      "mutant": "authorizationCodeGrant sem maxAge: 300 (equivalente: o mapeador repete auth_time)",
+      "files": [
+        "apps/api/src/oidc-authority.ts"
+      ],
+      "proof": "equivalente (o mapeador repete auth_time ≥ agora − 300 e exige auth_time)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"auth_time older than 5 minutes\"",
+      "postgres": false,
+      "result": "SURVIVED (EQUIVALENT)",
+      "summary": "failed 0 / passed 1 / total 52",
+      "killedBy": [],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-authority.ts": "e5b5c298de362fd6cc8c814d6a9bd815ac072d4cf2302581fbbbbd8f32458e60"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "C2",
+      "mutant": "hooks de token/CSRF depois do hook de sessão",
+      "files": [
+        "apps/api/src/server.ts"
+      ],
+      "proof": "O8 (ordem dos hooks, opcional O1 da r1)",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"before the session hook\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10) > answers before the session hook: an unknown session cookie never turns the guards into a session 401 (§4.7 order)"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/server.ts": "e48a53a31e4ea0dc31a9cb9c0ea4841b9121708dd2c934b286694aabb81b353c"
+      },
+      "seconds": 2.0
+    },
+    {
+      "id": "C3",
+      "mutant": "token recusado só com valor não vazio",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O8 (token vazio, O3 da r1)",
+      "test": "apps/api/src/__tests__/oidc-login-guards.test.ts -t \"x-cvg-operator-token on\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 0 / total 21",
+      "killedBy": [
+        "SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10) > refuses x-cvg-operator-token on /v1/session with and without a valid cookie, without Set-Cookie",
+        "SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10) > refuses x-cvg-operator-token on /v1/cases with and without a valid cookie, without Set-Cookie"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.1
+    },
+    {
+      "id": "C4",
+      "mutant": "checagem de versão no boot só no primeiro tenant",
+      "files": [
+        "apps/api/src/server.ts"
+      ],
+      "proof": "O9 (tenant B, O4 da r1)",
+      "test": "apps/api/src/__tests__/oidc-login-postgres.test.ts -t \"every tenant of the matrix\"",
+      "postgres": true,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 6",
+      "killedBy": [
+        "SPEC0254 O9 — ordered matrix version at boot and login (P5) > checks every tenant of the matrix at boot, not only the first"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/server.ts": "e48a53a31e4ea0dc31a9cb9c0ea4841b9121708dd2c934b286694aabb81b353c"
+      },
+      "seconds": 5.4
+    },
+    {
+      "id": "C5",
+      "mutant": "linha 7 sem a cláusula de origem",
+      "files": [
+        "apps/api/src/case-principal-producer.ts"
+      ],
+      "proof": "O6 (linha 7 com fixture na versão vigente, O5 da r1)",
+      "test": "apps/api/src/__tests__/case-principal-producer.test.ts -t \"origin clause\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 22",
+      "killedBy": [
+        "SPEC0254 O6 — producer table (memory) > row 7: updates a synthetic fixture principal already at the current version (origin clause) to the current version"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/case-principal-producer.ts": "fcfa1a568fca6e53642e92477779dbc0f4396d81cd6ef29043f7169597cc54d6"
+      },
+      "seconds": 1.6
+    },
+    {
+      "id": "C6",
+      "mutant": "Origin do start em preHandler (depois do parse do corpo)",
+      "files": [
+        "apps/api/src/oidc-routes.ts"
+      ],
+      "proof": "O4 (JSON malformado sem Origin, O6 da r1)",
+      "test": "apps/api/src/__tests__/oidc-login-routes.test.ts -t \"with 403 before the body\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 2 / passed 3 / total 52",
+      "killedBy": [
+        "SPEC0254 O4 — POST /v1/auth/oidc/start > refuses no Origin with 403 before the body and without state",
+        "SPEC0254 O4 — POST /v1/auth/oidc/start > refuses a sibling Origin in the allowlist with 403 before the body and without state"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-routes.ts": "954bf88427327ee7ffa89c3cd073122e39c89738803ae0c4de7387a9b3e9e22f"
+      },
+      "seconds": 2.5
+    },
+    {
+      "id": "R1",
+      "mutant": "buildServerFromEnv sem comparar a consoleOrigin do operatorLogin com a configuração",
+      "files": [
+        "apps/api/src/server.ts"
+      ],
+      "proof": "O1 (teste de divergência da composição, R2-O1)",
+      "test": "apps/api/src/__tests__/oidc-login-config.test.ts -t \"does not match the configuration\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 99",
+      "killedBy": [
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses an injected OIDC login that does not match the configuration"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/server.ts": "e48a53a31e4ea0dc31a9cb9c0ea4841b9121708dd2c934b286694aabb81b353c"
+      },
+      "seconds": 1.9,
+      "checkedCommit": "37687e92f317fd308e755638a792d6381812e76b"
+    },
+    {
+      "id": "R2",
+      "mutant": "[::1] de volta aos hosts de loopback do redirect",
+      "files": [
+        "apps/api/src/oidc-config.ts"
+      ],
+      "proof": "O1 (redirect http://[::1], R2-O2)",
+      "test": "apps/api/src/__tests__/oidc-login-config.test.ts -t \"redirect http: on\"",
+      "postgres": false,
+      "result": "KILLED",
+      "summary": "failed 1 / passed 0 / total 99",
+      "killedBy": [
+        "SPEC0254 O1 — OIDC login configuration refuses the boot without I/O > refuses redirect http: on [::1] (the login transaction accepts only 127.0.0.1 and localhost) in buildServerFromEnv and buildApiWithProductionSessions"
+      ],
+      "restored": true,
+      "restoredEqualsHead": true,
+      "restoredSha256": {
+        "apps/api/src/oidc-config.ts": "36e8cf38aae59752d2aa5d753d7181e883b77c424818214443c89a1a3c0214ee"
+      },
+      "seconds": 1.9,
+      "checkedCommit": "37687e92f317fd308e755638a792d6381812e76b"
+    }
+  ],
+  "reviewR2Mutants": {
+    "total": 2,
+    "killed": 2,
+    "checkedCommit": "37687e92f317fd308e755638a792d6381812e76b",
+    "note": "R1/R2 cobrem os opcionais R2-O1 e R2-O2 da revisão r2, incorporados no commit 37687e92f (só teste); M1–M30 e C1–C6 rodaram sobre aa91c86f8, cujo código de produção é idêntico ao de 37687e92f"
+  }
+}

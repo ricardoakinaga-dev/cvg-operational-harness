@@ -6,6 +6,14 @@ import {
   PostgresOperatorSessionStore
 } from './operator-session-postgres.ts'
 import { assertPostgresOperatorSessionBoundary } from './operator-session-preflight.ts'
+import { discoverOidcOperatorAuthority } from './oidc-authority.ts'
+import {
+  OPERATOR_LOGIN_ENV,
+  parseOperatorLoginConfig,
+  type OidcLoginConfig
+} from './oidc-config.ts'
+import { PostgresOidcLoginStateStore } from './oidc-state-postgres.ts'
+import type { OperatorLoginComposition } from './oidc-routes.ts'
 import type { ReadinessProbe } from './readiness.ts'
 import { requiresOperatorSessionBoundary } from './operator-session-route-boundary.ts'
 import { buildServerFromEnv, type BuildServerFromEnvOptions } from './server.ts'
@@ -43,13 +51,23 @@ function databaseRole(value: string): string {
   }
 }
 
-/** Serving never migrates auth, grants privileges or substitutes memory. */
+/**
+ * Serving never migrates auth, grants privileges or substitutes memory.
+ * Composed in production and, with the same preflight and readiness, for the
+ * OIDC login (SPEC0254 §4.8 step 2), which also gets the PG login state store
+ * on the same bounded pool.
+ */
 export async function createProductionOperatorSessionBootstrap(
   env: NodeJS.ProcessEnv
 ) {
-  if (env.NODE_ENV !== 'production') return undefined
-  // SPEC 0144: migrations run in a separate job; serving never holds DDL.
-  if (env.DATABASE_MIGRATION_URL !== undefined) {
+  const oidcLogin = env[OPERATOR_LOGIN_ENV] === 'oidc'
+  if (env.NODE_ENV !== 'production' && !oidcLogin) return undefined
+  // SPEC 0144: migrations run in a separate job; production serving never
+  // holds DDL. The OIDC test mode receives it (SPEC0254 P6, test only).
+  if (
+    env.NODE_ENV === 'production' &&
+    env.DATABASE_MIGRATION_URL !== undefined
+  ) {
     throw new Error(
       'Production serving must not receive DATABASE_MIGRATION_URL'
     )
@@ -162,6 +180,14 @@ export async function createProductionOperatorSessionBootstrap(
         pool,
         authSchemaName
       ),
+      ...(oidcLogin
+        ? {
+            oidcStateStore: new PostgresOidcLoginStateStore(
+              pool,
+              authSchemaName
+            )
+          }
+        : {}),
       readinessProbe,
       close
     }
@@ -171,14 +197,45 @@ export async function createProductionOperatorSessionBootstrap(
   }
 }
 
+/** SPEC0254 §4.8 step 3: discovery before listen, with the PG state store. */
+async function composeOperatorLogin(
+  config: OidcLoginConfig,
+  sessions: Awaited<
+    ReturnType<typeof createProductionOperatorSessionBootstrap>
+  >,
+  options: BuildServerFromEnvOptions
+): Promise<OperatorLoginComposition> {
+  if (!sessions?.oidcStateStore) {
+    throw new Error(
+      'OIDC login requires the durable operator session and login state stores'
+    )
+  }
+  const authority = await discoverOidcOperatorAuthority(
+    config,
+    options.oidcTransport ? { transport: options.oidcTransport } : {}
+  )
+  return {
+    kind: 'oidc',
+    authorityVersion: config.authorityVersion,
+    consoleOrigin: config.consoleOrigin,
+    authority,
+    stateStore: sessions.oidcStateStore
+  }
+}
+
 /** Compose only through existing server options; keep routes/hooks unchanged. */
 export async function buildApiWithProductionSessions(
   env: NodeJS.ProcessEnv,
   options: BuildServerFromEnvOptions = {}
 ) {
+  // SPEC0254 §4.8 step 1: the login configuration is validated without I/O.
+  const loginConfig = parseOperatorLoginConfig(env)
   const sessions = await createProductionOperatorSessionBootstrap(env)
   let app: Awaited<ReturnType<typeof buildServerFromEnv>> | undefined
   try {
+    const operatorLogin = loginConfig
+      ? await composeOperatorLogin(loginConfig, sessions, options)
+      : undefined
     app = await buildServerFromEnv(env, {
       ...options,
       ...(sessions
@@ -189,7 +246,8 @@ export async function buildApiWithProductionSessions(
               sessions.readinessProbe
             ]
           }
-        : {})
+        : {}),
+      ...(operatorLogin ? { operatorLogin } : {})
     })
     if (sessions) {
       app.addHook('onClose', sessions.close)

@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { guardPostgresPoolErrors } from '@cvg/persistence'
+import { PostgresOidcLoginStateStore } from '../oidc-state-postgres.ts'
 import { PostgresOperatorSessionStore } from '../operator-session-postgres.ts'
 import {
   buildApiWithProductionSessions,
@@ -318,6 +319,35 @@ describe('own production session bootstrap', () => {
     expect(mocks.pool).not.toHaveBeenCalled()
     expect(mocks.build).toHaveBeenCalledWith({ NODE_ENV: 'development' }, {})
     expect(app.addHook).not.toHaveBeenCalled()
+  })
+
+  it('composes the PG session and OIDC state stores for the OIDC test mode (SPEC0254 §4.8, P6)', async () => {
+    const { pool } = poolFixture()
+    Object.assign(pool, {
+      options: {
+        connectionTimeoutMillis: 1_000,
+        query_timeout: 2_000,
+        statement_timeout: 2_000
+      }
+    })
+    const bootstrap = await createProductionOperatorSessionBootstrap({
+      ...env,
+      NODE_ENV: 'test',
+      CVG_OPERATOR_LOGIN: 'oidc',
+      DATABASE_MIGRATION_URL: 'postgresql://migration:synthetic@127.0.0.1/db'
+    })
+    expect(bootstrap?.operatorSessionStore).toBeInstanceOf(
+      PostgresOperatorSessionStore
+    )
+    expect(bootstrap?.oidcStateStore).toBeInstanceOf(
+      PostgresOidcLoginStateStore
+    )
+    await bootstrap?.close()
+    // Production keeps the HMAC composition: no login state store.
+    poolFixture()
+    const production = await createProductionOperatorSessionBootstrap(env)
+    expect(production).not.toHaveProperty('oidcStateStore')
+    await production?.close()
   })
 
   it('fails cookie-less operator HTTP requests closed during outage while live stays public', async () => {

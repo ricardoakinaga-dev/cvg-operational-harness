@@ -1,0 +1,144 @@
+{
+  "spec": "docs/02_spec/0254_oidc_login_case_principals.md",
+  "specRevision": "r1",
+  "specSha256": "2681db98b0630f96dfab94b0403ac11e521f044df7d66f4d34eae690d02539bc",
+  "base": "d9c84df9e",
+  "task": "UP91-025-OIDC-20261022",
+  "reviewer": "Claude Code (crítico independente, contexto novo; não autor da SPEC nem do recon)",
+  "at": "2026-10-22",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "A §4.2 não liga a verificação de assinatura do ID token (openid-client v6 só verifica com enableNonRepudiationChecks)",
+      "evidence": "openid-client 6.8.8: build/index.d.ts:1475-1486 (verificar a assinatura 'is not mandatory … only for non-repudiation'); build/index.js:748-760 e :963 (nonRepudiation só existe com a extensão). O BUILD isolado ed012a4:apps/api/src/oidc-client-corporate.ts usava execute: [oidc.enableNonRepudiationChecks]. O script sintético check-sig.mjs aceitou token assinado por chave estranha (kid conhecido ou desconhecido) sem a extensão, com jwksCalls: 0; com a extensão, deu OAUTH_INVALID_RESPONSE ou OAUTH_KEY_SELECTION_FAILED. oauth4webapi 3.8.8 build/index.js:1093: kid desconhecido só gera nova busca com cache de 60 s ou mais. Contradiz o I1 (SPEC :52), a frase da §4.2 sobre o JWKS (:105) e a SPEC0152 §Configuração 4.",
+      "fix": "Na §4.2, incluir execute: [enableNonRepudiationChecks] no discovery (sem allowInsecureRequests). Corrigir a semântica de rebusca do JWKS (kid desconhecido: 401 sem rebusca abaixo de 60 s) na §4.2 e na §11. Acrescentar à §8 o mutante 'sem enableNonRepudiationChecks', morto pelos casos de O5 'assinatura de outra chave' e 'kid desconhecido'. Rotação positiva no IdP sintético só com relógio além de 60 s ou nova Configuration."
+    },
+    {
+      "id": "M2",
+      "title": "M13 e M19 não morrem com as provas citadas (prova falsa no aceite 14)",
+      "evidence": "M13 (SPEC :311): no segundo uso, o mutante troca o code de novo. O IdP sintético recusa o code reusado (:245), e a resposta é 401, igual à do código correto. O O5 (:288) não distingue. M19 (:317): openid-client build/index.js:287 já recusa issuer cujo new URL().href difere. O check-issuer.mjs mostrou que a biblioteca recusa https://other.synthetic.test e aceita https://IDP.synthetic.test, https://idp.synthetic.test:443 e https://idp.synthetic.test/. Por isso, tirar a checagem byte a byte da SPEC passa no O2 genérico (:285).",
+      "fix": "O5: o IdP sintético conta as chamadas ao token endpoint; toda recusa antes do passo 5 afirma zero. Acrescentar a sequência 'state divergente → 401; mesmo code com o state certo → 303'. O2: incluir issuer de metadata que difere só na normalização (host em maiúsculas, :443 ou barra final). Corrigir as citações de M3 (morre por O9 e O3, não por O7) e de M14 (morre por O3: oauth4webapi build/index.js:1429-1437 e :1466-1467)."
+    },
+    {
+      "id": "M3",
+      "title": "O I9 e o O11 contradizem a authorizationUrl do start, que leva state e nonce",
+      "evidence": "SPEC :60 (I9: state e nonce 'nunca aparecem em resposta'), :117 (start 200 {authorizationUrl}), :294 (O11 'em todas as respostas … nenhum … state, nonce'). apps/api/src/oidc-login-transaction.ts:81-84 grava state, nonce e code_challenge na URL.",
+      "fix": "O I9 e o O11 isentam só a authorizationUrl da resposta 200 do start. O O11 afirma a ausência desses valores em todas as outras respostas (inclusive o 303 e os 401/503), nos logs, no stderr e no audit."
+    },
+    {
+      "id": "M4",
+      "title": "O perfil PG do modo OIDC em NODE_ENV=test torna o O10 (e o O9 pelo entrypoint) impossível na leitura literal; RLS não é exigido",
+      "evidence": "A §4.8, passo 2 (:216), generaliza production-bootstrap.ts:47-50. Assim, a recusa de DATABASE_MIGRATION_URL em :52-56 passa a valer no modo OIDC. Mas test com RLS exige essa URL com papel distinto (server.ts:5429-5432, :5463-5476, :5528-5531; recon R1.5 :25). O O10 (:293) copia o harness production-bootstrap-postgres-own.test.ts:131-137 (RLS, NODE_ENV production). Sem RLS, a persistência usa um único client (server.ts:5546-5549), e o write do PostgresCaseAuthority faz BEGIN/COMMIT nele (case-authority-postgres.ts:669-690), o que quebra a concorrência do O6. A SPEC0144 :54 proíbe DDL no serving só em produção.",
+      "fix": "Na §4.1, o modo OIDC exige POSTGRES_RLS_ENFORCEMENT=true. Na §4.8, as recusas de DATABASE_MIGRATION_URL e POSTGRES_AUTO_MIGRATE ficam só em production. No modo OIDC de teste, o serving recebe DATABASE_MIGRATION_URL com papel distinto do runtime e do papel de sessão. O O9 e o O10 declaram esse ambiente. Registrar como premissa P6."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "A §0 :17 afirma que o store PG de state 'já é composto em produção'; é falso (recon R4.6, R6.1)"
+    },
+    {
+      "id": "O2",
+      "title": "O I8 ('pendente apagado em toda falha') não fecha com o 429 (:229), as recusas dos hooks globais e o 503 do hook de readiness (production-bootstrap.ts:196-219); reescrever as exceções"
+    },
+    {
+      "id": "O3",
+      "title": "Para o 403 do start vir antes do 400, a checagem de Origin deve rodar num onRequest da rota, antes do parse do corpo"
+    },
+    {
+      "id": "O4",
+      "title": "O hook de CSRF deve detectar o cookie com o mesmo tokenizador de parseOperatorSessionCookie (operator-session.ts:92-111) ou com um mais amplo, incluindo cabeçalho em array"
+    },
+    {
+      "id": "O5",
+      "title": "Mapear os erros da biblioteca: ResponseBodyError e OAUTH_* de validação/assinatura dão 401; rede, TLS, timeout, 5xx e falha do JWKS dão 503"
+    },
+    {
+      "id": "O6",
+      "title": "Qualificar a frase 'impede login CSRF' (:131): cookie tossing por origem irmã só é barrado com __Host- (0254-B, SPEC0150 item 5)"
+    },
+    {
+      "id": "O7",
+      "title": "Dizer qual NODE_ENV cada guarda lê. A I3 deve ler process.env; se ler o env, quebra postgres-persistence-mode.test.ts:1740-1858 (env 'production' com casePrincipalAuthority e processo em test)"
+    },
+    {
+      "id": "O8",
+      "title": "O claim de grupos deve excluir __proto__, constructor e prototype e ser lido só como propriedade própria"
+    },
+    {
+      "id": "O9",
+      "title": "GET /v1/session sem cookie hoje responde 'A trusted operator identity resolver is required in production' (server.ts:884-897, :958-965); a §4.6 exige mudar o handler, o que deve constar na §6"
+    },
+    {
+      "id": "O10",
+      "title": "O CI usa ubuntu-latest (verify.yml:20), não ubuntu-24.04; os casos de 5 s precisam de timeout de teste explícito fora do test:postgres"
+    },
+    {
+      "id": "O11",
+      "title": "Recusar CVG_LOCAL_OIDC_* junto do modo OIDC (SPEC0152 §1); na 0254-C, conciliar CVG_OPERATOR_LOGIN com o discriminante da SPEC0151"
+    },
+    {
+      "id": "O12",
+      "title": "Para a 0254-C: o limite de start de 10/min por IP vira gargalo atrás de NAT ou proxy do hospital"
+    }
+  ],
+  "premises": [
+    {
+      "id": "P1",
+      "status": "confirmada e bem separada",
+      "note": "openid-client 6.8.8 é MIT, com dependências jose ^6.2.12 e oauth4webapi ^3.8.8 fixadas pelo lockfile; não está no package da API. Condições: incluir enableNonRepudiationChecks (M1) e registrar a versão exata no BUILD, conferindo a API de novo."
+    },
+    {
+      "id": "P2",
+      "status": "confirmada e bem separada",
+      "note": "A SPEC0152 §5 diz literalmente que 'grupo desconhecido … falham'; ignorar esses grupos muda uma SPEC aprovada."
+    },
+    {
+      "id": "P3",
+      "status": "separada, mas incompleta",
+      "note": "Deve ir ao usuário junto com P4."
+    },
+    {
+      "id": "P4",
+      "status": "escondida",
+      "note": "A linha 3 com a mesma V só casa quando o grupo do usuário mudou no IdP: o login desativa. A linha 8 recusa a mesma causa (troca de papel) citando a SPEC0176 :52 ao pé da letra. A D9 se justifica pela troca de matriz, que a linha 3 cobre quando a versão muda. Opções: (a) manter, porque desativar é falha segura; (b) desativar só com versão diferente de V; (c) tratar papel e desativação do mesmo jeito."
+    },
+    {
+      "id": "P5",
+      "status": "escondida",
+      "note": "A D1 (digest) não tem ordem: 'versão nova' quer dizer 'diferente'. Voltar a matriz a uma versão anterior reativa ou muda o papel de principais (SPEC0176 :52: 'Versão anterior/replay não restaura principal'). Qualquer edição da matriz, até de outro tenant ou da ordem das entradas, invalida os principais de todos os tenants até o próximo login. Alternativa: authorityVersion com matrix.version crescente e recusa de versão menor."
+    },
+    {
+      "id": "P6",
+      "status": "escondida",
+      "note": "O modo OIDC de teste com RLS exige que o serving receba credencial DDL (DATABASE_MIGRATION_URL). Aceitável só em teste; a SPEC0144 :54 proíbe em produção. Ver M4."
+    },
+    {
+      "id": "P7",
+      "status": "declarada como default, mas é decisão de escopo",
+      "note": "Depois da A, nenhuma composição fora de teste, inclusive development e o ensaio C8, lê casos, tasks ou approvals."
+    }
+  ],
+  "defaults": {
+    "safe": ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D10", "D11"],
+    "conditional": { "D1": "P5", "D9": "P4" }
+  },
+  "checkedWithoutDefect": [
+    "Tabela do produtor: cobertura completa; CAS e audit iguais a case-authority-postgres.ts:702-781; READ COMMITTED (tenant-scoped-postgres.ts:192) dá conflito seguido de nova tentativa na linha 7",
+    "Recusas de composição: nenhum chamador de produção injeta casePrincipalAuthority; nenhum teste stuba production no processo junto com a autoridade; não há caminho de modo fixture produtivo",
+    "Ordem do callback: state consumido antes da troca; pendente duplicado recusado; previousSessionId selado; switchIdentity atômico e tolerante a digest desconhecido",
+    "Hooks: CSRF e token entre server.ts:532 e :534; readiness do bootstrap por último; o modo HMAC não muda",
+    "Limites: operatorId e authorityVersion com 69 caracteres dentro dos CHECKs, dos schemas e de maxParamLength 100; canonicalizeJson disponível em @cvg/harness-contracts",
+    "Pronto/prova repartido de forma coerente entre A, B e C"
+  ],
+  "probes": {
+    "scripts": [
+      "scratchpad/run/check-sig.mjs",
+      "scratchpad/run/check-issuer.mjs"
+    ],
+    "runtime": "Node v22.23.2 com env -i; openid-client 6.8.8, oauth4webapi 3.8.8 e jose 6.2.12 extraídos do cache npm para o scratchpad, fora do repositório",
+    "data": "só sintéticos (chaves RSA geradas na hora, hosts .synthetic.test, transporte em memória)"
+  },
+  "notDone": ["código", "testes do repositório", "PG", "lockfile", "commit", "push"]
+}

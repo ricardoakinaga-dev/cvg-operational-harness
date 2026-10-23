@@ -11,6 +11,8 @@ const LOGIN_AGE_MS = 5 * 60 * 1_000
 const MAX_REPLICA_CLOCK_SKEW_MS = 30_000
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const SEALED_PATTERN = /^[A-Za-z0-9_-]{100,2048}$/
+// Same opaque identifier rule as the operator session cookie.
+const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{8,200}$/
 
 export interface OidcLoginTransactionOptions {
   issuer: string
@@ -44,6 +46,11 @@ export interface StartedOidcLogin {
 export interface PendingOidcLogin {
   nonce: string
   codeVerifier: string
+  /**
+   * SPEC0254 §4.3: the live browser session presented at start. The callback
+   * retires its family when it creates the new session (D7).
+   */
+  previousSessionId?: string
 }
 
 interface LoginPayload extends PendingOidcLogin {
@@ -57,14 +64,24 @@ interface LoginPayload extends PendingOidcLogin {
  * The eventual callback must exchange the code exactly once at the IdP.
  */
 export async function startOidcLogin(
-  options: OidcLoginTransactionOptions
+  options: OidcLoginTransactionOptions,
+  input: { previousSessionId?: string } = {}
 ): Promise<StartedOidcLogin> {
   const { authorizationEndpoint, redirectUri } = validateOptions(options)
+  if (
+    input.previousSessionId !== undefined &&
+    !SESSION_ID_PATTERN.test(input.previousSessionId)
+  ) {
+    throw new Error('OIDC login previous session is invalid')
+  }
   const payload: LoginPayload = {
     state: randomToken(),
     nonce: randomToken(),
     codeVerifier: randomToken(),
-    issuedAt: (options.now ?? Date.now)()
+    issuedAt: (options.now ?? Date.now)(),
+    ...(input.previousSessionId !== undefined
+      ? { previousSessionId: input.previousSessionId }
+      : {})
   }
   if (!Number.isSafeInteger(payload.issuedAt) || payload.issuedAt <= 0) {
     throw new Error('OIDC login clock is invalid')
@@ -153,6 +170,9 @@ export async function readOidcLoginCallback(
       !TOKEN_PATTERN.test(payload.codeVerifier ?? '') ||
       !Number.isSafeInteger(payload.issuedAt) ||
       !Number.isSafeInteger(now) ||
+      (payload.previousSessionId !== undefined &&
+        (typeof payload.previousSessionId !== 'string' ||
+          !SESSION_ID_PATTERN.test(payload.previousSessionId))) ||
       (payload.issuedAt ?? 0) > now + MAX_REPLICA_CLOCK_SKEW_MS ||
       now - (payload.issuedAt ?? 0) >= LOGIN_AGE_MS ||
       !timingSafeEqual(
@@ -162,7 +182,13 @@ export async function readOidcLoginCallback(
     ) {
       throw new Error('invalid payload')
     }
-    pending = { nonce: payload.nonce!, codeVerifier: payload.codeVerifier! }
+    pending = {
+      nonce: payload.nonce!,
+      codeVerifier: payload.codeVerifier!,
+      ...(payload.previousSessionId !== undefined
+        ? { previousSessionId: payload.previousSessionId }
+        : {})
+    }
   } catch {
     throw new Error('OIDC login transaction is invalid')
   }
