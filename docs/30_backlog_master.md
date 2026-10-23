@@ -1,3 +1,20 @@
+# 23/10/2026 — estado das frentes do Claude Code
+
+- **Fechados na `main`:**
+  - UP91-018 (escopo por caso, #14);
+  - RELEASE-CI-0253 (#15), aguardando o primeiro `publish`;
+  - HISO005-P2-BUILD-0252 (Annex B, #16);
+  - UP91-025 fatia A (#20);
+  - REA-CLAUDE-INTEGRATION (#21).
+- **Em revisão:** SPEC0255 r4 no PR #22. Faltam o Codex e a T3 do usuário. O BUILD espera C100-Q01/M1 e a PAR-K05.
+- **Abertos:**
+  - UP91-025 fatias B e C;
+  - UP91-026 (rotas fora de caso com sessão de até 15 min);
+  - B6: HISO005-P2-WORKSPACE-MAP e SPEC0246;
+  - cartão para tirar a repetição da suíte na barra REM21;
+  - SRV-01 a SRV-06 do servidor do hospital;
+  - renumerar a migration 0029 da fundação do Claude100 (dono: Codex).
+
 # REA-CLAUDE-INTEGRATION-20261022 — 22/10/2026
 
 - Plano de melhorias do Claude incorporado: o [roadmap 0394](03_build/0394_roadmap_melhorias_claude_rea.md) e o [backlog 0395](03_build/0395_backlog_melhorias_claude_rea.md) passam a ser o roteiro do recorte CC22. O [0382](03_build/0382_roadmap_paridade_claude_code.md) segue como roadmap integral, e o [0383](03_build/0383_backlog_paridade_claude_code.md) e o 0380 seguem como fontes de status.

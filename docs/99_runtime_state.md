@@ -1,3 +1,31 @@
+# Merges de 23/10/2026 — Annex B, UP91-025, fastify e plano REA (Claude Code)
+
+- `status`: na `main` entraram os PRs #19 (fastify 5.12.7, `bd63f1ef`), #16 (Annex B no kernel B6, `410d3986`), #20 (UP91-025, login OIDC com IdP sintético, `1e96e365`) e #21 (REA do Claude e plano 0394/0395, `2feec903`). O #18 (limite da barra) foi fechado sem merge, porque o commit dele entrou empilhado no #16; a `main` já tem `timeout-minutes: 300`.
+- **HISO005-P2-BUILD-0252 (SPEC0252, opção b1):** o kernel B6 passa para `semantic-kernel-v8-annexb-block-function`. Toda função declarada em bloco num módulo `require` sloppy dá `UNKNOWN_ANNEXB_FUNCTION`. A raiz `228e7918` não muda: 11.723 diagnósticos, 10.833 tuplas e zero provas. O BUILD teve 165 testes novos e 29/29 mutantes mortos, e o crítico de código deu APPROVE na r2. [Relatório](04_audit/evidence/HISO005-P2-BUILD-0252-20261021/REPORT.md).
+- **UP91-025 (SPEC0254, fatia A):**
+  - **Entregue:** login OIDC com MFA, só em `NODE_ENV=test` e com IdP sintético HTTPS; produtor verificado de `case_principals`; `casePrincipalAuthority` só com o login; store PG de sessão e de state; CSRF por `Origin` e token HMAC recusado no modo OIDC.
+  - **Decisões do usuário:** `openid-client` 6.8.8; grupos fora da matriz ignorados; deriva de role recusada; o login só pode reduzir acesso.
+  - **Provas:** 30/30 mutantes mortos, `test:postgres` 337/337 e E2E 18/18. O crítico de código deu APPROVE na r1 e na r2.
+  - **CodeQL:** o alerta #33 (`js/insufficient-password-hash` em `oidc-config.ts`) foi encerrado como falso positivo pelo Codex, com autorização do usuário.
+  - **Limites:** produção continua recusando OIDC até a fatia C (IdP real). Fora de teste, as rotas de caso seguem com 503. A desativação pelo login corta na hora só as rotas de caso; as demais aceitam a sessão aberta por até 15 min, até a UP91-026. [Relatório](04_audit/evidence/UP91-025-OIDC-20261022/build/build-report.md).
+- **Release no GHCR:** a Verify da `main` agora roda com 300 min. O gate do release decidiu `wait` enquanto a Verify rodava, que é o comportamento esperado, e a sonda do pacote privado passou. O primeiro `publish` depende de uma Verify verde na `main`.
+- `next_action`:
+  1. SPEC0255: falta a conferência da r4 pelo Codex, que está no PR #22; depois, a revisão T3 do usuário. O BUILD continua bloqueado por C100-Q01/M1 e pela PAR-K05 (SPEC0256 do Codex, com a PAR-K04 como pré-requisito).
+  2. Acompanhar o primeiro release na `main` (`wait` → `publish` → `release-verify`).
+  3. B6: HISO005-P2-WORKSPACE-MAP e SPEC0246.
+  4. UP91-025: fatia B (console e hosts distintos) e fatia C (IdP real), cada uma com SPEC própria.
+
+# SPEC0255 — inspeção offline de skills (primeira SPEC da PAR-T07) — 22–23/10/2026 (Claude Code)
+
+- `status: IN_PROGRESS` (preparação T1; o BUILD está bloqueado). O usuário decidiu que a 0255-A é a primeira SPEC da PAR-T07: o Claude Code escreve, e o Codex revisa os aceites.
+- **Revisões até aqui:**
+  - crítico: r1 e r2 com REVISE, r3 com APPROVE;
+  - Codex, sobre a r3: REVISE com F01 (seleção fora do grant) e F02 (mensagens com conteúdo do autor);
+  - os dois retrabalhos permitidos já tinham sido usados, então o replanejamento foi registrado (`docs/04_audit/evidence/C100-T01-INSPECT-SPEC-20261022/replan-20261023.md`, no PR #22);
+  - a r4 traz o patch do Codex e passou numa rodada única do crítico: APPROVE, zero obrigatórios, sha256 `3bc9d091…7ebb`.
+- **Achado registrado ao integrador do Claude100:** a `main` já tem a `0029_case_assignment_authorization.sql`, e a fundação planeja outra 0029. Ela precisa renumerar ao integrar.
+- `next_action`: conferência da r4 pelo Codex; revisão T3 do usuário presa ao sha256; C100-Q01/M1 `DONE`; PAR-K05 integrada.
+
 # REA-CLAUDE-INTEGRATION-20261022 — plano de melhorias do Claude incorporado à tarefa — 22/10/2026 (Claude Code)
 
 - `status: IN_PROGRESS`. Pedido do usuário em 22/10: "incorpore esse plano na tarefa". Este PR publica o trabalho do Codex que estava concluído e sem commit:
