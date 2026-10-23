@@ -641,7 +641,7 @@ function runGate(id) {
     maxBuffer: 128 * 1024 * 1024,
     // certify nests the complete gate catalog; keep its parent budget bounded
     // above the observed subtotal while every child retains its own deadline.
-    timeout: id === 'certify' ? 5_400_000 : 3_600_000
+    timeout: id === 'certify' ? 9_000_000 : 3_600_000
   })
   let exitCode = result.status ?? 1
   const snapshotFailures = exitCode === 0 ? snapshotGateArtifacts(id, gate) : []
