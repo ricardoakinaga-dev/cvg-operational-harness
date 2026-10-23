@@ -1,3 +1,22 @@
+# RELEASE-CI-0253 — primeira publicação real no GHCR privado — 23/10/2026 (Claude Code)
+
+- `status: DONE` para a publicação da SPEC0253. Fica fora: deploy, verificação no destino e rollback, que são da UP91-035 e da 0393.
+- `last_completed_action`:
+  - O release do commit `2feec903` (PR #21) decidiu `publish` e publicou `ghcr.io/ricardoakinaga-dev/cvg-operational-harness:sha-2feec903…`, digest `sha256:faa1cacd22c2d5be88f77233d8f670059e6fe17de486d33b2aa23a435191495f`.
+  - A proveniência SLSA v1 e o SBOM CycloneDX foram atestados.
+  - O `release-verify` conferiu as duas attestations pela API e pelo OCI, o SBOM bate com o artefato, e o pull anônimo deu `DENIED`.
+  - Trivy 0.75.0 achou 1 HIGH sem correção: CVE-2026-84782, no `libssl3` 3.0.20-1~deb12u2. Passa pela regra da SPEC (`--ignore-unfixed`).
+  - Antes, duas tentativas recusaram sem efeito:
+    - a primeira, porque o repositório não estava em "Manage Actions access". O Claude Code incluiu o repositório com papel Write, pelo navegador, com a confirmação do usuário;
+    - a segunda, porque o push do placeholder de 22/10 não tinha gravado a tag. O usuário publicou de novo `placeholder-20261022`.
+  - [Resumo](04_audit/evidence/RELEASE-CI-0253-20261021/first-release-20261023/summary.json).
+- `next_action`:
+  1. O deploy usa esse digest pelo runbook C9 (`deploy/harness/README.md`), quando o servidor existir (0393).
+  2. Cartões abertos:
+     - a Verify da `main` com `cancel-in-progress` faz merges seguidos cancelarem a Verify e travarem o release;
+     - teste instável `gitleaks-reviewed-boundaries` (o outro agente está corrigindo);
+     - tirar a repetição da suíte na barra REM21.
+
 # Merges de 23/10/2026 — Annex B, UP91-025, fastify e plano REA (Claude Code)
 
 - `status`: na `main` entraram os PRs #19 (fastify 5.12.7, `bd63f1ef`), #16 (Annex B no kernel B6, `410d3986`), #20 (UP91-025, login OIDC com IdP sintético, `1e96e365`) e #21 (REA do Claude e plano 0394/0395, `2feec903`). O #18 (limite da barra) foi fechado sem merge, porque o commit dele entrou empilhado no #16; a `main` já tem `timeout-minutes: 300`.

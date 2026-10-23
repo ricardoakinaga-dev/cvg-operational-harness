@@ -1,3 +1,14 @@
+# RELEASE-CI-0253 — primeira publicação real — 23/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- **Run 39911478714, tentativa 3:** `publish`, sobre o commit `2feec903`. A imagem foi publicada e atestada, e a verificação independente passou.
+- **Tentativa 1:** recusou com `tags_list_403_DENIED`, porque o repositório não estava em "Manage Actions access". O papel Write foi dado pelo navegador conectado, com a confirmação do usuário. Depois de recarregar a página: pacote privado, e nada mais mudou.
+- **Tentativa 2:** recusou com `package_tags_empty`, porque o placeholder de 22/10 tinha subido sem tag. O usuário publicou a tag de novo.
+- **Achados de operação:**
+  - a Verify da `main` foi cancelada a cada merge (`cancel-in-progress` por ref);
+  - o gate `certify` estourou 90 min numa máquina lenta (PR #24 sobe para 150);
+  - o teste do gitleaks com fixtures aleatórias falhou de forma intermitente nos pares 3 e 14.
+- [Evidência](04_audit/evidence/RELEASE-CI-0253-20261021/first-release-20261023/summary.json).
+
 # Merges, CI e SPEC0255 — 22–23/10/2026 (Claude Code, CONT-20261018-D9EF)
 
 - Merge squash no SHA exato, com os 5 checks obrigatórios verdes: #19 (fastify), #16 (Annex B), #20 (UP91-025) e #21 (REA). O #18 foi fechado: o squash dele seria vazio, porque o commit entrou pelo #16.

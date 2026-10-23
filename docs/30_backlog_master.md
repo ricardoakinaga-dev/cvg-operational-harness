@@ -1,3 +1,11 @@
+# 23/10/2026 — release e CI
+
+- **RELEASE-CI-0253:** a primeira publicação real foi concluída e avança a [UP91-035](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-035). Ficam abertos o deploy por digest, a verificação no destino e o rollback.
+- **Cartões novos da barra de CI**, cada um com SPEC própria:
+  - Verify da `main` sem cancelar a execução em andamento, ou outro gatilho do release, para que merges seguidos não travem a publicação;
+  - fixture determinística no `tests/gitleaks-reviewed-boundaries.integration.mjs`, em correção por outro agente;
+  - `certify` reaproveitando unit e cobertura.
+
 # 23/10/2026 — estado das frentes do Claude Code
 
 - **Fechados na `main`:**
