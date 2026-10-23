@@ -28,11 +28,16 @@ function independentInventoryScript() {
 }
 
 describe('controlled CI workflow contract', () => {
-  it('declares least-privilege and stale-run protection', () => {
+  it('declares least-privilege, PR supersession and independent push runs', () => {
     expect(workflow).toContain('permissions:')
     expect(workflow).toContain('contents: read')
     expect(workflow).toContain('concurrency:')
-    expect(workflow).toContain('cancel-in-progress: true')
+    expect(workflow).toContain(
+      'group: verify-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}'
+    )
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' }}"
+    )
     expect(workflow).toContain('persist-credentials: false')
     // PR-010: the runner context is invalid in job-level env and made GitHub
     // reject the whole workflow before any gate ran.
