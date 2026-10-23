@@ -1,0 +1,93 @@
+{
+  "spec": "docs/02_spec/0255_c100_skill_plugin_offline_inspection.md",
+  "specSha256": "6fec67f4637b1e4f4f3fb88ee0c1ac4f443a967e303c358c38c50304bb87a1f9",
+  "verdict": "APPROVE",
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "R3-O1",
+      "title": "Ordem entre busca e aquisição na seleção",
+      "evidence": "O §7.10 faz a busca (passo 2) antes da aquisição (passo 3); o §8.11, itens 2 e 3, põe a aquisição antes das buscas. A conferência final vem depois das duas nos dois textos, então não há efeito de segurança.",
+      "fix": "No §8.11, para a seleção: busca, depois aquisição da skill encontrada, depois conferência final."
+    },
+    {
+      "id": "R3-O2",
+      "title": "field alterado pelo redator: <unsafe:N> ou <redacted:N>",
+      "evidence": "O §7.5 item 4 manda para <unsafe:N>; o §7.11 manda para <redacted:N> com SECRET_PATTERN_IN_IDENTIFIER. Só a segunda forma dispara 'nada calculado sobre o valor bruto'.",
+      "fix": "<unsafe:N> só para charset; <redacted:N> e SECRET_PATTERN_IN_IDENTIFIER quando o redator muda o valor."
+    },
+    {
+      "id": "R3-O3",
+      "title": "Validação e digest dependem do contexto do chamador",
+      "evidence": "Com hostIdentifiers e o grant entrando na isenção sozinho (§7.11), o mesmo item pode sair INVALID no inventário e VALID na admissão, com itemDigest nulo num perfil e não no outro, e outro inputDigest.",
+      "fix": "Declarar no I7 ou no §7.11; dizer que o expected.inputDigest vem de uma execução com o mesmo contexto."
+    },
+    {
+      "id": "R3-O4",
+      "title": "O inputDigest não fixa o conteúdo de item com itemDigest nulo",
+      "evidence": "§8.9 e §7.11: item redigido ou com nome inseguro entra no inputDigest pela forma exibida e com itemDigest null; uma mudança de conteúdo nele não muda o inputDigest. Pela P20, não afeta a admissão de outro item.",
+      "fix": "Declarar no §8.9."
+    },
+    {
+      "id": "R3-O5",
+      "title": "CRLF recusado é premissa de compatibilidade implícita",
+      "evidence": "§7.5 (R2-O4): CR em qualquer ponto do SKILL.md ou de uma referência dá LINE_ENDING_UNSUPPORTED e item INVALID. Não aparece no §16 nem no §17.",
+      "fix": "Listar nos riscos e nas premissas, junto com P4, P7 e P19."
+    },
+    {
+      "id": "R3-O6",
+      "title": "Limite de rodadas do crítico diverge do cartão",
+      "evidence": "§14 item 1: 'até duas rodadas por revisão'. 0383:15: 'até dois retrabalhos; depois replanejar'. A r3 é o segundo retrabalho.",
+      "fix": "Alinhar o texto do §14 à regra do 0383:15."
+    },
+    {
+      "id": "R3-O7",
+      "title": "Detalhes de texto",
+      "evidence": "O cabeçalho do §5 diz 'Estado na r2'. O I13 (d) diz 'que só o inventário avalia', mas a condição 9 é do perfil admission. O skillId de entrada não tem teto de comprimento (ID_PATTERN sem limite); hoje falha fechado com ENAMETOOLONG → NAME_LOOKUP_FAILED.",
+      "fix": "Atualizar o cabeçalho; trocar por 'que só a inspeção avalia'; dar ao id de entrada um teto (por exemplo 1..64), com INPUT_INVALID."
+    },
+    {
+      "id": "R3-O8",
+      "title": "Granularidade de timestamp do FS dos testes",
+      "evidence": "A espera de 50 ms (§12, Tempo) supõe FS com tempo fino. ext3 com inode pequeno ou alguns NFS têm granularidade de segundo.",
+      "fix": "Dizer que os testes de corrida rodam em diretório temporário local com tempo fino (ext4, xfs, btrfs ou tmpfs)."
+    }
+  ],
+  "premises": [
+    {
+      "id": "lead-defaults",
+      "decision": "Confirmar na revisão T3: modelo de ameaça com escritor concorrente, Linux com /proc, P8, P4, P11, P12, P15 e P22 (detecção depende do kernel; a G1 não). Todos falham fechado.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P20",
+      "decision": "Admitir um item sem a cobertura do relatório inteiro. Segura com a busca única do §8.11 (sonda r3).",
+      "owner": "usuário"
+    },
+    {
+      "id": "P18",
+      "decision": "Aceitar os falsos positivos da redação de identificadores (CalVer, token:, secret:, credential:) fora de hostIdentifiers e do grant.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P19",
+      "decision": "Aceitar o falso positivo '1b' na regex de escalar ambíguo.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P21",
+      "decision": "Aceitar a checagem de montagem por st_dev: não pega bind mount do mesmo FS e pode recusar btrfs ou overlayfs à toa (falha fechado).",
+      "owner": "usuário"
+    },
+    {
+      "id": "CRLF",
+      "decision": "Premissa nova implícita (R3-O5): SKILL.md e referências com CR ficam INVALID.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P3,P5-P7,P9,P10,P13,P14,P16,P17",
+      "decision": "Defaults seguros.",
+      "owner": "usuário"
+    }
+  ]
+}

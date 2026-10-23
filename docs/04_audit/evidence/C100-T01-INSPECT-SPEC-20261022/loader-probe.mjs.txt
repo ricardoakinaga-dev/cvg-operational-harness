@@ -1,0 +1,65 @@
+// Sonda read-only do loader atual (SPEC0200) com fixtures sintéticas.
+// Não executa conteúdo de skill. Uso: node loader-probe.mjs <worktree>
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync, realpathSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
+
+const worktree = process.argv[2]
+const { loadSkillsFromDirectory } = await import(join(worktree, 'packages/harness/src/skills/loader.ts'))
+const base = realpathSync(mkdtempSync(join(process.env.PROBE_TMP ?? tmpdir(), 'c100-t01-probe-')))
+const manifest = (id, extra = {}) => JSON.stringify({ id, version: '1.0.0', description: 'Synthetic probe skill.', requiredTools: [], requiredKnowledge: [], riskLevel: 'LOW', ...extra })
+const scrub = (v) => JSON.parse(JSON.stringify(v).split(base).join('<TMP>'))
+const results = {}
+
+// Caso A: diretório de skill que é symlink para fora do root.
+{
+  const root = join(base, 'A-root'); const outside = join(base, 'A-outside', 'escaped')
+  mkdirSync(root, { recursive: true }); mkdirSync(outside, { recursive: true })
+  writeFileSync(join(outside, 'skill.json'), manifest('escaped', { description: 'OUTSIDE_ROOT_MARKER' }))
+  symlinkSync(outside, join(root, 'escaped'))
+  const r = loadSkillsFromDirectory(root)
+  results.A_symlinkDirOutsideRoot = { ok: r.ok, loadedIds: r.ok ? r.skills.map((s) => s.id) : [], markerLoaded: JSON.stringify(r).includes('OUTSIDE_ROOT_MARKER') }
+}
+// Caso B: skill.json que é symlink para arquivo fora do root.
+{
+  const root = join(base, 'B-root'); const outsideFile = join(base, 'B-outside.json')
+  mkdirSync(join(root, 'linked'), { recursive: true })
+  writeFileSync(outsideFile, manifest('linked', { description: 'OUTSIDE_FILE_MARKER' }))
+  symlinkSync(outsideFile, join(root, 'linked', 'skill.json'))
+  const r = loadSkillsFromDirectory(root)
+  results.B_symlinkManifestOutsideRoot = { ok: r.ok, markerLoaded: JSON.stringify(r).includes('OUTSIDE_FILE_MARKER') }
+}
+// Caso C: hardlink de arquivo externo (mesmo filesystem).
+{
+  const root = join(base, 'C-root'); const outsideFile = join(base, 'C-outside.json')
+  mkdirSync(join(root, 'hard'), { recursive: true })
+  writeFileSync(outsideFile, manifest('hard', { description: 'HARDLINK_MARKER' }))
+  linkSync(outsideFile, join(root, 'hard', 'skill.json'))
+  const r = loadSkillsFromDirectory(root)
+  results.C_hardlinkManifest = { ok: r.ok, markerLoaded: JSON.stringify(r).includes('HARDLINK_MARKER') }
+}
+// Caso D: manifesto com descrição de 2 MiB (sem teto de bytes).
+{
+  const root = join(base, 'D-root'); mkdirSync(join(root, 'big'), { recursive: true })
+  const big = 'x'.repeat(2 * 1024 * 1024)
+  writeFileSync(join(root, 'big', 'skill.json'), manifest('big', { description: big }))
+  const r = loadSkillsFromDirectory(root)
+  results.D_twoMiBDescription = { ok: r.ok, descriptionLength: r.ok ? r.skills[0].description.length : null }
+}
+// Caso E: diretório sem skill.json (somente SKILL.md); mensagem de erro com caminho absoluto.
+{
+  const root = join(base, 'E-root'); mkdirSync(join(root, 'md-only'), { recursive: true })
+  writeFileSync(join(root, 'md-only', 'SKILL.md'), '---\nname: md-only\ndescription: Synthetic.\n---\nBody.\n')
+  const r = loadSkillsFromDirectory(root)
+  results.E_markdownOnly = { ok: r.ok, errorMessageHasAbsolutePath: JSON.stringify(r).includes(base), errors: scrub(r.ok ? [] : r.errors) }
+}
+// Caso F: o retorno não carrega origem nem digest.
+{
+  const root = join(base, 'F-root'); mkdirSync(join(root, 'plain'), { recursive: true })
+  const body = manifest('plain'); writeFileSync(join(root, 'plain', 'skill.json'), body)
+  const r = loadSkillsFromDirectory(root)
+  results.F_resultShape = { ok: r.ok, keys: r.ok ? Object.keys(r.skills[0]).sort() : [], manifestSha256: createHash('sha256').update(body).digest('hex'), digestInResult: JSON.stringify(r).includes(createHash('sha256').update(body).digest('hex')) }
+}
+rmSync(base, { recursive: true, force: true })
+console.log(JSON.stringify({ node: process.version, loader: 'packages/harness/src/skills/loader.ts', results }, null, 2))

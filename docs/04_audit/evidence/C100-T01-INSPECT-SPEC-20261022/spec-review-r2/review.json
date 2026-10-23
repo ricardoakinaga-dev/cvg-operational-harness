@@ -1,0 +1,124 @@
+{
+  "spec": "docs/02_spec/0255_c100_skill_plugin_offline_inspection.md",
+  "specSha256": "e03a1553742f9abea59f1f6d712693728ec76965a37ee328bcd7c1c43f64dc03",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "R2-M1",
+      "title": "A busca de nome da seleção difere da busca da admissão; o I13 é falso e a P20 depende dele",
+      "evidence": "Condição 7 (SPEC:579): qualquer resultado diferente de ENOENT dá DUPLICATE_ID. Seleção (SPEC:592-595): só diretório, symlink, especial ou montagem; arquivo regular e errno diferente de ENOENT ficam sem regra. Sonda r2 t10: diretório foo em A e arquivo foo em B dão admission DUPLICATE_ID e selection PROCEEDS_TO_SELECTED, contra o I13 (SPEC:627). A ordem entre a última busca e a conferência final da assinatura do root ('no fim da chamada', SPEC:680) não está escrita (t9). O I13 omite as exceções de prazo, maxFilesTotal, maxTotalBytes e expected.inputDigest.",
+      "fix": "Uma única função de busca para admissão e seleção: ENOENT = ausente; diretório real = candidato; qualquer outro tipo ou errno = recusa, com o mesmo código. Ordem escrita: abrir roots e tirar sig0, buscar, conferir assinaturas, decidir. Completar as exceções do I13. Acrescentar ao SK08c os casos 'arquivo regular com o mesmo nome em outro root' e 'EACCES na busca'."
+    },
+    {
+      "id": "R2-M2",
+      "title": "O marcador <redacted:12hex> deixa recuperar o valor redigido",
+      "evidence": "§7.11 (SPEC:633) usa <redacted: + 12 hex>, que pela analogia com <unsafe:…> (SPEC:285) é hash do valor. O redator do host tira valores de baixa entropia (CPF, telefone; audit-governance.ts:235-271). Sonda r2 t11: o CPF sintético 123.456.789-09 é redigido como identificador; a busca de 10^6 candidatos levou 357 ms e o recuperou, o que dá cerca de 6 min por núcleo para 10^9. Contradiz o I9 e o A11. O itemDigest e o inputDigest calculados sobre o nome bruto são oráculos parecidos.",
+      "fix": "Marcador sem hash do valor (ordinal no item); vale também para <unsafe:…> no relatório. Item com SECRET_PATTERN_IN_IDENTIFIER (INVALID, nunca admitido) não publica nada calculado sobre o valor bruto: digests sobre a forma exibida e sha256 nulo no arquivo que o contém. Declarar no I9 que o sha256 de arquivo pequeno é oráculo para valor enumerável na descrição."
+    },
+    {
+      "id": "R2-M3",
+      "title": "O exemplo com escape sumiu e a prova do MU04 não diz onde fica o marcador",
+      "evidence": "SPEC:341 mostra {\"id\":\"a\",\"id\":\"b\"} (duplicata simples); SK03 (SPEC:839) diz 'duplicata simples e com `id`'. grep -c 'u0069|u0064' na SPEC dá 0, e o corrections.md tem a mesma perda. Uma varredura do texto cru pega a duplicata simples, então o MU29 sobrevive. SK05b(iii) (SPEC:842) pede 'marcador ausente' sem dizer onde; pelo I8 o corpo nunca entra no relatório, e um marcador só no corpo de fora não mata o MU04.",
+      "fix": "Restaurar {\"id\":\"a\",\"\\u0069d\":\"b\"} no §7.5 e no SK03. No SK05b(iii), conferir que o sha256 do BODY é o dos bytes de dentro e pôr o marcador também na description do frontmatter de fora."
+    },
+    {
+      "id": "R2-M4",
+      "title": "As provas de troca de diretório dependem só de timestamp e ficam instáveis no kernel do CI e do servidor",
+      "evidence": "Sonda critic-probe-r2-aba-fields: numa troca ABA, o diretório da skill só muda ctimeNs, e o root só muda mtimeNs e ctimeNs; dev, ino, mode, nlink e size ficam iguais. Sem timestamp multigrain (o suporte entrou no 6.13), o tempo do inode é de um tique (1 a 4 ms). As sondas rodaram no kernel 7.0; o CI usa ubuntu-latest/ubuntu-24.04 (verify.yml:20; release-image.yml:33), e o kernel do servidor não está fixado. SK05b(iii) e (vi) e a morte do MU05 ficam intermitentes. A G2 e o risco residual (SPEC:102-105) não citam a troca ABA no mesmo tique, que é inofensiva graças à G1. O gancho afterItem (SPEC:828) não diz se roda antes do §8.7.",
+      "fix": "Nas provas SK05b(iii) e (vi), garantir pelo menos 50 ms entre a última escrita da fixture e a troca, ou usar subdiretório no caso (vi), que muda nlink. Criar o gancho beforeItemCheck. Reescrever a G2 e o risco residual: a detecção no mesmo tique depende do kernel; a G1 não depende de tempo."
+    }
+  ],
+  "optional": [
+    {
+      "id": "R2-O1",
+      "title": "Falsos positivos da P18 com o redator real",
+      "evidence": "Sonda t11: 2024.10.22, 2024.10.22.md, token:refresh, secret:read e credential:lookup dão SECRET_PATTERN_IN_IDENTIFIER e item INVALID. Hoje não há id de ferramenta com esses nomes, mas uma ferramenta de credencial (PAR-H03) seria bloqueada.",
+      "fix": "Não redigir requisito igual a um id concedido pelo host; registrar os falsos positivos na P18."
+    },
+    {
+      "id": "R2-O2",
+      "title": "Regex de escalar ambíguo (P19) incompleta",
+      "evidence": "Sonda t12: 0x1f, .5 e +.5 passam como texto, mas o YAML 1.1 os lê como números. O falso positivo 1b, 1-0-0 e 2024-10 é aceitável.",
+      "fix": "Acrescentar ^[-+]?0x[0-9a-fA-F_]+$ e ^[-+]?\\.[0-9]+([eE][-+]?[0-9]+)?$."
+    },
+    {
+      "id": "R2-O3",
+      "title": "Ganchos de teste: limitar o poder e barrar import em produção",
+      "evidence": "O mapa exports de @cvg/harness só tem '.', então o pacote não expõe acquisition.js. Mas testes em tests/ importam packages/harness/src por caminho relativo, e nada barra isso em código de produção. mapStat e platform, se forem genéricos, podem afrouxar as checagens.",
+      "fix": "Ganchos só para endurecer (mapStat só muda dev; platform só força 'não suportada'); nada por variável de ambiente nem globalThis; teste estático de que nenhum módulo fora de teste importa o setter."
+    },
+    {
+      "id": "R2-O4",
+      "title": "Tratamento de CR mudou sem código",
+      "evidence": "A r1 recusava CR em qualquer ponto (LINE_ENDING_UNSUPPORTED). A r2 o recusa só no frontmatter (FORBIDDEN ou FRONTMATTER_MISSING) e aceita no corpo. O SK03 lista 'CR' em 'Decodificação' sem dizer o código.",
+      "fix": "Escrever o código esperado por posição e se o corpo aceita CR."
+    },
+    {
+      "id": "R2-O5",
+      "title": "Curinga mais estrito que o texto da P5",
+      "evidence": "A condição 5 (SPEC:574) recusa grant com '*' mesmo com requiredTools vazio; a P5 diz que '*' não satisfaz requisito.",
+      "fix": "Alinhar o texto da P5, ou recusar só quando houver requisito."
+    },
+    {
+      "id": "R2-O6",
+      "title": "Ordem entre a revisão do Codex e o APPROVE do crítico",
+      "evidence": "§14 itens 1 a 3: um ajuste do Codex nos aceites muda o sha depois do APPROVE do crítico.",
+      "fix": "Dizer que qualquer mudança gera nova rodada do crítico sobre o novo sha, ou pôr a revisão do Codex antes da rodada final."
+    },
+    {
+      "id": "R2-O7",
+      "title": "Texto da P21 sobre montagem promete mais do que entrega",
+      "evidence": "SPEC:105 'mesmo assim, filho com dev diferente do root é recusado': montagem bind do mesmo FS mantém st_dev. Subvolume btrfs e overlayfs sem samefs podem dar recusa falsa.",
+      "fix": "Ajustar o texto: a checagem de dev pega só montagem de outro FS e pode recusar à toa (falha fechado)."
+    },
+    {
+      "id": "R2-O8",
+      "title": "Corpo e referências com code point proibido não geram achado",
+      "evidence": "FORBIDDEN vale só para o frontmatter e a descrição (SPEC:329-333). Quem aprova pelo digest revê o corpo fora do relatório.",
+      "fix": "Achado não bloqueante com a contagem de bidi e zero-width no corpo e nas referências."
+    },
+    {
+      "id": "R2-O9",
+      "title": "Id e nome de diretório diante do redator",
+      "evidence": "§7.11 lista version, requisitos, nomes de arquivo e field. Um id só de dígitos (por exemplo 5551234567) casa o ID_PATTERN e o padrão de telefone.",
+      "fix": "Dizer se o id e o nome do diretório passam pelo redator."
+    }
+  ],
+  "premises": [
+    {
+      "id": "lead-defaults",
+      "decision": "Modelo de ameaça (escritor concorrente), Linux com /proc, P8 (endurecer o loader) e P4 (INVALID): coerentes e seguros; confirmar na revisão T3.",
+      "owner": "usuário"
+    },
+    {
+      "id": "H-kernel",
+      "decision": "Premissa escondida: sem timestamp multigrain (antes do 6.13), a troca no mesmo tique não é detectada; a G1 cobre a leitura. Basta declarar (R2-M4); não é preciso fixar o kernel.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P17",
+      "decision": "Recusar duplicata até a T07 definir a precedência. Seguro.",
+      "owner": "usuário com o Codex"
+    },
+    {
+      "id": "P18",
+      "decision": "Aceitar falsos positivos em CalVer e em ids token:/secret:/credential:, ou isentar requisitos concedidos pelo host (R2-O1). O marcador precisa do R2-M2.",
+      "owner": "usuário"
+    },
+    {
+      "id": "P19",
+      "decision": "Aceitar o falso positivo 1b e completar 0x… e .5 (R2-O2).",
+      "owner": "usuário"
+    },
+    {
+      "id": "P20",
+      "decision": "Aceitar a relaxação: é segura com o R2-M1 (mesma busca nos dois caminhos, qualquer errno → recusa, conferência dos roots depois da última busca).",
+      "owner": "usuário"
+    },
+    {
+      "id": "P21",
+      "decision": "Aceitar, com o texto ajustado (R2-O7).",
+      "owner": "usuário"
+    }
+  ]
+}
