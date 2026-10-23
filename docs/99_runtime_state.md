@@ -1,3 +1,31 @@
+# REA-CLAUDE-INTEGRATION-20261022 — plano de melhorias do Claude incorporado à tarefa — 22/10/2026 (Claude Code)
+
+- `status: IN_PROGRESS`. Pedido do usuário em 22/10: "incorpore esse plano na tarefa". Este PR publica o trabalho do Codex que estava concluído e sem commit:
+  - `REA-CLAUDE-20261022`: [relatório 0623](04_audit/0623_claude_code_improvements_2026-10-22.md), [evidência](04_audit/evidence/REA-CLAUDE-20261022/skill-preflight-proposal.md) e [handoff](08_runtime/handoffs/rea_claude_20261022.md);
+  - `REA-CLAUDE-PLAN-20261022`: [roadmap 0394](03_build/0394_roadmap_melhorias_claude_rea.md), [backlog 0395](03_build/0395_backlog_melhorias_claude_rea.md), [evidência](04_audit/evidence/REA-CLAUDE-PLAN-20261022/verification.json) e [handoff](08_runtime/handoffs/rea_claude_plan_20261022.md).
+    [Claim](08_runtime/agent_coordination.md).
+- `last_completed_action`:
+  - REA do Claude 2.1.308 com comparação com a 2.1.302: 23 capturas em sandbox, 6 trechos do bundle analisados como texto inerte e cobertura parcial declarada. Saíram 9 oportunidades CC22 ligadas aos cartões C100/PAR e o contrato SI01–SI12 da inspeção offline. O crítico do Codex deu APPROVE_REPORT.
+  - Roadmap com 7 marcos (M0–M6) e backlog com 16 fichas sobre IDs C100 existentes. Estado, dono e dependências continuam em 0383/0380, e o pin 302 e os 134 aceites ficam preservados.
+  - O lead inseriu espaços entre palavras coladas nos documentos (prova: o texto sem espaços é idêntico ao original) e conferiu dado pessoal e segredos com o gitleaks limpo, links e formato.
+- `next_action`:
+  1. SPEC0255 (em preparação; [claim](08_runtime/agent_coordination.md)), inspeção offline de skills e plugins (C100-T01/T02, SI01–SI12): recon, crítico independente e revisão do usuário (gate T3).
+  2. O BUILD da 0255 só começa depois do fechamento real de C100-Q01/M1 e dos reusos PAR. Nenhum cartão pai fecha por este planejamento.
+
+# Merges de 22/10/2026 — vitest, escopo por caso e release (Claude Code)
+
+- `status`: na `main` entraram os PRs #17 (vitest 4.1.12, `4a296261`), #14 (UP91-018, escopo por caso, `d0623da4`) e #15 (release no GHCR e servidor do hospital, `420b97b3`).
+- **Release no GHCR (SPEC0253):**
+  - Fluxo: o workflow `release-image.yml` só publica `sha-<commit>` de um commit da `main` com os 5 checks verdes, com proveniência SLSA e SBOM CycloneDX atestados. Deploy, verificação no destino e rollback ficam fora.
+  - Pacote privado criado pelo usuário em 22/10. Ele existe e não é público, segundo a API e uma sonda anônima. A ciência do usuário sobre os metadados públicos está em [user-acknowledgement-20261022.json](04_audit/evidence/RELEASE-CI-0253-20261021/user-acknowledgement-20261022.json).
+  - Os primeiros disparos na `main` foram pulados de propósito, porque vinham de runs cancelados. O primeiro release de verdade espera uma Verify verde na `main`.
+  - [Relatório](04_audit/evidence/RELEASE-CI-0253-20261021/build-report.md).
+- **Servidor do hospital:** requisitos e roteiro estão na [0393](03_build/0393_servidor_hospital_requisitos_e_instalacao.md). Abertos: [SRV-01–SRV-06](03_build/0374_plano_producao_harness.md#srv-01).
+- **Barra de CI:** a REM21 já leva cerca de 2h52 e a suíte roda 4 vezes por barra.
+  - Limite do job de 180 para 300 minutos: PR #18, decisão do usuário de 22/10.
+  - Avisos novos que derrubam a certificação, que exige zero vulnerabilidades: vitest no #17 e fastify 5.12.7 no #19, este com decisão do usuário de 22/10.
+- `next_action`: merge de #19, #18, #16 (Annex B, SPEC0252) e #20 (UP91-025, SPEC0254 fatia A) com os 5 checks verdes; depois, o PR de docs com os ledgers deles.
+
 # UP91-018-CASE-SCOPE-20261021 — escopo por caso em tasks e approvals — 22/10/2026 (Claude Code)
 
 - `status: READY_FOR_REVIEW` (PR). Resíduo P1 do F01 da AUD0621. [Decisões do usuário de 21/10](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/user-decisions-20261021.json): SPEC agora com a regra "BUILD após APPROVE do crítico"; mutação de task e approval exige vínculo; takeover e input/cancelamento de execução continuam livres; UP91-025 depois, com IdP sintético local; D2 mantém NO_MODEL; Codex100 G02 sem decisão nova. [Claim](08_runtime/agent_coordination.md).

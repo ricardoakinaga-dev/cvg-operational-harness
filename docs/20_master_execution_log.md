@@ -1,3 +1,17 @@
+# REA-CLAUDE-INTEGRATION-20261022 — incorporação do plano REA do Claude — 22/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- Codex, `REA-CLAUDE-20261022`: REA do Claude 2.1.308 sem execução de provider, canal, MCP ou cloud reais. O resultado foi o relatório 0623, a matriz CC22 e o contrato SI01–SI12. O Codex não fez commit.
+- Codex, `REA-CLAUDE-PLAN-20261022`: roadmap 0394 e backlog 0395, com grafo acíclico e links validados. O Codex não fez commit.
+- Lead: publicou os dois, a pedido do usuário, junto com estes ledgers; inseriu os espaços (só espaço) e conferiu segredos, dado pessoal e a ausência de código-fonte do bundle na evidência; abriu a SPEC0255 como primeira ação.
+
+# Merges e CI — 22/10/2026 (Claude Code, CONT-20261018-D9EF)
+
+- PR #14 (UP91-018) e #15 (RELEASE-CI-0253 e HOSPITAL-SERVER-0393) com os 5 checks verdes; merge squash no SHA exato.
+- A barra do #14 falhou primeiro na `certification:verify`, por 3 avisos moderados do vitest. O PR #17 (vitest 4.1.12, autorizado pelo usuário) foi empilhado nos outros e entrou primeiro.
+- O #16 passou em todos os gates, mas foi cancelado em 3h00 pelo `timeout-minutes: 180`. O PR #18 sobe o limite para 300 minutos, com autorização do usuário.
+- Novo aviso low no fastify (GHSA-389g-gv7q-r4x8, 22/10) derrubou de novo a certificação. O PR #19 (fastify 5.12.7, autorizado pelo usuário) foi empilhado no #16, no #18 e no #20.
+- RELEASE-CI-0253 (resumo do BUILD): SPEC0253 r4 aprovada pelo crítico, 238 testes, 129/129 mutantes e crítico de código APPROVE na r1 e na r2. Pacote privado criado pelo usuário. [Relatório](04_audit/evidence/RELEASE-CI-0253-20261021/build-report.md).
+
 # UP91-018-CASE-SCOPE-20261021 — escopo por caso em tasks e approvals (SPEC0251) — 21–22/10/2026 (Claude Code, CONT-20261018-D9EF)
 
 - SPEC0251: quatro revisões do crítico independente (r1–r3 REVISE, r4 APPROVE sem obrigatórios); nenhuma premissa nova além da decisão do usuário sobre mutações; sem migração. [Revisões](04_audit/evidence/UP91-018-CASE-SCOPE-20261021/spec-review-r4/review.md).
