@@ -352,7 +352,7 @@ describe('SPEC0236 real checker/CLI integration', () => {
     expect(after.graph.installed).toHaveLength(1)
     expect(after.graph.installed[0]).toMatchObject({
       verified: true,
-      source: 'semantic-kernel-v7-cjs-export-value',
+      source: 'semantic-kernel-v8-annexb-block-function',
       contentIdentity: { status: 'MATCH' }
     })
     expect(after.report.resolvedDiagnostics).toHaveLength(1)

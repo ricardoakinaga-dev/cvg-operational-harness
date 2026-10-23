@@ -76,9 +76,16 @@ Próxima ação: concluir R56 gates, integrar R65 e R63 na R66, certificar e obt
 - Raiz real: 11.723 → 11.723 diagnósticos, tuplas iguais, zero provas e zero violações; B6 continua `INCOMPLETE`. Fixtures: 18 PROVEN falsos fechados, 9 PROVEN corretos perdidos (custo previsto), nenhum PROVEN novo.
 - Teste novo 98/98 (75/98 falham na v6), 6 mutantes mortos, crítico R1 APPROVE sem obrigatórios. O certify local na base antiga deu NO_GO por causas fora do delta (vite antes do PR #11 e timeouts sob carga); a certificação é a do CI no PR de promoção. [Relatório](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/REPORT.txt), [análise do certify](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/certify-r2-analysis.json).
 
-#### Subtask HISO005-P2-ANNEXB-RECON — TODO, aberta em 21/10/2026
+#### Subtask HISO005-P2-BUILD-0252 — DONE local, 22/10/2026, em PR
 
-- Estado `TODO`. Prioridade P1, porque é prova falsa. Dono: engenharia do harness (kernel B6). Risco/gate: T1 para o recon; a correção é T3. Deve vir antes da SPEC0246.
+- [SPEC0252](../02_spec/0252_b6_annexb_block_function.md) r3 aprovada pelo crítico independente (sha `d1e20269…`), pela regra "BUILD após APPROVE do crítico" que o usuário decidiu em 21/10 (opção b1). Kernel `semantic-kernel-v8-annexb-block-function`: toda função declarada em bloco num módulo `require` sloppy gera `UNKNOWN_ANNEXB_FUNCTION` (`nome@linha`), na passagem normal e no census; prólogo de diretivas lido por um helper único.
+- Raiz real `228e7918`: 11.723 → 11.723 diagnósticos e 10.833 tuplas iguais, normal = strict, zero provas, zero tuplas novas; B6 continua `INCOMPLETE`. Fixtures: nenhum dos 62 positivos dá PROVEN; custo exatamente N05–N09; nenhum PROVEN novo.
+- Teste novo 165/165 (132/165 falham na v7), 29/29 mutantes mortos, B6 focal 1.153/1.153, `test:core` 6.319 verdes; crítico de código REVISE na r1 (nome computado de método, mutantes `trim` e `includes`) e APPROVE na r2. Errata sem r4: função só conta como strict com a diretiva no próprio corpo (só acrescenta UNKNOWN). [Relatório](../04_audit/evidence/HISO005-P2-BUILD-0252-20261021/REPORT.md).
+
+#### Subtask HISO005-P2-ANNEXB-RECON — DONE, 21/10/2026
+
+- [Recon](../04_audit/evidence/HISO005-P2-ANNEXB-RECON-20261021/REPORT.md) concluída: 0 ocorrências na raiz real, 18 PROVEN falsos nos fixtures da v7, recomendação b1 aprovada pelo usuário em 21/10. Correção no BUILD0252 acima.
+- Registro original: prioridade P1, porque é prova falsa. Dono: engenharia do harness (kernel B6). Risco/gate: T1 para o recon; a correção é T3. Deve vir antes da SPEC0246.
 - Achado do BUILD0247, pré-existente e fora do delta: em CJS sloppy, uma função declarada em bloco (Annex B.3.3) reatribui a ligação do wrapper, e o kernel resolve a função externa e dá PROVEN falso; v6 e v7 iguais, confirmado no runtime do Node 22. [Achado](../04_audit/evidence/HISO005-P2-BUILD-0247-20261020/finding-annexb-block-function.json).
 - Aceite do recon: contar as ocorrências na raiz real, controles positivos e negativos, e proposta de SPEC.
 

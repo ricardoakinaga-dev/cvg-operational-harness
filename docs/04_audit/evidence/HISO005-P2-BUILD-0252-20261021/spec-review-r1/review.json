@@ -1,0 +1,64 @@
+{
+  "verdict": "REVISE",
+  "specSha256": "95acd1546aa5d0152a0fb80e5caaedbc41d430dce100930f6144612d48e85b18",
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "A detecção de strict não tem controle do lado inseguro, e a §5.2 não exclui o prólogo da própria função declarada",
+      "what": "A §7 diz que errar para strict deixaria PROVEN falso, mas os 43 fixtures só testam esse lado com a diretiva tardia (P17), com escape (P20), entre parênteses (P27) e com o método de objeto (P24). A AB08 fala de 'mutante da regra' sem listá-los. A §5.2 ('prólogo ... de função envolvente') não proíbe contar o prólogo da própria função declarada, como faria ts.findAncestor(n, ...). Mas o Annex B depende do código que contém a declaração.",
+      "evidence": "Quatro mutantes só-diagnóstico da b1 da recon (tools-wide 47ec764f…): mut-own (a busca de strict começa em n), mut-any (diretiva em qualquer função torna o arquivo strict), mut-arrow (arrow tratada como strict) e mut-ts (.ts/.cts/.mts tratado como strict). Nos 43 fixtures da recon, os quatro são iguais à b1 em 43/43: status, detalhes UNKNOWN_ANNEXB_FUNCTION, outras tuplas e violações (critic-0252/run-out.json e mut-ts-vs-b1.txt). Logo, AB01–AB08 os aprovam. Mesmo assim, cada um dá PROVEN onde o Node 22.23.2 carrega products/x.js: C01, com 'use strict' no corpo da própria função de bloco (mut-own e mut-any); C02, com função irmã strict (mut-any); C03, com arrow sloppy (mut-arrow); e C11, m.cts sloppy rodado por strip-types nativo (mut-ts). A main v7 também dá PROVEN nos quatro, e a b1 correta dá UNKNOWN (f@2 ou f@3). Os 43 fixtures não têm nenhum arquivo TS.",
+      "fix": "(1) §5.2: o strict é decidido só pelos ancestrais estritos da declaração. Contam o prólogo do arquivo, o prólogo de cada função que contém a declaração (de qualquer tipo: declaração, expressão, arrow, método, getter, setter ou construtor) e uma classe envolvente. A busca começa no pai, e o prólogo da própria função declarada não conta. Nenhum outro critério torna o código strict: nem a extensão .ts/.cts/.mts, nem tsconfig/alwaysStrict, nem ser arrow ou método de objeto, nem diretiva de função que não contém a declaração. (2) Acrescentar C01, C02, C03 e C11 como positivos (Node 22, main e b1). Atualizar as contagens (22 PROVEN falsos, 32 positivos) e as AB01, AB02 e AB06. (3) Listar na AB08 os mutantes que têm de morrer e o fixture que mata cada um: regra ausente (P01); tupla só com bloco avaliado (P21/P22); prólogo da própria função (C01); prólogo de qualquer função (C02); arrow strict (C03); TS strict (C11); texto cozido (P20); parênteses aceitos (P27); diretiva fora do prólogo (P17); método de objeto como classe (P24); regra também em módulo import (N03)."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "what": "A AB04 exige 'b perde só N06–N09', mas a b não é implementada (§4, §5.3).",
+      "fix": "Marcar o custo de b como referência medida na recon (tools-b), não como aceite do BUILD."
+    },
+    {
+      "id": "O2",
+      "what": "O detalhe e o escopo da declaração estão abertos. Falta definir a linha de nome@linha (getStart ou pos: com pos, a P06 daria f@3 em vez de f@4). unknown() deduplica tuplas iguais. Também não está dito se gerador e async em bloco entram: no AST do TS eles são FunctionDeclaration, e no Node não têm Annex B (C04 e C05 não carregam o produto).",
+      "fix": "Fixar a linha 1-based de getStart(sf). Dizer que há uma tupla por par (nome, linha). Decidir explicitamente gerador e async; incluir é conservador e não custa nada na raiz."
+    },
+    {
+      "id": "O3",
+      "what": "O que a regra não toca só está implícito (G3, AB05, AB07).",
+      "fix": "Dizer que a regra não liga module.cjsUnknown (sem U para os importadores, ao contrário da C0), não acrescenta regra em rules da derivação (como a C0) e não mexe em usage nem em limites."
+    },
+    {
+      "id": "O4",
+      "what": "A AB02 e a AB06 não fixam os detalhes exatos, e a emissão no census não é testável pelo runSemanticBoundary, que só aproveita as violações do census (2440–2449).",
+      "fix": "Fixar por fixture o multiset de detalhes da b1 da recon (P06 f@4, P16 undefined@1, P16b undefined@2, P18 g@1, P19 require@1, P21/P22 flag@5, P23 mode@5, N05 g@2, N09 f@4, N10–N12 require@2 etc.). Testar o census com analyzeSemanticBoundary(input, { refusalCensus: true }), como o teste da 0247."
+    },
+    {
+      "id": "O5",
+      "what": "Faltam negativos baratos.",
+      "fix": "Acrescentar C08 (CJS sloppy só com função no topo do arquivo e no topo de corpo de função: PROVEN, sem tupla) e C07 (\"use strict\" com aspas duplas: PROVEN, sem tupla). Eles matam os mutantes 'marca toda FunctionDeclaration' e 'só aspas simples'."
+    },
+    {
+      "id": "O6",
+      "what": "A base da AB07 não está nomeada.",
+      "fix": "Base = v7 7f25da7d na mesma época, com a receita reconstruída. Conferir antes com o selado do BUILD0247 (11.723 diagnósticos, 10.833 tuplas, normal = strict) e parar se não bater."
+    },
+    {
+      "id": "O7",
+      "what": "A AB09 ('sem push') parece contradizer a §8 (PR e merge).",
+      "fix": "Dizer, como na 0247 (MC09 e PR #12), que a AB09 limita o executor do BUILD. A promoção é o PR do branch candidato, com os 5 checks verdes no SHA exato, sob a autorização de sessão."
+    },
+    {
+      "id": "O8",
+      "what": "Faltam âncoras de que a G2 e a regra 'só em módulo require' dependem.",
+      "fix": "Citar o modo em 1821–1825, UNKNOWN_MODULE_FORMAT em 1826–1837 e o ponto de inserção depois da C0 em 1858–1862. A SPEC0247 ainda cita 1689–1693, da v5."
+    },
+    {
+      "id": "O9",
+      "what": "A G1 parece cobrir também o Annex B em eval (B.3.3.3), em código global (B.3.3.2) e via Function/vm. Esses casos ficam fora da varredura sintática.",
+      "fix": "Dizer que esses casos já têm raiz pelas regras existentes: EVAL_REFERENCE da C0 em CJS e UNKNOWN_BINDING para nome livre."
+    }
+  ],
+  "newPremise": {
+    "answer": "não",
+    "reason": "A b1 usa o modo de load() (1821–1825), o AST do TS e as regras de strict do ECMAScript, que o kernel já usa, e só acrescenta raiz UNKNOWN. A emissão no census segue a C0 (SPEC0247 §3.1, item 1) e não afeta PROVEN. A promoção por PR com 5 checks segue a autorização de sessão do BUILD0247. As correções pedidas são de texto e de teste."
+  }
+}
