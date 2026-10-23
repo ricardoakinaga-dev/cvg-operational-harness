@@ -2,7 +2,6 @@
 // Builtins and the builtin-only policy helper are the complete dependency graph.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { randomInt } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -16,25 +15,37 @@ const totalTimeoutMs = 300_000
 const outputLimitBytes = 1024 * 1024
 const findingsExitCode = 23
 
-// Every fixture must clear the detector's entropy floor. Unconstrained random
-// hexadecimal strings can fall below it and invalidate the negative control.
-function syntheticHex() {
-  const shuffle = (chars) => {
-    for (let i = chars.length - 1; i > 0; i--) {
-      const other = randomInt(i + 1)
-      ;[chars[i], chars[other]] = [chars[other], chars[i]]
-    }
-    return chars
-  }
-  const alphabet = [...'0123456789abcdef']
-  const chars = shuffle([
-    ...alphabet,
-    ...alphabet,
-    ...shuffle([...alphabet]).slice(0, 8)
-  ])
-  // Eight symbols occur twice and eight three times: entropy is always >3.97.
-  return chars.join('')
+// hex-interleaved-v1: reproduce every fixture from its pair/purpose ordinal.
+// High entropy alone is insufficient: a random permutation can contain a
+// default stopword such as "dead", causing legitimate detector suppression.
+// Interleave letters/digits so no rotation contains adjacent letters; keep
+// eight symbols twice and eight three times (entropy >3.97). Split segments
+// avoid storing a token-shaped literal in this test's source.
+function syntheticHex(ordinal) {
+  const alphabet = ['a0b1', 'c2d3', 'e4f5', '6789'].join('')
+  const offset = ordinal % alphabet.length
+  const rotated = alphabet.slice(offset) + alphabet.slice(0, offset)
+  return rotated.repeat(2) + rotated.slice(0, 8)
 }
+
+test('hex-interleaved-v1 clears detector entropy floors without letter words', () => {
+  const entropy = (value) => {
+    const counts = new Map()
+    for (const char of value) counts.set(char, (counts.get(char) ?? 0) + 1)
+    return -[...counts.values()].reduce((sum, count) => {
+      const probability = count / value.length
+      return sum + probability * Math.log2(probability)
+    }, 0)
+  }
+  for (let ordinal = 0; ordinal < 16; ordinal++) {
+    const value = syntheticHex(ordinal)
+    assert.match(value, /^[a-f0-9]{40}$/)
+    assert.doesNotMatch(value, /[a-f]{2}/)
+    assert.ok(entropy(value) > 3.97)
+    // The GitHub PAT body uses 36 characters; slicing must preserve its floor.
+    assert.ok(entropy(value.slice(0, 36)) > 3.5)
+  }
+})
 
 test(
   'Gitleaks 8.28.0 enforces every reviewed path/value boundary',
@@ -48,6 +59,9 @@ test(
     assert.ok(fs.statSync(bin).isFile(), 'GITLEAKS_BIN must be a regular file')
     fs.accessSync(bin, fs.constants.X_OK)
     const entries = loadReviewedExceptions(projectRoot)
+    t.diagnostic(
+      'Synthetic fixture corpus: hex-interleaved-v1 (pair/purpose ordinals)'
+    )
     const configBytes = fs.readFileSync(
       path.join(projectRoot, '.gitleaks.toml')
     )
@@ -216,10 +230,11 @@ test(
               otherPath
             )
 
-            let replacement
-            do {
-              replacement = syntheticHex()
-            } while (entries.some((item) => item.literal === replacement))
+            const replacement = syntheticHex(index * 4)
+            assert.ok(
+              !entries.some((item) => item.literal === replacement),
+              'deterministic replacement must differ from every reviewed literal'
+            )
             detected(
               repository(entry.path, render(replacement)),
               controlConfig,
@@ -234,9 +249,9 @@ test(
             )
 
             // Generated fake tokens are never copied from a provider or logged.
-            const modernSourcegraph = `sgp_${syntheticHex()}`
-            const legacySourcegraph = syntheticHex()
-            const github = `ghp_${syntheticHex().slice(0, 36)}`
+            const modernSourcegraph = `sgp_${syntheticHex(index * 4 + 1)}`
+            const legacySourcegraph = syntheticHex(index * 4 + 2)
+            const github = `ghp_${syntheticHex(index * 4 + 3).slice(0, 36)}`
             const providerContent = `sourcegraph\napi_key = "${modernSourcegraph}"\napi_key = "${legacySourcegraph}"\napi_key = "${github}"\n`
             const providerFindings = scan(
               repository(entry.path, providerContent),
