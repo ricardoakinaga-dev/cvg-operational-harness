@@ -1,3 +1,16 @@
+# REA-CLAUDE-INTEGRATION-20261022 — 22/10/2026
+
+- Plano de melhorias do Claude incorporado: o [roadmap 0394](03_build/0394_roadmap_melhorias_claude_rea.md) e o [backlog 0395](03_build/0395_backlog_melhorias_claude_rea.md) passam a ser o roteiro do recorte CC22. O [0382](03_build/0382_roadmap_paridade_claude_code.md) segue como roadmap integral, e o [0383](03_build/0383_backlog_paridade_claude_code.md) e o 0380 seguem como fontes de status.
+- Primeira ação: SPEC0255 da inspeção offline de skills e plugins (C100-T01/T02, SI01–SI12).
+  - Gate T3: BUILD só depois da revisão do usuário e do fechamento de C100-Q01/M1 e dos reusos PAR.
+  - Fichas: Q01, T01, T02, E01, E02, S01, C02, H01, H02, B01, S02, P01, P02, K01, O01 e K02. Nenhum pai fecha por este planejamento.
+
+# Merges de 22/10/2026
+
+- Na `main`: #14 (escopo por caso, fecha o resíduo P1 do F01 da AUD0621), #15 (release no GHCR, avança a [UP91-035](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-035)) e #17 (vitest).
+- Em CI: #16 (Annex B no kernel B6), #18 (limite da barra), #19 (fastify) e #20 (UP91-025 fatia A).
+- Novo cartão a abrir: tirar a repetição da suíte na barra REM21. Hoje unit e cobertura rodam de novo dentro do `certify`; precisa de SPEC própria.
+
 # UP91-018-CASE-SCOPE-20261021 — 22/10/2026
 
 - Escopo por caso em tasks e approvals ([SPEC0251](02_spec/0251_case_scope_tasks_approvals.md)): BUILD local concluído, em PR. Fecha o resíduo P1 do F01 da AUD0621.
