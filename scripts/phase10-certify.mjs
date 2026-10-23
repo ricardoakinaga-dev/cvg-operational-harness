@@ -35,6 +35,7 @@ import {
   validateE2eReportPair
 } from './lib/e2e-report-binding.mjs'
 import { buildSkipInventory, loadSkipCatalog } from './lib/skip-governance.mjs'
+import { invalidateGeneratedGateResults } from './lib/phase10-generated-results.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const certificationDir = path.join(root, 'certification')
@@ -80,6 +81,7 @@ const commands = [
 ]
 
 function run(entry, { runId, candidateId }) {
+  invalidateGeneratedGateResults({ root, gateId: entry.id })
   const startedAt = Date.now()
   // CI provides a disposable PostgreSQL service. Keep it available to every
   // certification subgate so unit/coverage/chaos cannot silently lower their
