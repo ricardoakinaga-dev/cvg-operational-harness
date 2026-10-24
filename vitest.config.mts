@@ -74,7 +74,12 @@ export default defineConfig({
       process.env.VITE_CVG_WEB_IDENTITY_MODE ?? ''
     ),
     __CVG_WEB_CONTROLLED_TEST__: 'true',
-    __CVG_WEB_MODE__: JSON.stringify('test')
+    __CVG_WEB_MODE__: JSON.stringify('test'),
+    // SPEC0259 §4.6: the console tests run the current profile; the OIDC
+    // profile is exercised by mocking the profile module and by `vite build`.
+    __CVG_OPERATOR_LOGIN__: JSON.stringify(''),
+    __CVG_CONSOLE_ORIGIN__: JSON.stringify(''),
+    __CVG_API_ORIGIN__: JSON.stringify('')
   },
   test: {
     environment: 'jsdom',

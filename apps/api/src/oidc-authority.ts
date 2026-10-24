@@ -15,6 +15,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import * as oidc from 'openid-client'
 import type { OidcLoginConfig } from './oidc-config.ts'
 import type { OidcIdentityPolicy } from './oidc-identity.ts'
+import type { OperatorCookieProfile } from './operator-session.ts'
 import {
   clearOidcLoginCookie,
   readOidcLoginCallback,
@@ -51,6 +52,8 @@ export class OidcTokenRejectedError extends Error {
 export interface OidcOperatorAuthority {
   readonly issuer: string
   readonly identityPolicy: OidcIdentityPolicy
+  /** SPEC0259 §4.3: the profile of the pending cookie this authority writes. */
+  readonly cookieProfile: OperatorCookieProfile
   start(input: {
     stateStore: OidcLoginStateStore
     previousSessionId?: string
@@ -185,12 +188,14 @@ export async function discoverOidcOperatorAuthority(
     clientId: config.clientId,
     redirectUri: config.redirectUri,
     cookieKey: config.pendingCookieKey,
-    stateStore
+    stateStore,
+    cookieProfile: config.cookieProfile
   })
   const clearPending = clearOidcLoginCookie(transaction(inertStateStore))
 
   return {
     issuer: config.issuer,
+    cookieProfile: config.cookieProfile,
     identityPolicy: {
       issuer: config.issuer,
       clientId: config.clientId,

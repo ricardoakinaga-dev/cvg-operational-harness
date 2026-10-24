@@ -39,7 +39,7 @@ describe('operator session store outage boundary', () => {
     >()
     installOperatorSessionHook({
       app,
-      enforceHttps: true,
+      cookiePolicy: { profile: 'legacy', secure: true },
       operatorSessionStore: store,
       sessionIdentityByHeaders,
       sessionRecordByHeaders: new WeakMap(),

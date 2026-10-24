@@ -1,0 +1,78 @@
+{
+  "task": "UP91-025-OIDC-B-20261023",
+  "round": "code-review-r2",
+  "verdict": "APPROVE",
+  "spec": "docs/02_spec/0259_oidc_console_distinct_hosts.md",
+  "specRevision": "r3",
+  "specSha256": "ad0282a096d9f9ed21c9294ddbe4f51d913823022c31411cc5ea642b55b4778a",
+  "base": "f06a6613",
+  "head": "6fe1b3b854608fd8d2b3d23cac09d2a761eb2e08",
+  "previousRound": {
+    "head": "f558d998",
+    "path": "build/code-review-r1/review.md",
+    "verdict": "REVISE"
+  },
+  "r1Mandatory": {
+    "M1": "fixed",
+    "M2": "fixed"
+  },
+  "r1MandatoryNotes": {
+    "M1": "apps/api/src/oidc-routes.ts:187-198 e :505-525: classe 4xx pousa em negado, o resto em indisponivel, e a resposta apaga o pendente pela I8. Teste em apps/api/src/__tests__/oidc-console-hosts-api.test.ts:1168-1215. Contraprova: com o oidc-routes.ts de f558d998, os 4 casos novos falham e os 7 antigos da Q5 passam.",
+    "M2": "tests/support/oidc-hosts/edge.ts registra só a categoria do Location do callback. tests/e2e-oidc-hosts/oidc-hosts.spec.ts:944-945 exige negado e o pendente da vítima apagado na i3 (também :854 na i2 e :1109 na Q9m). As asserções separam a recusa dos caminhos de limite, de limitador e de store fora. A execução em Chromium fica na condição C1."
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "O1",
+      "where": "apps/web/src/__tests__/oidc-console.test.tsx:414",
+      "summary": "O teste do foco depois de falha do start (O3 da r1) não discrimina. Com o App.tsx de f558d998, os 42 testes de oidc-console passam, porque o jsdom mantém o foco no botão desativado e o fireEvent.click não move o foco. Sugestão: tirar o foco antes do clique, ou conferir toBeFocused em Chromium depois de um start com 503 injetado pela borda."
+    },
+    {
+      "id": "O2",
+      "where": "apps/api/src/oidc-routes.ts:381-386, :414-415 e :514-524",
+      "summary": "Se deps.log lançar no passo 1 ou no ramo de store fora do passo 3, a saída padrão apaga o pendente, contra 'intocado' e 'mantido' da tabela da §4.5. Só acontece se o runtimeLogger lançar (server.ts:1086); o efeito é só um novo login. Sugestão: variável de estágio respeitada pelo catch."
+    },
+    {
+      "id": "O3",
+      "where": "tests/oidc-hosts-support.test.ts e o relatório do BUILD",
+      "summary": "A Q10 pede 'lockfile sem mudança', mas não há checagem automática. O diff do package-lock.json está vazio. Sugestão: registrar o sha256 do lockfile na base e na HEAD no relatório do BUILD."
+    },
+    {
+      "id": "r1-O6-O7",
+      "where": "relatório do BUILD",
+      "summary": "Manter os registros da r1: a morte do N6 na Q9i por auxiliar (a da Q3 é a que vale) e a adaptação da i3 sobre o nome __Host- do pendente."
+    }
+  ],
+  "conditions": [
+    {
+      "id": "C1",
+      "summary": "Execução verde de npm run test:e2e:oidc-hosts na HEAD final, com o relatório certification/logs/oidc-hosts-browser-proof.json validado (passed = total, 0 skipped, 0 flaky). Cobre as asserções novas da Q9e, da Q9i, da Q9m e da Q10."
+    },
+    {
+      "id": "C2",
+      "summary": "Rodar de novo, na HEAD final, os mutantes dos arquivos alterados no delta (o sha deles difere do baseline de mutants.json): N11, N13, N14, N15 e N28 em oidc-routes.ts; N17, N19, N20 e N24 em App.tsx.",
+      "status": "Em andamento: build/mutants/mutants-6fe1b3b8.json (não versionado) tem o baseline igual à HEAD e 28/28 com restored verdadeiro e saída 1. Falta versionar e citar no relatório; as falhas citadas não foram conferidas uma a uma."
+    },
+    {
+      "id": "C3",
+      "summary": "Gates da §12 na candidata final: lint, typecheck, prettier, skip:governance, docs:check-links, test:postgres, cobertura e E2E."
+    }
+  ],
+  "testsRun": {
+    "head": [
+      "oidc-console-hosts-api + oidc-console + tests/oidc-hosts-support: 96/96",
+      "oidc-login-routes, oidc-login-guards, oidc-login-transaction, operator-session, operator-session-hook, http-security, apps/web, tests/oidc-hosts-browser-proof, tests/ci-bar-contract: 40 arquivos, 276/276"
+    ],
+    "counterProofs": [
+      "Q5 com o oidc-routes.ts de f558d998: 4 casos novos falham e 7 antigos passam",
+      "oidc-console com o App.tsx de f558d998: 42/42 passam (base do O1)"
+    ],
+    "node": "v22.23.2"
+  },
+  "notChecked": [
+    "execução em Chromium de test:e2e:oidc-hosts (C1)",
+    "nova rodada dos mutantes na HEAD final (C2)",
+    "test:postgres, rem21-014, critical-flows, Playwright padrão, cobertura, coverage:critical, mutation guard, lint, typecheck, prettier, skip:governance, docs:check-links, npm audit e o gate novo no CI (C3)",
+    "relatório do BUILD, que ainda não existe"
+  ]
+}

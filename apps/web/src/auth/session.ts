@@ -13,6 +13,8 @@ export type WebSessionStatus =
   | 'expired'
   | 'reauthenticating'
   | 'unavailable'
+  /** SPEC0259 §4.8: OIDC profile only; no action is offered. */
+  | 'configuration_error'
 
 export interface TrustedWebSession extends OperatorSessionView {
   identity: OperatorIdentity
@@ -70,12 +72,20 @@ export function createTrustedSessionBootstrap(
   }
 }
 
-export const runtimeBootstrapTokenProvider: BootstrapTokenProvider = () => {
-  const runtime = globalThis as typeof globalThis & RuntimeBootstrapWindow
-  if (runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN_PROVIDER__) {
-    return runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN_PROVIDER__()
-  }
-  const token = runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN__ ?? null
-  if (token) delete runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN__
-  return token
-}
+/**
+ * SPEC0259 §4.6: the OIDC bundle has no bootstrap token provider (the
+ * compile-time comparison lets the bundler drop the window lookups); the
+ * OIDC session is restored only by the HttpOnly cookie.
+ */
+export const runtimeBootstrapTokenProvider: BootstrapTokenProvider =
+  __CVG_OPERATOR_LOGIN__ === 'oidc'
+    ? undefined
+    : () => {
+        const runtime = globalThis as typeof globalThis & RuntimeBootstrapWindow
+        if (runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN_PROVIDER__) {
+          return runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN_PROVIDER__()
+        }
+        const token = runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN__ ?? null
+        if (token) delete runtime.__CVG_OPERATOR_BOOTSTRAP_TOKEN__
+        return token
+      }

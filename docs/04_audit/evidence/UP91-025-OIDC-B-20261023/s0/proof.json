@@ -1,0 +1,86 @@
+{
+  "id": "UP91-025-OIDC-B-20261023/S0",
+  "spec": "docs/02_spec/0259_oidc_console_distinct_hosts.md r3 §8 passo 1",
+  "date": "2026-10-23",
+  "verdict": "S0_PASS_1_TO_8",
+  "scope": "Semântica de cookies do Chromium fixado; servidores mínimos em Node, sem código CVG, sem PG, sem NGINX, sem IdP real",
+  "environment": {
+    "node": "v22.23.2",
+    "browser": "Chromium 147.0.7727.15 (Playwright headless)",
+    "tlsTrust": "spki-list",
+    "hosts": "console.cvg.test, api.cvg.test e sibling.cvg.test na mesma borda HTTPS em 127.0.0.1 (porta efêmera, roteada por Host); IdP em https://localhost:<porta efêmera>; nomes .test por --host-resolver-rules; CA efêmera por openssl em diretório temporário removido",
+    "hostsThisRun": {
+      "console": "https://console.cvg.test:33495",
+      "api": "https://api.cvg.test:33495",
+      "sibling": "https://sibling.cvg.test:33495",
+      "idp": "https://localhost:33739"
+    }
+  },
+  "checks": {
+    "1": {
+      "expected": "pendente Lax gravado pela resposta do fetch credenciado do start fica no navegador",
+      "pass": true
+    },
+    "2": {
+      "expected": "pendente chega ao callback depois de POST no IdP, 302 e GET, navegação iniciada pelo documento do IdP",
+      "pass": true,
+      "note": "conferida nos dois logins"
+    },
+    "3": {
+      "expected": "operacional Strict não chega a esse callback (segundo login, com o operacional já gravado)",
+      "pass": true
+    },
+    "4": {
+      "expected": "operacional gravado pela resposta do callback fica no navegador",
+      "pass": true
+    },
+    "5": {
+      "expected": "operacional chega no fetch credenciado do console depois do pouso",
+      "pass": true
+    },
+    "6": {
+      "expected": "cookie sem prefixo com Domain=cvg.test, gravado pela irmã, fica no navegador e chega à API",
+      "pass": true
+    },
+    "7": {
+      "expected": "__Host- com Domain=cvg.test, gravado pela irmã, é recusado (controle cvg_probe_control7 na mesma resposta presente)",
+      "pass": true
+    },
+    "8": {
+      "expected": "cookie sem nome com valor __Host-cvg_oidc_pending=x recusado; controle cvg_probe_control8 na mesma resposta em context.cookies() e no log hex da borda",
+      "pass": true
+    },
+    "9": {
+      "expected": "registro, sem resultado esperado",
+      "pass": null,
+      "observed": {
+        "stored": true,
+        "sentToApi": true,
+        "apiCookieNamesHex": [
+          "a05f5f486f73742d6376675f6f6964635f70656e64696e67",
+          "6376675f70726f62655f636f6e74726f6c39"
+        ],
+        "setCookieRawHex": [
+          "7365742d636f6f6b69653a20a05f5f486f73742d6376675f6f6964635f70656e64696e673d783b20446f6d61696e3d6376672e746573743b205365637572653b20506174683d2f",
+          "7365742d636f6f6b69653a206376675f70726f62655f636f6e74726f6c393d313b20446f6d61696e3d6376672e746573743b205365637572653b20506174683d2f"
+        ],
+        "contextCookiesNameHex": [
+          "5f5f486f73742d6376675f6f6964635f70656e64696e67"
+        ]
+      },
+      "reading": "O Chromium 147 grava o cookie com Domain=cvg.test e o envia à API com o byte 0xA0 cru antes de __Host-cvg_oidc_pending (a0 5f5f486f7374…). O context.cookies() do Playwright mostra o nome sem o 0xA0. É o ataque que a comparação exata da §4.3 fecha no servidor: aparar o 0xA0 leria esse cookie como __Host-."
+    }
+  },
+  "consoleHostRequestsWithCookies": 0,
+  "repeatability": "segunda execução no scratchpad com o mesmo resultado (1–8 PASS, 9 igual)",
+  "files": {
+    "probe-s0.mjs": "9f63a117333b0f4a2c4ec0e4723c40cccfcf7bb5a0d79c8b84eef2659893ce82",
+    "result.json": "9d19b9983b643783303020d111c00770b58b233d034cad5a87a6e0289f3b4e57"
+  },
+  "command": "env -i HOME=$HOME PATH=<node 22.23.2>:/usr/bin:/bin node docs/04_audit/evidence/UP91-025-OIDC-B-20261023/s0/probe-s0.mjs docs/04_audit/evidence/UP91-025-OIDC-B-20261023/s0/result.json",
+  "limitations": [
+    "Só Chromium headless (PB4)",
+    "Sem código CVG: o S0 confere o navegador, não o produto",
+    "Não autoriza deploy, produção, dado real, IdP ou conta real"
+  ]
+}
