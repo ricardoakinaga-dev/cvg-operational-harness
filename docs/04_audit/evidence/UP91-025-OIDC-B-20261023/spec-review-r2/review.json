@@ -1,0 +1,141 @@
+{
+  "spec": "docs/02_spec/0259_oidc_console_distinct_hosts.md",
+  "specRevision": "r2",
+  "specSha256": "5cb1bfb231b4cd32ff8e4bed0dfdeee0e7d10b9e3f11a393138245c9a018a10a",
+  "corrections": {
+    "path": "docs/04_audit/evidence/UP91-025-OIDC-B-20261023/spec-review-r1/corrections.md",
+    "sha256": "199f46a0d791eda3170cd12bc4a719f4102dafbed0d215389753845ed759e6a6"
+  },
+  "base": "9a56a9c94",
+  "task": "UP91-025-OIDC-B-20261023",
+  "reviewer": "Claude Code (crítico independente da r1; não autor da SPEC nem das correções)",
+  "at": "2026-10-23",
+  "verdict": "REVISE",
+  "r1Status": {
+    "M1": "fechado: §4.3 :144-154 (corte no primeiro '=', só SP/HTAB, igualdade exata de code units), dois parsers e todos os modos; Q3 :373; N27 :452; S0 8-9 :356-357; aceite 4",
+    "M2": "fechado na i1 e no desenho da i3; i2/i3 reabertas pelo M1 da r2 (mecanismo de captura)"
+  },
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "Na i2 e na i3, a captura por page.route não pega o callback depois do 302; o state e o code do atacante são gastos, e a prova de login CSRF no navegador não mata o N10",
+      "evidence": "SPEC0259 r2 :405 ('O pedido ao callback é abortado por page.route'), :411 (i3 repete i2), :435 (N10 → Q9i2). Playwright 1.59.1 types.d.ts:4039 ('The handler will only be called for the first url if the response is a redirect'); crNetworkManager.js:297-303 (redirectedFrom → Fetch.continueRequest sem rota). IdP sintético responde 302 (synthetic-oidc-issuer.ts:399). Pendente inválido recusa antes do consume (oidc-login-transaction.ts:138-146 contra :195-201); state gasto recusa no consume, antes do token (oidc-routes.ts:371-384). Por isso a implementação correta e o N10 dão o mesmo desfecho: negado, 401 e zero chamadas ao token.",
+      "fix": "Capturar sem seguir o redirect: rotear o POST ao /authorize do IdP (primeira URL) com route.fetch({maxRedirects:0}), ler o Location e responder com route.fulfill sem abrir o callback (ou fazer o fluxo do atacante por HTTP cru). Depois do negado da vítima, controle de material vivo: o mesmo code e state completam o login no contexto do atacante, com o __Host- pendente dele. Tudo dentro dos 60 s do code, sem espera do auxiliar de ritmo entre captura e controle. Mesmo ajuste na i3."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "O ritmo controlado (divergência a) não é determinístico: o limitador abre a janela na primeira requisição depois de expirar, e o auxiliar conta pelo tempo de soltura. Sonda com o rate-limit.ts real, 2.000 execuções: com 9/60 s, 3 execuções com 429 (atraso ≤300 ms) e 117 (≤2 s); com 9/70 s, 0. Usar janela de 60 s + 2×atraso máximo (70 s) e falhar se a latência passar do máximo (5 s)."
+    },
+    {
+      "id": "O2",
+      "title": "Q9m token 500: exigir que o contador de token do IdP suba 1, porque um 429 no callback também dá #cvg-login=indisponivel."
+    },
+    {
+      "id": "O3",
+      "title": "PB14 desatualizada (corrigir antes de levar ao usuário): a SPEC0262 já é R3, PROPOSED_FOR_TECHNICAL_REVIEW, e o hash mudou durante a revisão (99dd25ea… às 13:10Z, df6413f2… às 13:20Z); sai 'HOWs abertos'. Faltam: migração Auth v2 com corte (cookies legados exigem login), releitura do principal antes do Set-Cookie no callback, guarda por requisição (401 apaga, 503 mantém). No risco, dizer que não há exposição (OIDC só em teste) e que o custo é retrabalho e nova Q9."
+    },
+    {
+      "id": "O4",
+      "title": "Regras de rebase com a U04: saída padrão na §4.5 para falhas novas do callback (classe 5xx → indisponivel, classe 4xx → negado, pendente pela I8); uma só função de nome e limpeza do cookie com perfil obrigatório na assinatura; teste de que o hook HTTP é o primeiro onRequest depois do hook de alvo."
+    },
+    {
+      "id": "O5",
+      "title": "N28 não é observável no navegador: o fetch da reports não lê o 403 (sem ACAC), a borda registra só nomes de cookie, e com o mutante o text/plain dá 400 em CreateInternalTaskSchema.parse (server.ts:1827), sem task. O N28 já é morto pelo teste O8 da A (oidc-login-guards.test.ts:266-290, allowedOrigins [CONSOLE, SIBLING]). Apontar para ele, corrigir a descrição e fazer a borda registrar o status."
+    },
+    {
+      "id": "O6",
+      "title": "Q10: na Q9m, TOTP errado cria outra entrada do IdP com state. Regra: só entradas do host do IdP têm state, nonce e code_challenge."
+    },
+    {
+      "id": "O7",
+      "title": "S0 checagem 8: cookie de controle sem prefixo na mesma resposta da irmã; observar context.cookies() e o log em hex da borda."
+    },
+    {
+      "id": "O8",
+      "title": "J8 x logout 503 (divergência b aceita): escrever na J8 a exceção da ação explícita de logout."
+    }
+  ],
+  "divergences": {
+    "a_pacing": "aceitável na ideia, mas não determinística como escrita (O1)",
+    "b_logout": "aceita; ajustar o texto da J8 (O8)",
+    "c_exactRuleAllModes": "aceita; só dois leitores de cookie no runtime; testes atuais não quebram; segmento sem '=' passa a ser ignorado, o que tira um DoS e não afrouxa nada (a guarda de CSRF continua vendo o nome)",
+    "d_namelessStopsBuild": "aceita; falta o controle do O7"
+  },
+  "pb14": {
+    "riskSentence": "correta (bate com a corrida grant→escrita e com as 51 das 71 rotas protegidas por role do Codex)",
+    "citation": "desatualizada (O3)",
+    "reversible": "sim: um PR, OIDC só em teste, a mudança que chega à produção é aperto (nome exato e texto de 403), sem migração",
+    "rebaseWithoutLoosening": "sim em segurança; os riscos de comportamento são cobertos pelo O4"
+  },
+  "premises": [
+    {
+      "id": "PB1",
+      "decider": "usuário"
+    },
+    {
+      "id": "PB3",
+      "decider": "usuário",
+      "note": "justificativa corrigida"
+    },
+    {
+      "id": "PB14",
+      "decider": "usuário",
+      "note": "atualizar o texto antes (O3)"
+    },
+    {
+      "id": "PB6",
+      "decider": "dono do CI (Codex)"
+    },
+    {
+      "id": "PB2,PB4,PB5,PB7-PB13",
+      "decider": "default técnico"
+    },
+    {
+      "id": "H11",
+      "status": "falsa",
+      "note": "page.route intercepta salto de redirect (M1)"
+    },
+    {
+      "id": "H12",
+      "status": "falsa sob latência variável",
+      "note": "9 por 60 s pelo tempo de soltura evita 429 (O1)"
+    },
+    {
+      "id": "H13",
+      "status": "não vê",
+      "note": "a borda vê o status da guarda (O5)"
+    },
+    {
+      "id": "H14",
+      "status": "instável",
+      "note": "hash da SPEC0262 citado na PB14 (O3)"
+    }
+  ],
+  "probes": {
+    "dir": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/u08-critic/",
+    "files": {
+      "probe-pacer-window.mts": "ccc91dedc56af09238465fc8ef32444a3b236e426918b177add69b13509d75eb",
+      "probe-pacer-window.out.txt": "e9f3aa37496bb6c9ea60723e26b7c9c2926a62bc83225060cfeb829606aaa8bd",
+      "r2-copy-compare.cjs": "915dff6c48fe8ebd672e06a0173ed038f201afe918e6322fed1068d5cc031ccd"
+    },
+    "playwright": {
+      "version": "1.59.1",
+      "types.d.ts": "8324f3861a7a8db0f9d294f6a189182b2d231840cebb7f3ea5f4635773cdaf41",
+      "crNetworkManager.js": "c2c674c23843f8cf59edd9c650bf1f7fb76b42ea8477b3c2d0a0cb0ec22768b2"
+    }
+  },
+  "notDone": [
+    "navegador real",
+    "Docker",
+    "PG",
+    "porta",
+    "install",
+    "testes do repositório",
+    "commit",
+    "push",
+    "lockfile",
+    "CLOSE-CI-LOCAL"
+  ]
+}

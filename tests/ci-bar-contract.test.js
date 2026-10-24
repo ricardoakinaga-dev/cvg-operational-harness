@@ -55,6 +55,7 @@ describe('REM21-008 CI bar contract', () => {
       'docs',
       'e2e',
       'browser-proof',
+      'browser-oidc-hosts',
       'image',
       'sbom',
       'licenses',

@@ -28,6 +28,14 @@ export const HTTP_SECURITY_ALLOWED_HEADERS = [
   'x-cvg-webhook-timestamp'
 ] as const
 
+/**
+ * SPEC0259 §4.2 (PB12): the credentialed preflight of the console origin is
+ * narrower than the allowlist of the other origins: no identity, token or
+ * webhook header and no OPTIONS method.
+ */
+export const CREDENTIALED_CORS_METHODS = ['GET', 'POST', 'PATCH'] as const
+export const CREDENTIALED_CORS_HEADERS = ['accept', 'content-type'] as const
+
 const DEFAULT_HSTS_MAX_AGE_SECONDS = 31_536_000
 const HSTS_MIN_AGE_SECONDS = 300
 const HSTS_MAX_AGE_SECONDS = 31_536_000
@@ -46,6 +54,11 @@ export interface HttpSecurityOptions {
   /** @deprecated Configure trustedProxyAddresses instead. Only zero is accepted. */
   trustedProxyHops?: number
   hstsMaxAgeSeconds?: number
+  /**
+   * SPEC0259 §4.2: the only origin that receives credentialed CORS. Set by
+   * `buildServer` to the OIDC console origin; `null` without the OIDC login.
+   */
+  credentialedOrigin?: string | null
 }
 
 export interface NormalizedHttpSecurityOptions {
@@ -55,6 +68,7 @@ export interface NormalizedHttpSecurityOptions {
   /** @deprecated Always zero; retained for callers migrating from the old API. */
   trustedProxyHops: 0
   hstsMaxAgeSeconds: number
+  credentialedOrigin: string | null
 }
 
 export function normalizeOrigin(rawOrigin: string): string {
@@ -166,12 +180,21 @@ export function normalizeHttpSecurityOptions(
     throw new Error('hstsMaxAgeSeconds is outside the allowed range')
   }
 
+  // An origin outside the allowlist is refused by the hook before CORS, so a
+  // credentialed origin that is not allowed never receives any header.
+  const credentialedOrigin =
+    options.credentialedOrigin === undefined ||
+    options.credentialedOrigin === null
+      ? null
+      : normalizeOrigin(options.credentialedOrigin)
+
   return {
     allowedOrigins,
     enforceHttps,
     trustedProxyAddresses,
     trustedProxyHops: 0,
-    hstsMaxAgeSeconds
+    hstsMaxAgeSeconds,
+    credentialedOrigin
   }
 }
 
@@ -228,45 +251,54 @@ export function installHttpSecurityHooks(
   app: FastifyInstance,
   options: NormalizedHttpSecurityOptions
 ): void {
-  app.addHook('onRequest', async (request, reply) => {
-    if (
-      options.enforceHttps &&
-      !isInContainerLivenessProbe(request) &&
-      (!isTrustedForwardedProtocolRequest(request, options) ||
-        request.protocol !== 'https')
-    ) {
-      reply.code(426).header('upgrade', 'TLS/1.2')
-      return reply.send(
-        fail(
-          'secure_transport_required',
-          'Secure transport is required',
-          createCorrelationId()
+  // Named: SPEC0259 §4.2 checks that this is the first onRequest after the
+  // request-target hook, so every later refusal carries the CORS headers.
+  app.addHook(
+    'onRequest',
+    async function httpSecurityOnRequest(request, reply) {
+      if (
+        options.enforceHttps &&
+        !isInContainerLivenessProbe(request) &&
+        (!isTrustedForwardedProtocolRequest(request, options) ||
+          request.protocol !== 'https')
+      ) {
+        reply.code(426).header('upgrade', 'TLS/1.2')
+        return reply.send(
+          fail(
+            'secure_transport_required',
+            'Secure transport is required',
+            createCorrelationId()
+          )
         )
-      )
-    }
-
-    const originResult = readOrigin(request)
-    if (!originResult.valid) {
-      return sendForbidden(reply, 'Origin header is invalid')
-    }
-
-    if (request.method === 'OPTIONS') {
-      const preflight = validatePreflight(request, originResult.origin, options)
-      if (!preflight.valid || !preflight.origin) {
-        return sendForbidden(reply, 'CORS preflight is not allowed')
       }
-      applyCorsHeaders(reply, preflight.origin, true)
-      reply.code(204)
-      return reply.send()
-    }
 
-    if (originResult.origin) {
-      if (!options.allowedOrigins.includes(originResult.origin)) {
-        return sendForbidden(reply, 'Origin is not allowed')
+      const originResult = readOrigin(request)
+      if (!originResult.valid) {
+        return sendForbidden(reply, 'Origin header is invalid')
       }
-      applyCorsHeaders(reply, originResult.origin, false)
+
+      if (request.method === 'OPTIONS') {
+        const preflight = validatePreflight(
+          request,
+          originResult.origin,
+          options
+        )
+        if (!preflight.valid || !preflight.origin) {
+          return sendForbidden(reply, 'CORS preflight is not allowed')
+        }
+        applyCorsHeaders(reply, preflight.origin, true, options)
+        reply.code(204)
+        return reply.send()
+      }
+
+      if (originResult.origin) {
+        if (!options.allowedOrigins.includes(originResult.origin)) {
+          return sendForbidden(reply, 'Origin is not allowed')
+        }
+        applyCorsHeaders(reply, originResult.origin, false, options)
+      }
     }
-  })
+  )
 
   app.addHook('onSend', async (request, reply, payload) => {
     reply.header('content-security-policy', API_CONTENT_SECURITY_POLICY)
@@ -308,14 +340,19 @@ function validatePreflight(
   if (!origin || !options.allowedOrigins.includes(origin)) {
     return { valid: false, origin: null }
   }
+  const credentialed = origin === options.credentialedOrigin
+  const allowedMethods: readonly string[] = credentialed
+    ? CREDENTIALED_CORS_METHODS
+    : HTTP_SECURITY_ALLOWED_METHODS
+  const allowedHeaders: readonly string[] = credentialed
+    ? CREDENTIALED_CORS_HEADERS
+    : HTTP_SECURITY_ALLOWED_HEADERS
   const requestedMethod = readSingleHeader(
     request.headers['access-control-request-method']
   )
   if (
     !requestedMethod ||
-    !HTTP_SECURITY_ALLOWED_METHODS.includes(
-      requestedMethod.toUpperCase() as (typeof HTTP_SECURITY_ALLOWED_METHODS)[number]
-    )
+    !allowedMethods.includes(requestedMethod.toUpperCase())
   ) {
     return { valid: false, origin: null }
   }
@@ -327,9 +364,7 @@ function validatePreflight(
     const allAllowed = requestedHeaders
       .split(',')
       .map((header) => header.trim().toLowerCase())
-      .every((header) =>
-        (HTTP_SECURITY_ALLOWED_HEADERS as readonly string[]).includes(header)
-      )
+      .every((header) => allowedHeaders.includes(header))
     if (!allAllowed) return { valid: false, origin: null }
   }
 
@@ -339,21 +374,31 @@ function validatePreflight(
 function applyCorsHeaders(
   reply: FastifyReply,
   origin: string,
-  preflight: boolean
+  preflight: boolean,
+  options: NormalizedHttpSecurityOptions
 ): void {
+  const credentialed = origin === options.credentialedOrigin
   reply.header('access-control-allow-origin', origin)
   reply.header('vary', 'Origin')
+  // SPEC0259 J4: set here, in onRequest, so every later status keeps it.
+  if (credentialed) reply.header('access-control-allow-credentials', 'true')
   if (!preflight) {
     reply.header('access-control-expose-headers', CORRELATION_RESPONSE_HEADER)
     return
   }
   reply.header(
     'access-control-allow-methods',
-    HTTP_SECURITY_ALLOWED_METHODS.join(', ')
+    (credentialed
+      ? CREDENTIALED_CORS_METHODS
+      : HTTP_SECURITY_ALLOWED_METHODS
+    ).join(', ')
   )
   reply.header(
     'access-control-allow-headers',
-    HTTP_SECURITY_ALLOWED_HEADERS.join(', ')
+    (credentialed
+      ? CREDENTIALED_CORS_HEADERS
+      : HTTP_SECURITY_ALLOWED_HEADERS
+    ).join(', ')
   )
   reply.header('access-control-max-age', String(CORS_MAX_AGE_SECONDS))
 }

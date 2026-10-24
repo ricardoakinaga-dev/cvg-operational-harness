@@ -158,6 +158,13 @@ async function login(
   )
 }
 
+/** SPEC0259 §4.5: a refused login lands on the console, never JSON. */
+function expectRefusedLanding(response: Inject) {
+  expect(response.statusCode).toBe(303)
+  expect(response.headers.location).toBe(`${CONSOLE}/#cvg-login=negado`)
+  expect(response.body).toBe('')
+}
+
 async function seedConversation(
   target: Opened,
   tenantId: string,
@@ -264,10 +271,10 @@ describePg('SPEC0254 O9 — OIDC login with PostgreSQL in process', () => {
 
     // Drift under the same N: refused without a write.
     ;(operator as { groups: unknown }).groups = ['synthetic-a-supervisor']
-    expect((await login(target, idp, operator)).statusCode).toBe(401)
+    expectRefusedLanding(await login(target, idp, operator))
     // Disabled entry (P4): deactivates, and the open session is cut on cases.
     ;(operator as { groups: unknown }).groups = ['synthetic-a-disabled']
-    expect((await login(target, idp, operator)).statusCode).toBe(401)
+    expectRefusedLanding(await login(target, idp, operator))
     const after = await fixture.admin.query<{
       active: boolean
       revision: number
@@ -635,7 +642,7 @@ describePg(
 
       const v2 = await open(fixture, idp, syntheticGroupMatrix(2))
       apps.push(v2.app)
-      expect((await login(v2, idp, user)).statusCode).toBe(401)
+      expectRefusedLanding(await login(v2, idp, user))
       const principal2 = await v2.app.caseAuthority.readSnapshot(
         SYNTHETIC_TENANT_A as TenantId,
         (s) => s.principal(operatorId)
