@@ -377,8 +377,14 @@ function applyCorsHeaders(
   preflight: boolean,
   options: NormalizedHttpSecurityOptions
 ): void {
-  const credentialed = origin === options.credentialedOrigin
-  reply.header('access-control-allow-origin', origin)
+  // The header carries the configured allowlist entry, never the request
+  // value; both callers have already refused an origin outside the list.
+  const allowedOrigin = options.allowedOrigins.find(
+    (candidate) => candidate === origin
+  )
+  if (allowedOrigin === undefined) return
+  const credentialed = allowedOrigin === options.credentialedOrigin
+  reply.header('access-control-allow-origin', allowedOrigin)
   reply.header('vary', 'Origin')
   // SPEC0259 J4: set here, in onRequest, so every later status keeps it.
   if (credentialed) reply.header('access-control-allow-credentials', 'true')

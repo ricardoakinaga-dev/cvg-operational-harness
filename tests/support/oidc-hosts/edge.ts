@@ -77,14 +77,25 @@ const HOP_BY_HOP = new Set([
   'trailer'
 ])
 
+/** Trims only SP and HTAB, in linear time (no backtracking regex). */
+function trimSpHtab(value: string): string {
+  let start = 0
+  let end = value.length
+  while (start < end && (value[start] === ' ' || value[start] === '\t')) {
+    start += 1
+  }
+  while (end > start && (value[end - 1] === ' ' || value[end - 1] === '\t')) {
+    end -= 1
+  }
+  return value.slice(start, end)
+}
+
 export function cookieNamesHex(header: string | undefined): string[] {
   if (!header) return []
   return header.split(';').map((segment) => {
     const separator = segment.indexOf('=')
     const name = separator === -1 ? segment : segment.slice(0, separator)
-    return Buffer.from(name.replace(/^[ \t]+|[ \t]+$/g, ''), 'latin1').toString(
-      'hex'
-    )
+    return Buffer.from(trimSpHtab(name), 'latin1').toString('hex')
   })
 }
 
