@@ -88,17 +88,21 @@ export function runGate<S>(
       next: () => Promise<KernelGate>
     ) => Promise<KernelGate>
   }[]
-  const run = (index: number): Promise<KernelGate> => {
+  const run = async (index: number): Promise<KernelGate> => {
     const entry = listeners[index]
-    if (!entry) return Promise.resolve(PROCEED)
-    return entry
-      .fn(state, () => run(index + 1))
-      .catch((error: unknown) =>
-        stop(
-          'INSUFFICIENT_EVIDENCE',
-          `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
-        )
+    if (!entry) return PROCEED
+    let delegated: Promise<KernelGate> | undefined
+    try {
+      return await entry.fn(state, () => (delegated = run(index + 1)))
+    } catch (error) {
+      // A listener can throw before returning its Promise, even after next().
+      // Observe any control work it started before reporting its own failure.
+      await Promise.allSettled([delegated])
+      return stop(
+        'INSUFFICIENT_EVIDENCE',
+        `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
       )
+    }
   }
   return run(0)
 }
@@ -532,27 +536,30 @@ async function dispatch(
     }
   }
   const listeners = host.listeners('tool/execute')
-  const run = (index: number): Promise<ToolOutcome> => {
+  const run = async (index: number): Promise<ToolOutcome> => {
     const entry = listeners[index]
     if (!entry) return terminal()
-    return entry
-      .fn(call, () => run(index + 1))
-      .catch(
-        (error: unknown): ToolOutcome =>
-          started
-            ? {
-                kind: 'threw',
-                error: `${entry.plugin} failed: ${errorMessage(error)}`,
-                durationMs: 0
-              }
-            : {
-                kind: 'not_started',
-                gate: stop(
-                  'INSUFFICIENT_EVIDENCE',
-                  `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
-                )
-              }
-      )
+    let delegated: Promise<ToolOutcome> | undefined
+    try {
+      return await entry.fn(call, () => (delegated = run(index + 1)))
+    } catch (error) {
+      // next() may already be dispatching when a wrapper throws synchronously.
+      // Join it before inspecting started, so its ledger is settled exactly once.
+      await Promise.allSettled([delegated])
+      return started
+        ? {
+            kind: 'threw',
+            error: `${entry.plugin} failed: ${errorMessage(error)}`,
+            durationMs: 0
+          }
+        : {
+            kind: 'not_started',
+            gate: stop(
+              'INSUFFICIENT_EVIDENCE',
+              `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
+            )
+          }
+    }
   }
   const outcome = await run(0)
   if (started) {
