@@ -12,3 +12,11 @@ Base: origin/main 61e5cf8f. Worktree `/mnt/dados/cvg-work/aud0625-channel-consol
 
 F12: os 8 `it.fails` (500/502/503/504 × Evolution/Chatwoot) passam hoje porque o defeito existe; controles (conexão caída, 200, 400, 429) verdes. Sem correção do F12 até a aprovação T3 da SPEC 0268.
 Não rodados (proibidos): certify, test:e2e, test:postgres, Docker.
+
+## Follow-up
+
+- `AUD0625-F12b exam-egress 503`: `packages/channel-gateway/src/exam-egress.ts` trata 503 por conta própria (`pdsh-016-exam-egress.test.ts:265,452`); fica fora da SPEC 0268 e vira cartão separado.
+
+## Gates com Node 22 (reexecução)
+
+Ver `node22-gates.txt` (node -v v22.23.2, typecheck, lint, vitest apps/web + packages/channel-gateway).

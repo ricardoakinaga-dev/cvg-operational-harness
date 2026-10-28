@@ -22,7 +22,7 @@ Status: `PROPOSED_FOR_HUMAN_T3_REVIEW`. Trilha T3: muda a semântica de efeito i
 ## Mudança proposta
 
 - Status 5xx (inclui o caso de corpo grande com status 5xx) → `ChannelError('provider_rejected', …, retryable=false, { effectUnknown: true })`. O gateway já converte em `effect_uncertain` e `markUncertain`.
-- 429 permanece `retryable` sem `effectUnknown` (limite aplicado antes do processamento; decisão a confirmar na revisão T3 — alternativa: tratar 429 também como UNCERTAIN).
+- 429 permanece `retryable` sem `effectUnknown`: é recusa explícita do destino antes de processar o pedido, sem efeito (decisão do orquestrador em 28/10; a revisão T3 a confirma).
 - Exceção documentada: um adapter só pode declarar 5xx "sem efeito" se a idempotência do destino estiver **comprovada** (campo opt-in `destinationIdempotent` na configuração do adapter, default false). Hoje nenhum adapter comprova; **não implementar o opt-in agora** (YAGNI) — registrar como decisão pendente.
 - Atualizar os testes existentes que fixam `retryable: true` para 503 (`channel-gateway.test.ts:343-346`, `aud0621-0248-channel-bounds.test.ts:226-231`) para o novo contrato (`effectUnknown: true`, `retryable: false`).
 
