@@ -22,12 +22,16 @@ interface Fixture {
   ageMs: number
   events?: string[]
   envelope?: boolean
+  /** The approval authority answers a status that disagrees with the row. */
+  authorityStatus?: string
+  /** The approval authority throws (data or infrastructure failure). */
+  authorityError?: { message: string; code?: string }
 }
 
 function envelopeFor(row: Fixture) {
   return {
     approvalId: row.approvalId,
-    status: row.status,
+    status: row.authorityStatus ?? row.status,
     approverId: 'approver.synthetic',
     decisionActorType: 'Approver' as const,
     decisionCorrelationId: `corr_${row.approvalId}`,
@@ -47,17 +51,21 @@ function interpretSelector(
   const statuses = [
     ...(/a\.status IN \(([^)]*)\)/.exec(sql)?.[1] ?? '').matchAll(/'(\w+)'/g)
   ].map((match) => match[1])
+  const countMode = /SELECT count\(/.test(sql)
+  const [minParam, maxParam] = countMode
+    ? [params[0], params[1]]
+    : [params[1], params[2]]
   let selected = rows.filter((row) => statuses.includes(row.status))
-  if (/e\.updated_at < now\(\) - make_interval\(secs => \$2/.test(sql)) {
-    selected = selected.filter((row) => row.ageMs > Number(params[1]) * 1000)
+  if (/e\.updated_at < now\(\) - make_interval\(secs => \$\d/.test(sql)) {
+    selected = selected.filter((row) => row.ageMs > Number(minParam) * 1000)
   }
-  if (/\$3::double precision IS NULL/.test(sql)) {
-    const ceiling = params[2]
+  if (/\$\d::double precision IS NULL/.test(sql)) {
+    const ceiling = maxParam
     selected = selected.filter(
       (row) => ceiling === null || row.ageMs < Number(ceiling) * 1000
     )
   }
-  const anti = /NOT EXISTS \(([\s\S]*?)\)\s*ORDER BY/.exec(sql)?.[1] ?? ''
+  const anti = /NOT EXISTS \(([\s\S]*?)\n\s*\)/.exec(sql)?.[1] ?? ''
   const checksApproval = /audit\.payload->>'approvalId' = a\.approval_id/.test(
     anti
   )
@@ -74,6 +82,14 @@ function interpretSelector(
     )
     return !hasEvent
   })
+  const filtersEnvelope = /COALESCE\(a\.decision_command_key/.test(sql)
+  if (countMode) {
+    const incomplete = selected.filter((row) => row.envelope === false).length
+    return [{ incomplete }] as never
+  }
+  if (filtersEnvelope) {
+    selected = selected.filter((row) => row.envelope !== false)
+  }
   const order = /ORDER BY e\.updated_at (ASC|DESC)/.exec(sql)?.[1]
   if (order === 'ASC') selected.sort((a, b) => b.ageMs - a.ageMs)
   if (order === 'DESC') selected.sort((a, b) => a.ageMs - b.ageMs)
@@ -93,6 +109,7 @@ function interpretSelector(
 function harness(rows: Fixture[]) {
   const appended: string[] = []
   const failed: Array<{ approvalId: string; reason: string }> = []
+  const incompleteCounts: number[] = []
   const resumed: string[] = []
   const client = {
     query: async (text: string, params: unknown[] = []) => {
@@ -112,6 +129,11 @@ function harness(rows: Fixture[]) {
     approvalAuthority: {
       get: async (_tenant: string, approvalId: string) => {
         const row = byId.get(approvalId)!
+        if (row.authorityError) {
+          throw Object.assign(new Error(row.authorityError.message), {
+            code: row.authorityError.code
+          })
+        }
         const envelope = envelopeFor(row)
         if (row.envelope === false) {
           const { decisionCommandKey: _omitted, ...incomplete } = envelope
@@ -138,9 +160,10 @@ function harness(rows: Fixture[]) {
           String((event.payload as { approvalId: string }).approvalId)
         )
       },
-      onRowFailed: (failure) => failed.push(failure)
+      onRowFailed: (failure) => failed.push(failure),
+      onIncompleteEnvelope: (count) => incompleteCounts.push(count)
     })
-  return { tick, appended, failed, resumed }
+  return { tick, appended, failed, resumed, incompleteCounts }
 }
 
 const rows = (): Fixture[] => [
@@ -221,13 +244,13 @@ describe('F08: seletor do worker para decisões sem evento (pool que interpreta 
     expect(h.resumed).toEqual(['exec_x8', 'exec_x1'])
   })
 
-  it('uma linha sem envelope completo não derruba o tick nem bloqueia as seguintes', async () => {
+  it('um erro de dado (decision mismatch) não derruba o tick nem bloqueia as seguintes', async () => {
     const h = harness([
       {
         approvalId: 'bad',
         status: 'EXECUTED',
         ageMs: 40 * MIN,
-        envelope: false
+        authorityStatus: 'REJECTED'
       },
       { approvalId: 'good', status: 'EXECUTED', ageMs: 20 * MIN }
     ])
@@ -235,7 +258,76 @@ describe('F08: seletor do worker para decisões sem evento (pool que interpreta 
     expect(h.appended).toEqual(['good'])
     expect(h.failed).toHaveLength(1)
     expect(h.failed[0]).toMatchObject({ approvalId: 'bad' })
-    expect(h.failed[0]?.reason).toContain('envelope')
+    expect(h.failed[0]?.reason).toContain('decision mismatch')
+  })
+
+  it('N1: 26 aprovações antigas sem envelope não ocupam as vagas; as 2 recuperáveis são recuperadas e a contagem sai no log', async () => {
+    const stale: Fixture[] = Array.from({ length: 26 }, (_, index) => ({
+      approvalId: `old${index}`,
+      status: 'EXECUTED',
+      ageMs: (600 + index) * MIN,
+      envelope: false
+    }))
+    const h = harness([
+      ...stale,
+      { approvalId: 'ok1', status: 'EXECUTED', ageMs: 20 * MIN },
+      { approvalId: 'ok2', status: 'RESERVED', ageMs: 15 * MIN }
+    ])
+    const window = { minAgeSeconds: 30, maxAgeSeconds: null }
+    expect(await h.tick({ window })).toBe(2)
+    expect(h.appended).toEqual(['ok1', 'ok2'])
+    expect(h.failed).toEqual([])
+    expect(h.incompleteCounts).toEqual([26])
+  })
+
+  it('N1: sem linhas incompletas não há registro de contagem', async () => {
+    const h = harness(rows())
+    await h.tick({})
+    expect(h.incompleteCounts).toEqual([])
+  })
+
+  it.each([
+    '57P01',
+    '57P02',
+    '57P03',
+    '08006',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'EPIPE'
+  ])(
+    'N2: erro de infraestrutura %s no meio do laço derruba o tick',
+    async (code) => {
+      const h = harness([
+        { approvalId: 'a', status: 'EXECUTED', ageMs: 40 * MIN },
+        {
+          approvalId: 'b',
+          status: 'EXECUTED',
+          ageMs: 30 * MIN,
+          authorityError: { message: 'connection lost', code }
+        },
+        { approvalId: 'c', status: 'EXECUTED', ageMs: 20 * MIN }
+      ])
+      await expect(h.tick({})).rejects.toMatchObject({ code })
+      expect(h.failed).toEqual([])
+      expect(h.appended).toEqual(['a'])
+    }
+  )
+
+  it('N2: erro sem código de infraestrutura continua isolado por linha', async () => {
+    const h = harness([
+      {
+        approvalId: 'b',
+        status: 'EXECUTED',
+        ageMs: 30 * MIN,
+        authorityError: { message: 'approval not found' }
+      },
+      { approvalId: 'c', status: 'EXECUTED', ageMs: 20 * MIN }
+    ])
+    expect(await h.tick({})).toBe(1)
+    expect(h.failed).toEqual([
+      { approvalId: 'b', reason: 'approval not found' }
+    ])
   })
 })
 

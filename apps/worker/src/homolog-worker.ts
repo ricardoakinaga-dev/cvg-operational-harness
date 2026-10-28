@@ -162,6 +162,75 @@ export async function assertHomologHealthPreflight(
  * execution already advanced past APPROVED (SPEC 0272). Every step is idempotent, so
  * the tick converges without risking a second effect.
  */
+/**
+ * SPEC 0272: also approvals whose execution already advanced. The anti-join
+ * uses the expression of uq_audit_approval_decision (COALESCE(tenant_id, ''),
+ * approvalId, decision) so the index serves it; the age window keeps the tick
+ * away from a merely slow API and from the whole decided history.
+ * `minParam`/`maxParam` are the positional parameters of the minimum age (s)
+ * and of the maximum age (s, or NULL for no ceiling).
+ */
+function stuckDecisionsFrom(minParam: string, maxParam: string): string {
+  return `FROM operational_executions AS e
+       INNER JOIN runtime_approvals AS a
+         ON a.tenant_id = e.tenant_id AND a.approval_id = e.approval_id
+       WHERE e.tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
+          AND a.status IN ('APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED', 'REJECTED')
+          AND e.updated_at < now() - make_interval(secs => ${minParam}::double precision)
+          AND (${maxParam}::double precision IS NULL
+               OR e.updated_at > now() - make_interval(secs => ${maxParam}::double precision))
+          AND NOT EXISTS (
+            SELECT 1
+            FROM audit_events AS audit
+            WHERE audit.type = 'approval_decision'
+              AND COALESCE(audit.tenant_id, '') = COALESCE(e.tenant_id, '')
+              AND audit.payload->>'approvalId' = a.approval_id
+              AND audit.payload->>'decision' =
+                CASE WHEN a.status = 'REJECTED' THEN 'rejected' ELSE 'approved' END
+          )`
+}
+
+/**
+ * The persisted decision envelope `reconcileApprovalDecision` requires. Rows
+ * without it (history from before migration 0024, or lost) can never be
+ * recovered, so they are left out of the batch and only counted.
+ */
+const ENVELOPE_COMPLETE = `COALESCE(a.approver_id, '') <> ''
+          AND COALESCE(a.decision_actor_type, '') <> ''
+          AND COALESCE(a.decision_correlation_id, '') <> ''
+          AND COALESCE(a.decision_command_key, '') <> ''`
+
+/** Parameters: $1 limit, $2 minimum age (s), $3 maximum age (s) or NULL. */
+export const STUCK_APPROVAL_DECISIONS_SQL = `SELECT e.id AS execution_id, e.approval_id,
+               CASE WHEN a.status = 'REJECTED' THEN 'REJECTED' ELSE 'APPROVED' END AS decision
+       ${stuckDecisionsFrom('$2', '$3')}
+          AND ${ENVELOPE_COMPLETE}
+       ORDER BY e.updated_at ASC
+       LIMIT $1`
+
+/** Parameters: $1 minimum age (s), $2 maximum age (s) or NULL. */
+export const INCOMPLETE_ENVELOPE_COUNT_SQL = `SELECT count(*)::integer AS incomplete
+       ${stuckDecisionsFrom('$1', '$2')}
+          AND NOT (${ENVELOPE_COMPLETE})`
+
+const INFRA_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENOTFOUND',
+  '57P01',
+  '57P02',
+  '57P03'
+])
+
+/** Connection and server-shutdown failures: the whole tick must fail. */
+export function isInfrastructureError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  if (typeof code !== 'string') return false
+  return INFRA_ERROR_CODES.has(code) || code.startsWith('08')
+}
+
 export interface StuckDecisionOptions {
   limit?: number
   window?: StuckDecisionWindow
@@ -172,6 +241,8 @@ export interface StuckDecisionOptions {
   ) => Promise<unknown> | unknown
   /** One line per row that could not be recovered; the tick goes on. */
   onRowFailed?: (failure: { approvalId: string; reason: string }) => void
+  /** Rows in the window that have no complete envelope (manual handling). */
+  onIncompleteEnvelope?: (count: number) => void
 }
 
 export async function reconcileStuckApprovalDecisions(
@@ -195,41 +266,32 @@ export async function reconcileStuckApprovalDecisions(
           reason: failure.reason
         })
       ))
-  const stuck = await withTenantContext(pool, tenantId, (client) =>
-    client.query<{
+  const onIncompleteEnvelope =
+    options.onIncompleteEnvelope ??
+    ((count) =>
+      console.error(
+        JSON.stringify({
+          event: 'worker.homolog_reconcile_incomplete_envelope',
+          count
+        })
+      ))
+  const stuck = await withTenantContext(pool, tenantId, async (client) => {
+    const incomplete = await client.query<{ incomplete: number }>(
+      INCOMPLETE_ENVELOPE_COUNT_SQL,
+      [window.minAgeSeconds, window.maxAgeSeconds]
+    )
+    const incompleteCount = Number(incomplete.rows[0]?.incomplete ?? 0)
+    if (incompleteCount > 0) onIncompleteEnvelope(incompleteCount)
+    return client.query<{
       execution_id: string
       approval_id: string
       decision: string
-    }>(
-      // SPEC 0272: also approvals whose execution already advanced. The
-      // anti-join uses the expression of uq_audit_approval_decision
-      // (COALESCE(tenant_id, ''), approvalId, decision) so the index serves
-      // it; the age window keeps the tick away from a merely slow API and
-      // from the whole decided history.
-      `SELECT e.id AS execution_id, e.approval_id,
-               CASE WHEN a.status = 'REJECTED' THEN 'REJECTED' ELSE 'APPROVED' END AS decision
-       FROM operational_executions AS e
-       INNER JOIN runtime_approvals AS a
-         ON a.tenant_id = e.tenant_id AND a.approval_id = e.approval_id
-       WHERE e.tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
-          AND a.status IN ('APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED', 'REJECTED')
-          AND e.updated_at < now() - make_interval(secs => $2::double precision)
-          AND ($3::double precision IS NULL
-               OR e.updated_at > now() - make_interval(secs => $3::double precision))
-          AND NOT EXISTS (
-            SELECT 1
-            FROM audit_events AS audit
-            WHERE audit.type = 'approval_decision'
-              AND COALESCE(audit.tenant_id, '') = COALESCE(e.tenant_id, '')
-              AND audit.payload->>'approvalId' = a.approval_id
-              AND audit.payload->>'decision' =
-                CASE WHEN a.status = 'REJECTED' THEN 'rejected' ELSE 'approved' END
-          )
-       ORDER BY e.updated_at ASC
-       LIMIT $1`,
-      [limit, window.minAgeSeconds, window.maxAgeSeconds]
-    )
-  )
+    }>(STUCK_APPROVAL_DECISIONS_SQL, [
+      limit,
+      window.minAgeSeconds,
+      window.maxAgeSeconds
+    ])
+  })
   const audit = new TenantScopedPostgresRuntimeRepository(
     pool as unknown as PostgresPoolLike
   )
@@ -273,6 +335,9 @@ export async function reconcileStuckApprovalDecisions(
       )
       reconciled += 1
     } catch (error) {
+      // A broken connection or a server shutdown is not a bad row: the whole
+      // tick fails so worker.homolog_sweep_failed fires.
+      if (isInfrastructureError(error)) throw error
       onRowFailed({
         approvalId: row.approval_id,
         reason: error instanceof Error ? error.message : 'unknown'
