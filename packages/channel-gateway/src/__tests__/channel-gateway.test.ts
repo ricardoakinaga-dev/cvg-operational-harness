@@ -342,7 +342,8 @@ describe('EvolutionAPI adapter', () => {
     })
     await expect(failing.send(outbound())).rejects.toMatchObject({
       code: 'provider_rejected',
-      retryable: true
+      retryable: false,
+      effectUnknown: true
     })
   })
 })

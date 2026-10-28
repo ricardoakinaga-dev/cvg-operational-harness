@@ -21,6 +21,7 @@ import {
   drainBoundedBody,
   isResponseTooLarge,
   oversizedResponseError,
+  statusEffectOptions,
   raceSignal
 } from './bounded-body.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
@@ -269,7 +270,8 @@ export class EvolutionChannelAdapter
       throw new ChannelError(
         'provider_rejected',
         `EvolutionAPI responded with status ${response.status}`,
-        response.status >= 500 || response.status === 429
+        response.status === 429,
+        statusEffectOptions(response.status)
       )
     }
     await drainBoundedBody(response, this.#maxResponseBytes, signal)

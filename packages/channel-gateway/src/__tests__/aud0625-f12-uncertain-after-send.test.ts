@@ -10,9 +10,8 @@ import { CHANNEL_OPERATION_KIND } from '../effect-journal.ts'
 import { InMemoryChannelEffectJournal } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
 
-// AUD0625 F12 / SPEC 0268. The `it.fails` cases state the target behaviour and
-// pass today only because the defect exists: when a case starts passing for
-// real (fix applied), vitest reports it and the marker must be removed.
+// AUD0625 F12 / SPEC 0268 (approved for local T3 BUILD): an error after the
+// request left the gateway keeps the operation UNCERTAIN and never resends it.
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000f12'
 const CORRELATION = 'corr_00000000-0000-4000-8000-000000000f12'
@@ -100,30 +99,26 @@ describe.each(['evolution', 'chatwoot'])(
   'F12 %s: erro depois do envio',
   (name) => {
     describe.each([500, 502, 503, 504])('HTTP %i', (status) => {
-      it.fails(
-        'alvo: fica UNCERTAIN e a mesma operação não gera segunda tentativa',
-        async () => {
-          const result = await dispatchTwice(
-            name,
-            async () => new Response('{}', { status })
-          )
-          expect(result.attempts).toBe(1)
-          expect(result.state).toBe('UNCERTAIN')
-          expect(result.first).toBe('effect_uncertain')
-          expect(result.second).toBe('effect_uncertain')
-        }
-      )
+      it('alvo: fica UNCERTAIN e a mesma operação não gera segunda tentativa', async () => {
+        const result = await dispatchTwice(
+          name,
+          async () => new Response('{}', { status })
+        )
+        expect(result.attempts).toBe(1)
+        expect(result.state).toBe('UNCERTAIN')
+        expect(result.first).toBe('effect_uncertain')
+        expect(result.second).toBe('effect_uncertain')
+      })
     })
 
-    it('caracterização: hoje HTTP 503 libera o journal e gera 2 tentativas', async () => {
+    it('inversão da caracterização: HTTP 503 não gera segunda tentativa', async () => {
       const result = await dispatchTwice(
         name,
         async () => new Response('{}', { status: 503 })
       )
-      expect(result.attempts).toBe(2)
-      expect(result.first).toBe('provider_rejected')
-      expect(result.second).toBe('provider_rejected')
-      expect(result.state).toBe('PENDING')
+      expect(result.attempts).toBe(1)
+      expect(result.second).toBe('effect_uncertain')
+      expect(result.state).toBe('UNCERTAIN')
     })
 
     it('controle: falha de conexão (fetch lança) já fica UNCERTAIN sem reenvio', async () => {

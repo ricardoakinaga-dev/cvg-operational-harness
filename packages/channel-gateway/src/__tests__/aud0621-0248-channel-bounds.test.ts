@@ -226,7 +226,8 @@ for (const [name, make] of Object.entries(kinds)) {
         }).send(OUTBOUND)
       ).rejects.toMatchObject({
         code: 'provider_rejected',
-        retryable: true,
+        retryable: false,
+        effectUnknown: true,
         message: expect.stringContaining('status 503')
       })
 
