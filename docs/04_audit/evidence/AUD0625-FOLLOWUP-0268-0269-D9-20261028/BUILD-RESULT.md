@@ -26,3 +26,8 @@ Correções em `apps/web/src/App.tsx`:
 ## Gates (Node 22)
 
 [gates.txt](gates.txt): `npm run typecheck` exit 0; `npm run lint` exit 0; `npx vitest run packages/channel-gateway apps/web`: 50 arquivos, 356 testes passam. O `npm test` completo fica para a integração. Uma execução anterior do pacote `channel-gateway` teve duas falhas de tempo em `channel-effect-journal-edges` (15 s) com a máquina sob carga (load 8–10); repetida, passou 195/195.
+
+## Rodada 2 — achados G1 e G2 da revisão da sessão 07 (`26a4cd55`)
+
+- **G2 (decisão do orquestrador):** um 3xx com corpo acima do limite continua `FAILED` (`provider_rejected`, sem `effectUnknown`), coerente com o 302 de hoje: um redirecionamento não processa o pedido. Nenhum código mudou; o teste novo `aud0625-followup-3xx-oversized.test.ts` (11 casos) fixa isso em `oversizedResponseError` (301, 302, 307, 308) e pelos dois adaptadores até o journal (estado `FAILED`, 1 tentativa, 2ª chamada repete o erro), com controles (400 definitivo, 429 retentável, 503 e 200 incertos). **O mutante C2 ("3xx grande tratado como incerto") antes sobrevivia e agora morre** (8 falhas nos arquivos de corpo grande).
+- **G1 (P3, não reproduzido, só registro):** "Abrir caso" não consulta nem marca `isLoadingMoreConversations`; iniciar a busca com um "Carregar mais" em voo faz dois laços partirem do mesmo estado, e a resposta mais lenta pode devolver a lista a um tamanho menor (a próxima página volta a ser buscável, sem perda irrecuperável). Fica como acompanhamento: serializar as buscas ou usar `setConversations(prev => merge(prev, page))`.
