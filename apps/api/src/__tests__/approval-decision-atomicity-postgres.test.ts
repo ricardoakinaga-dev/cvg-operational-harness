@@ -1020,6 +1020,9 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
         client.release()
         await teardownDatabase(setup)
       }
-    }
+    },
+    // Seeding 10k rows plus two EXPLAIN ANALYZE runs exceeds the 15 s default
+    // on the hosted runner (PR #32 REM21 bar); the plan is what is asserted.
+    180_000
   )
 })
