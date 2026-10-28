@@ -1,0 +1,141 @@
+--- /mnt/dados/cvg-work/aud-score-20261028/report-review.md	2026-10-28 16:27:09.918761015 -0300
++++ docs/04_audit/0625_repository_score_audit_2026-10-28.md	2026-10-28 16:29:36.266969941 -0300
+@@ -16,7 +16,7 @@
+ - **Revisão independente:** três críticos I1, mesma família de modelo com `fork_context:false`, lanes separadas e sem descendentes. Não receberam notas ou achados de auditorias anteriores. Seus apontamentos são inspeções estáticas, depois conferidas pelo Lead; quando indicado, houve reprodução própria. Pareceres brutos: [A](evidence/AUD-SCORE-20261028/critic-A.txt), [B](evidence/AUD-SCORE-20261028/critic-B.txt), [C](evidence/AUD-SCORE-20261028/critic-C.txt).
+ - **Preservação:** 1.791 arquivos originais da cópia e 1.187 arquivos de fonte do workspace compartilhado sem alteração na conferência PRE/POST. Builds, caches e três fixtures de sondagem foram criados apenas na cópia privada. [Sentinela e limites](evidence/AUD-SCORE-20261028/source-preservation.json).
+ 
+-O trabalho é AUDIT/T1 documental, com experimentos sintéticos descartáveis. Não houve correção do programa, commit, push, merge, deploy, banco ou contêiner próprio, operação sobre serviços de pares, dado real ou chamada de modelo/canal externo. A sonda PROCESS executou um subprocesso local real sob bubblewrap para ler exclusivamente uma sentinela sintética própria.
++O trabalho é AUDIT/T1 documental, com experimentos sintéticos descartáveis. Não houve correção do programa, commit, push, merge, deploy, PostgreSQL ou contêiner Docker próprios, operação sobre serviços de pares, dado real ou chamada de modelo/canal externo. A sonda PROCESS executou um subprocesso local real sob bubblewrap para ler exclusivamente uma sentinela sintética própria.
+ 
+ ## 2. Como interpretar as notas
+ 
+@@ -26,35 +26,35 @@
+ 
+ ## 3. Notas por item analisado
+ 
+-| ID | Item | Nota /100 | Fundamento e principal limite |
+-|---|---|---:|---|
+-| A01 | Requisitos, escopo e direção do programa | **80** | Direção harness/produto explícita; evolução e paridade ainda são programas abertos. Documentos de diferentes datas exigem reconciliação. |
+-| A02 | Arquitetura e modularidade | **82** | Portas, adapters e composição reutilizáveis. A API central concentra5.887 linhas; fronteiras de autoridade ainda têm falhas. |
+-| A03 | Isolamento entre harness e produto | **68** | Direção estática coerente e workflow próprio do consumidor. Prova positiva completa B6/isolamento continua pendente; não foi refeita nesta auditoria. |
+-| A04 | Contratos públicos e versionamento | **84** | Exports, schemas, fingerprints e validação presentes; normalização perde metadado de sandbox. |
+-| A05 | Kernel e orquestração | **72** | Caminhos compartilhados, policy e approval implementados; cancelamento e algumas esperas não têm garantia integral. |
+-| A06 | Sandbox e contenção de filesystem/processos | **40** | Quatro falhas distintas reproduzidas: perda do modo, leitura/ambiente do host, handle divergente e troca de diretório. F01–F04. |
+-| A07 | Ferramentas e integração MCP | **68** | FS/shell reais, limites e validação; autoridade de contenção incompleta. Origem `mcp` no catálogo não demonstra cliente MCP governado. |
+-| A08 | Sessões, durabilidade e contexto | **70** | Eventos, validação e stores presentes; SDK single-pass/contexto vazio e trabalho de ownership/reopen ainda não equivalem a memória conversacional durável integrada. |
+-| A09 | SDK e transporte stdio | **82** | Contratos TS/Python e validação forte;47 testes Python com processos reais passaram. Retomada/cancelamento remoto, outros transportes e plataformas permanecem limitados. |
+-| A10 | Identidade e autenticação | **80** | OIDC/PKCE/state/nonce/MFA e sessão opaca implementados e testados sinteticamente; configuração OIDC ainda recusa ambientes diferentes de test nesta main. |
+-| A11 | Autorização, tenant e revogação | **73** | RBAC, grants por caso e RLS; principal corrente não cobre uniformemente superfícies sensíveis e há janelas de revogação documentadas. |
+-| A12 | Policy, aprovação e idempotência | **80** | Binding, reservas, fencing e decisões governadas; emissão de approvals e trilha de decisão ainda têm lacunas transacionais. |
+-| A13 | Auditoria e causalidade | **64** | Cadeia, sanitização e dedupe; recursos podem sobreviver sem evento e a recuperação não cobre estados posteriores da aprovação. |
+-| A14 | Persistência, integridade e migrations | **78** | Transações, locks e CAS;338 testes PG remotos no SHA. Falta prova própria PG e há risco estático de falso positivo na migration0021. |
+-| A15 | Modelos e prompts aprovados | **66** | Gateway substancial; instrução B pode acompanhar hash aprovado de A. Classificação do registro não é propagada à rota. F06/F10. |
+-| A16 | Budgets, tokens e custos | **65** | Reservas e tetos presentes; usage ausente é convertido em zero, e saída inválida é examinada antes da medição. |
+-| A17 | RAG e fontes institucionais aprovadas | **58** | FAQ local com tenant/status e lifecycle administrativo de fontes. Catálogo metadata não prova busca/contexto/resposta institucional de ponta a ponta. |
+-| A18 | Canais, entrega e efeitos incertos | **70** | Deduplicação, journal e controles de transporte; HTTP503 permite nova tentativa da mesma operação sem retenção como UNCERTAIN. |
+-| A19 | Console web e acessibilidade | **78** | Fluxos, estados, labels e testes presentes; primeira página limita navegação por conversas/casos. Avaliação visual própria e testes com usuários não executados. |
+-| A20 | Assistente de Plantão | **64** | Isolamento, autoria, rascunhos e NO_MODEL; preview aceito e fidelidade paciente/campo/unidade ainda incompletos. Sem homologação ou piloto nesta auditoria. |
+-| A21 | Testes, cobertura e conformidade | **90** | 2.897 regressões próprias sem skips; CI com7.087 unitários e boa cobertura. Sondas novas revelam lacunas de cenários de fronteira, apesar dos verdes. |
+-| A22 | CI, proveniência e publicação | **88** | 35gates PASS/34seals/56hashes conferidos e imagem publicada/verificada no SHA. Varredura posterior de imagem falhou; CI não concede aceite operacional. |
+-| A23 | Dependências e supply chain | **78** | `npm audit` completo atual com zero; lock e actions pinadas. Scanner posterior reporta HIGH corrigível na base da imagem. |
+-| A24 | Deploy e hardening | **78** | Imagem distroless/non-root, read-only/cap_drop e papéis separados; ambiente de destino e composição integral não foram demonstrados nesta auditoria. |
+-| A25 | Observabilidade e resposta a falhas | **64** | Telemetria, heartbeat e alerta de worker; detector na API não demonstra detecção da queda do próprio host, e notificações de backup não estão conectadas no template publicado. |
+-| A26 | Backup e recuperação | **72** | Snapshot/âncoras, mirror verificado, retenção e restore em CI; sem restore próprio no destino, snapshot automatizado de Vault ou alerta operacional demonstrado. |
+-| A27 | Documentação, governança e rastreabilidade | **62** | Evidência e gates detalhados; README/ledgers têm estado antigo no topo, checkout diverge da main e relatos distribuídos dificultam localizar a situação atual. |
++| ID  | Item                                        | Nota /100 | Fundamento e principal limite                                                                                                                                                   |
++| --- | ------------------------------------------- | --------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| A01 | Requisitos, escopo e direção do programa    |    **80** | Direção harness/produto explícita; evolução e paridade ainda são programas abertos. Documentos de diferentes datas exigem reconciliação.                                        |
++| A02 | Arquitetura e modularidade                  |    **82** | Portas, adapters e composição reutilizáveis. A API central concentra5.887 linhas; fronteiras de autoridade ainda têm falhas.                                                    |
++| A03 | Isolamento entre harness e produto          |    **68** | Direção estática coerente e workflow próprio do consumidor. Prova positiva completa B6/isolamento continua pendente; não foi refeita nesta auditoria.                           |
++| A04 | Contratos públicos e versionamento          |    **84** | Exports, schemas, fingerprints e validação presentes; normalização perde metadado de sandbox.                                                                                   |
++| A05 | Kernel e orquestração                       |    **72** | Caminhos compartilhados, policy e approval implementados; cancelamento e algumas esperas não têm garantia integral.                                                             |
++| A06 | Sandbox e contenção de filesystem/processos |    **40** | Quatro falhas distintas reproduzidas: perda do modo, leitura/ambiente do host, handle divergente e troca de diretório. F01–F04.                                                 |
++| A07 | Ferramentas e integração MCP                |    **68** | FS/shell reais, limites e validação; autoridade de contenção incompleta. Origem `mcp` no catálogo não demonstra cliente MCP governado.                                          |
++| A08 | Sessões, durabilidade e contexto            |    **70** | Eventos, validação e stores presentes; SDK single-pass/contexto vazio e trabalho de ownership/reopen ainda não equivalem a memória conversacional durável integrada.            |
++| A09 | SDK e transporte stdio                      |    **82** | Contratos TS/Python e validação forte;47 testes Python com processos reais passaram. Retomada/cancelamento remoto, outros transportes e plataformas permanecem limitados.       |
++| A10 | Identidade e autenticação                   |    **80** | OIDC/PKCE/state/nonce/MFA e sessão opaca implementados e testados sinteticamente; configuração OIDC ainda recusa ambientes diferentes de test nesta main.                       |
++| A11 | Autorização, tenant e revogação             |    **73** | RBAC, grants por caso e RLS; principal corrente não cobre uniformemente superfícies sensíveis e há janelas de revogação documentadas.                                           |
++| A12 | Policy, aprovação e idempotência            |    **80** | Binding, reservas, fencing e decisões governadas; emissão de approvals e trilha de decisão ainda têm lacunas transacionais.                                                     |
++| A13 | Auditoria e causalidade                     |    **64** | Cadeia, sanitização e dedupe; recursos podem sobreviver sem evento e a recuperação não cobre estados posteriores da aprovação.                                                  |
++| A14 | Persistência, integridade e migrations      |    **78** | Transações, locks e CAS;338 testes PG remotos no SHA. Falta prova própria PG e há risco estático de falso positivo na migration0021.                                            |
++| A15 | Modelos e prompts aprovados                 |    **66** | Gateway substancial; instrução B pode acompanhar hash aprovado de A. Classificação do registro não é propagada à rota. F06/F10.                                                 |
++| A16 | Budgets, tokens e custos                    |    **65** | Reservas e tetos presentes; usage ausente é convertido em zero, e saída inválida é examinada antes da medição.                                                                  |
++| A17 | RAG e fontes institucionais aprovadas       |    **58** | FAQ local com tenant/status e lifecycle administrativo de fontes. Catálogo metadata não prova busca/contexto/resposta institucional de ponta a ponta.                           |
++| A18 | Canais, entrega e efeitos incertos          |    **70** | Deduplicação, journal e controles de transporte; HTTP503 permite nova tentativa da mesma operação sem retenção como UNCERTAIN.                                                  |
++| A19 | Console web e acessibilidade                |    **78** | Fluxos, estados, labels e testes presentes; primeira página limita navegação por conversas/casos. Avaliação visual própria e testes com usuários não executados.                |
++| A20 | Assistente de Plantão                       |    **64** | Isolamento, autoria, rascunhos e NO_MODEL; preview aceito e fidelidade paciente/campo/unidade ainda incompletos. Sem homologação ou piloto nesta auditoria.                     |
++| A21 | Testes, cobertura e conformidade            |    **90** | 2.897 regressões próprias sem skips; CI com7.087 unitários e boa cobertura. Sondas novas revelam lacunas de cenários de fronteira, apesar dos verdes.                           |
++| A22 | CI, proveniência e publicação               |    **88** | 35gates PASS/34seals/56hashes conferidos e imagem publicada/verificada no SHA. Varredura posterior de imagem falhou; CI não concede aceite operacional.                         |
++| A23 | Dependências e supply chain                 |    **78** | `npm audit` completo atual com zero; lock e actions pinadas. Scanner posterior reporta HIGH corrigível na base da imagem.                                                       |
++| A24 | Deploy e hardening                          |    **78** | Imagem distroless/non-root, read-only/cap_drop e papéis separados; ambiente de destino e composição integral não foram demonstrados nesta auditoria.                            |
++| A25 | Observabilidade e resposta a falhas         |    **64** | Telemetria, heartbeat e alerta de worker; detector na API não demonstra detecção da queda do próprio host, e notificações de backup não estão conectadas no template publicado. |
++| A26 | Backup e recuperação                        |    **72** | Snapshot/âncoras, mirror verificado, retenção e restore em CI; sem restore próprio no destino, snapshot automatizado de Vault ou alerta operacional demonstrado.                |
++| A27 | Documentação, governança e rastreabilidade  |    **62** | Evidência e gates detalhados; README/ledgers têm estado antigo no topo, checkout diverge da main e relatos distribuídos dificultam localizar a situação atual.                  |
+ 
+ **Prontidão operacional demonstrada:45/100 — NO_GO.** Existem builds, CI e publicação comprovados, mas permanecem falhas técnicas obrigatórias e qualificação de ambiente, identidade, alertas e recuperação. Não se exige pentest externo, HA ou outros requisitos que a barra proporcional deliberadamente dispensou para seu escopo atual.
+ 
+@@ -62,19 +62,19 @@
+ 
+ ### Execução própria em61e5
+ 
+-| Procedimento | Resultado | Alcance |
+-|---|---|---|
+-| Instalação isolada sem scripts | exit0 | Lock preservado; cache privado. |
+-| Typecheck e lint | PASS/exit0 | Fonte original; executados antes da inclusão das fixtures descartáveis de auditoria. |
+-| Build padrão, runtime, SDK público e produto | PASS/exit0 | Código compilado; sem construir ou publicar imagem nesta rodada. Build web avisa chunk de633,62kB minificado. |
+-| Núcleo:106 arquivos selecionados | 1.403 PASS | Runtime, contratos, modelos, policy, approvals, canais, RAG e observabilidade. |
+-| API:76 arquivos selecionados | 737 PASS | Identidade, autorização, approvals e fronteiras HTTP; sem PostgreSQL próprio. |
+-| Web/produto:41 arquivos selecionados | 231 PASS | Console/clientes e consumidor; denominador de produto separado na discriminação. |
+-| SDK/shared/dados:43 arquivos selecionados | 382 PASS | Seleção sem dependência explícita de banco; não representa suíte PG. |
+-| Conformidade:4 arquivos | 97 PASS | Invariantes dos caminhos cobertos. |
+-| SDK Python, runner documentado | 47 PASS | Python3.12.3/Node22, stdio e filhos sintéticos reais. |
+-| Sondas de caracterização | 21 PASS |6 API/DNS +9 modelos/canais/reconciliação +6sandbox/FS/processo; incluem controles bons. PASS significa comportamento caracterizado, inclusive defeito confirmado. |
+-| `npm audit --json` | zero vulnerabilidades/exit0 | Resultado do registro no momento da consulta; não inclui pacotes do sistema operacional da imagem. |
++| Procedimento                                 | Resultado                   | Alcance                                                                                                                                                            |
++| -------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
++| Instalação isolada sem scripts               | exit0                       | Lock preservado; cache privado.                                                                                                                                    |
++| Typecheck e lint                             | PASS/exit0                  | Fonte original; executados antes da inclusão das fixtures descartáveis de auditoria.                                                                               |
++| Build padrão, runtime, SDK público e produto | PASS/exit0                  | Código compilado; sem construir ou publicar imagem nesta rodada. Build web avisa chunk de633,62kB minificado.                                                      |
++| Núcleo:106 arquivos selecionados             | 1.403 PASS                  | Runtime, contratos, modelos, policy, approvals, canais, RAG e observabilidade.                                                                                     |
++| API:76 arquivos selecionados                 | 737 PASS                    | Identidade, autorização, approvals e fronteiras HTTP; sem PostgreSQL próprio.                                                                                      |
++| Web/produto:41 arquivos selecionados         | 231 PASS                    | Console/clientes e consumidor; denominador de produto separado na discriminação.                                                                                   |
++| SDK/shared/dados:43 arquivos selecionados    | 382 PASS                    | Seleção sem dependência explícita de banco; não representa suíte PG.                                                                                               |
++| Conformidade:4 arquivos                      | 97 PASS                     | Invariantes dos caminhos cobertos.                                                                                                                                 |
++| SDK Python, runner documentado               | 47 PASS                     | Python3.12.3/Node22, stdio e filhos sintéticos reais.                                                                                                              |
++| Sondas de caracterização                     | 21 PASS                     | 6 API/DNS +9 modelos/canais/reconciliação +6sandbox/FS/processo; incluem controles bons. PASS significa comportamento caracterizado, inclusive defeito confirmado. |
++| `npm audit --json`                           | zero vulnerabilidades/exit0 | Resultado do registro no momento da consulta; não inclui pacotes do sistema operacional da imagem.                                                                 |
+ 
+ São **2.897 regressões distintas**, sem falhas, pendências ou skips nas invocações próprias, mais **21 sondas**. Não se somam repetições ou números remotos a esse total. [Discriminação](evidence/AUD-SCORE-20261028/test-summary.json), [seletores exatos](evidence/AUD-SCORE-20261028/test-groups.json), [comando/API](evidence/AUD-SCORE-20261028/api-tests.json) e [sonda sandbox](evidence/AUD-SCORE-20261028/sandbox-characterizations-current.log).
+ 
+@@ -222,20 +222,22 @@
+ 
+ ## 6. Ordem recomendada de remediação
+ 
+-| Ordem | Resultado necessário | Rota existente / responsável funcional | Evidência de fechamento |
+-|---|---|---|---|
+-| 1 | Preservar autoridade de sandbox em registro, tool e syscall/processo | Integrador do núcleo + donos PAR-X/FS/shell | Controles bons/negativos de F01–F05 pela fábrica pública; raiz/ambiente/cancelamento efetivos. |
+-| 2 | Vincular prompt e medição ao material realmente executado | Model gateway / UP91-015 / SPEC0167 | Instrução divergente recusada, classificação definida, usage desconhecido distinto de zero. |
+-| 3 | Tornar criação/emissão/decisão auditável recuperável | API/persistência / UP91-018 / U03 | Rollback/outbox, retry convergente, avanço/crash do worker e histórico misto PG. |
+-| 4 | Requalificar imagem e não repetir efeito incerto | Dono da imagem + dono de canais | Scan atual verde e proveniência nova; ACK perdido/503 preservando UNCERTAIN ou idempotência comprovada. |
+-| 5 | Concluir a candidata integrada do núcleo e seus aceites | Integrador L0 e titulares das lanes PAR/C100 | Mesmo SHA/configuração com sessões/contexto/streaming/MCP apenas no escopo aprovado; gates completos. |
+-| 6 | Qualificar ambiente e consumidor separadamente | Operação/SRV + dono PISO | Identidade/alertas/restore do destino e preview/fidelidade/homologação próprios do produto. |
+-| 7 | Consolidar estado e navegação | Integrador documental + frontend | Índice atual verificável e caso acessível após25conversas. |
++| Ordem | Resultado necessário                                                 | Rota existente / responsável funcional       | Evidência de fechamento                                                                                 |
++| ----- | -------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
++| 1     | Preservar autoridade de sandbox em registro, tool e syscall/processo | Integrador do núcleo + donos PAR-X/FS/shell  | Controles bons/negativos de F01–F05 pela fábrica pública; raiz/ambiente/cancelamento efetivos.          |
++| 2     | Vincular prompt e medição ao material realmente executado            | Model gateway / UP91-015 / SPEC0167          | Instrução divergente recusada, classificação definida, usage desconhecido distinto de zero.             |
++| 3     | Tornar criação/emissão/decisão auditável recuperável                 | API/persistência / UP91-018 / U03            | Rollback/outbox, retry convergente, avanço/crash do worker e histórico misto PG.                        |
++| 4     | Requalificar imagem e não repetir efeito incerto                     | Dono da imagem + dono de canais              | Scan atual verde e proveniência nova; ACK perdido/503 preservando UNCERTAIN ou idempotência comprovada. |
++| 5     | Concluir a candidata integrada do núcleo e seus aceites              | Integrador L0 e titulares das lanes PAR/C100 | Mesmo SHA/configuração com sessões/contexto/streaming/MCP apenas no escopo aprovado; gates completos.   |
++| 6     | Qualificar ambiente e consumidor separadamente                       | Operação/SRV + dono PISO                     | Identidade/alertas/restore do destino e preview/fidelidade/homologação próprios do produto.             |
++| 7     | Consolidar estado e navegação                                        | Integrador documental + frontend             | Índice atual verificável e caso acessível após25conversas.                                              |
+ 
+ As rotas são recomendações de triagem. Os responsáveis concretos precisam ser reconciliados nos claims; este relatório não toma suas reservas nem abre BUILD sem gate. Não se sugere eliminar testes, reduzir políticas, reabrir decisões já concedidas ou conceder produção por média.
+ 
+ ## 7. Limitações e parecer
+ 
++Uma quarta crítica I1, fresca e distinta das três lanes, aprovou a rastreabilidade do relatório (`APPROVE_REPORT`), conferindo a aritmética, os totais, a identidade de fonte e amostras dos achados. [Parecer final](evidence/AUD-SCORE-20261028/critic-final.txt). Essa aprovação se limita ao relatório: os gates técnicos derrotados e o NO_GO permanecem. O Lead conferiu novamente a preservação das fontes; links e formatação dos dois documentos entregues passaram. A cópia julgada foi preservada; os acréscimos posteriores são este registro administrativo e a precisão do termo Docker.
++
+ - Auditoria ampla por amostragem dirigida, não prova de ausência de outros defeitos. Notas são orientativas; severidades indicam perfil/precondições.
+ - Não houve suíte global/coverage/PG/E2E/certify local integral nesta rodada. Seus relatórios hospedados no SHA foram conferidos separadamente.
+ - Não se executaram providers reais, dados reais, integrações clínicas/financeiras, pentest externo, IdP de destino, navegador próprio, restauração de produção ou teste de usuários.

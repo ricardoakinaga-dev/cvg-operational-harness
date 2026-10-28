@@ -1,0 +1,64 @@
+**Parecer I1 — lane C: FAIL nos critérios obrigatórios identificados.** Existem controles implementados, mas as notas não compensam falhas de governança, confirmação e tratamento de efeitos incertos.
+
+Referência informada: `61e5cf8f41d15cc41ad524f8a57476d4f6080131`. Inspeção estática da cópia congelada, sem alterações, filhos, instalações, testes, builds ou serviços. Testes foram lidos exclusivamente como contratos. Não consultei relatórios anteriores nem notas do Lead.
+
+**Achados, por gravidade**
+
+1. **ALTA — o hash aprovado não vincula as instruções enviadas ao modelo.**  
+   [gateway.ts:350](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/gateway.ts:350) encaminha `request.input` junto de `prompt.sha256`; não compara nem deriva `input.system` do conteúdo aprovado. O [provider:134](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/providers/openai-compatible.ts:134) serializa essas instruções livres. Assim, referência/hash de A pode acompanhar instruções B. **Impacto:** a proveniência declarada não comprova o prompt executado. **Esperado:** renderização vinculada ao registro ou rejeição de divergências antes do provider. **Confiança alta.**
+
+2. **ALTA — a classificação mais restritiva do prompt não governa o roteamento.**  
+   [gateway.ts:569](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/gateway.ts:569) calcula `strictest`, mas aceita quando ele coincide com a classificação do registro; o roteador recebe somente a classificação declarada na requisição em [gateway.ts:178](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/gateway.ts:178). Um registro `CLINICAL` com request `INTERNAL` é aceito, comportamento inclusive previsto em [gateway-hardening.test.ts:305](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/__tests__/gateway-hardening.test.ts:305). **Impacto:** a restrição do registro não acompanha a decisão de transmissão. **Esperado:** classificação efetiva consistente em validação, rota e fallback. **Confiança alta no fluxo; depende da interpretação contratual de `PromptRecord.classification`.**
+
+3. **ALTA — respostas HTTP incertas podem liberar reenvio no canal compartilhado.**  
+   [evolution.ts:268](/mnt/dados/cvg-work/aud-score-20261028/source/packages/channel-gateway/src/adapters/evolution.ts:268) e [chatwoot.ts:276](/mnt/dados/cvg-work/aud-score-20261028/source/packages/channel-gateway/src/adapters/chatwoot.ts:276) classificam 5xx/429 como retryable, sem `effectUnknown`. O [gateway.ts:373](/mnt/dados/cvg-work/aud-score-20261028/source/packages/channel-gateway/src/gateway.ts:373) então libera a operação. **Impacto:** se o destino aceitar a mensagem antes de responder com erro, outro dispatch poderá duplicá-la. **Esperado:** manter `UNCERTAIN`, salvo contrato qualificado que comprove ausência de aceitação. O próprio cliente do produto adota essa cautela. **Confiança alta; nenhum efeito externo foi exercitado.**
+
+4. **ALTA — confirmação independe da entrega do preview.**  
+   O produto registra o resultado antes de enviar a resposta em [assistant.ts:547](/mnt/dados/cvg-work/aud-score-20261028/source/products/shift-assistant/src/assistant.ts:547). Falha de envio apenas gera log em [assistant.ts:1128](/mnt/dados/cvg-work/aud-score-20261028/source/products/shift-assistant/src/assistant.ts:1128); [assistant.ts:697](/mnt/dados/cvg-work/aud-score-20261028/source/products/shift-assistant/src/assistant.ts:697) seleciona rascunhos sem verificar recibo do preview. **Impacto:** `ok` pode confirmar conteúdo não apresentado integralmente ao autor. **Esperado:** elegibilidade vinculada à revisão e à aceitação de todas as partes, conforme [SPEC0179:62](/mnt/dados/cvg-work/aud-score-20261028/source/docs/02_spec/0179_shift_consumer_reliability.md:62). **Confiança alta.** A ativação de tarefas organizadas permanece condicionada ao caminho sintético ou à futura autorização do modelo.
+
+5. **ALTA, condicionada ao caminho organizado — fidelidade numérica não verifica paciente, campo ou unidade.**  
+   [organizer.ts:199](/mnt/dados/cvg-work/aud-score-20261028/source/products/shift-assistant/src/organizer.ts:199) compara conjuntos de números da entrada e saída. Trocar “1 mg” e “2 mg” entre dois pacientes conserva o conjunto e passa sem alerta. Os avisos numéricos também não integram os bloqueios usados pela confirmação. **Impacto:** presença do numeral é tratada como evidência insuficiente de fidelidade. **Esperado:** associação verificável entre fonte, paciente, campo e unidade, descrita na SPEC0179. **Confiança alta.** O `NO_MODEL` atual contém a exposição desse caminho na composição normal.
+
+6. **MÉDIA — consumo desconhecido vira consumo zero.**  
+   O schema aceita `usage` ausente e o [provider OpenAI:239](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/providers/openai-compatible.ts:239) substitui contadores ausentes por zero; [Ollama:210](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/providers/ollama.ts:210) faz o mesmo. Esses valores passam pela validação do meter. Além disso, [gateway.ts:367](/mnt/dados/cvg-work/aud-score-20261028/source/packages/model-gateway/src/gateway.ts:367) valida a saída antes de contabilizar o consumo disponível. **Impacto:** telemetria e settlement podem subestimar chamadas executadas. **Esperado:** distinguir medição ausente de zero e contabilizar consumo conhecido mesmo quando a saída é rejeitada. **Confiança alta.**
+
+7. **MÉDIA — RAG e catálogo aprovado ainda não formam um fluxo conectado de conteúdo.**  
+   [institutional-rag.ts:75](/mnt/dados/cvg-work/aud-score-20261028/source/packages/rag/src/institutional-rag.ts:75) implementa FAQ local por substring, com filtro tenant/status. Não encontrei consumidores de execução dessa implementação nos caminhos pesquisados. O console declara corretamente que seu catálogo é apenas metadata e que RAG continua indisponível em [platform/index.tsx:1434](/mnt/dados/cvg-work/aud-score-20261028/source/apps/web/src/features/platform/index.tsx:1434). O Test Lab fornece uma resposta fictícia em [platform/index.tsx:510](/mnt/dados/cvg-work/aud-score-20261028/source/apps/web/src/features/platform/index.tsx:510). **Impacto:** aprovar identidade/versão de fonte não demonstra recuperação e resposta a partir de conteúdo institucional aprovado. **Esperado:** integração explícita entre conteúdo, aprovação, versão, revogação e resposta. **Confiança alta; lacuna de implementação, não alegação de resposta indevida observada.**
+
+8. **MÉDIA — conversas posteriores à primeira página ficam inacessíveis pelo console.**  
+   [App.tsx:420](/mnt/dados/cvg-work/aud-score-20261028/source/apps/web/src/App.tsx:420) busca `limit:25, offset:0`; o painel não recebe controles de paginação. “Abrir caso” também depende dessas conversas carregadas em [App.tsx:1164](/mnt/dados/cvg-work/aud-score-20261028/source/apps/web/src/App.tsx:1164). **Impacto:** uma aprovação pode aparecer na fila sem navegação para seu caso. **Esperado:** paginação ou busca direta por caso. **Confiança alta.**
+
+9. **BAIXA — documentação vigente descreve integração antiga.**  
+   [products/shift-assistant/docs/spec.md:33](/mnt/dados/cvg-work/aud-score-20261028/source/products/shift-assistant/docs/spec.md:33) afirma uso direto de `provider.execute`; [organizer.ts:146](/mnt/dados/cvg-work/aud-score-20261028/source/products/shift-assistant/src/organizer.ts:146) já chama `gateway.generate`. **Impacto:** dificulta distinguir implementação, pendências e aceite. **Esperado:** atualizar a descrição atual preservando o histórico. **Confiança alta.**
+
+**Notas inteiras recomendadas**
+
+| Área | Nota | Confiança | Fundamentação e limite |
+|---|---:|---|---|
+| Modelos e prompts | **66** | Alta | Gateway substancial; vínculo de instruções e classificação incompletos. |
+| Budgets e medição | **61** | Alta | Reservas, tetos e settlement presentes; consumo desconhecido e rejeitado incompletos. |
+| RAG | **50** | Alta | FAQ local e contratos; integração de conteúdo não demonstrada. |
+| Fontes aprovadas | **64** | Média-alta | Lifecycle administrativo explícito; aprovação de metadata não qualifica conteúdo. |
+| Canais | **70** | Alta | Limites, SSRF, reserva e estados incertos implementados; classificação HTTP permite retry indevido. |
+| Assistente de Plantão | **62** | Alta | `NO_MODEL`, rascunhos e autoria presentes; preview e fidelidade ficam aquém do contrato. |
+| Console frontend | **77** | Alta | Fluxos conectados, estados e proteção contra respostas tardias; alcance dos casos incompleto. |
+| Acessibilidade | **79** | Média | Botões nativos, labels, foco visível, skip link e contexto de aprovação; sem validação renderizada. |
+
+**Critérios e veredictos**
+
+| Critério | Resultado desta revisão |
+|---|---|
+| Status, tenant, validade e hash da referência de prompt | **PASS — inspeção estática limitada** |
+| Instrução executada vinculada ao prompt aprovado | **FAIL** |
+| Classificação efetiva preservada no roteamento | **FAIL**, com ressalva semântica do achado 2 |
+| Produto envia notas `CLINICAL` a modelo na composição normal | **PASS estático para bloqueio `NO_MODEL`** |
+| Rascunhos permanecem inativos antes de confirmação | **PASS — inspeção estática** |
+| Confirmação exige preview aceito | **FAIL** |
+| Efeito HTTP incerto impede reenvio automático | **FAIL** |
+| Navegação alcança conversas além da primeira página | **FAIL** |
+| Semântica acessível básica nos componentes inspecionados | **PASS — inspeção estática** |
+| Testes, execução integrada, teclado, leitor de tela, contraste e responsividade | **NOT_RUN** |
+
+**Maior lacuna:** a autoridade aprovada ainda não está vinculada de ponta a ponta ao artefato utilizado: instruções enviadas ao modelo e revisão apresentada para confirmação. Prioridade de fechamento: vínculo do prompt, elegibilidade do preview e classificação dos efeitos HTTP incertos.
+
+A avaliação é uma amostragem dirigida de código conectado. Os arquivos canônicos `docs/07_agents/AGENTS.md` e `docs/08_runtime/agent_coordination.md` não estavam disponíveis nos caminhos tentados da cópia; usei as instruções fornecidas e o `AGENTS.md` presente. Não houve escrita local nem sincronização no GBrain. Este parecer não concede aceite ou liberação e não afirma comportamento de produção real.

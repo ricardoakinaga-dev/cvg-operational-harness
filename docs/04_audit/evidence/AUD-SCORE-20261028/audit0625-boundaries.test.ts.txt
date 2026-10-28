@@ -1,0 +1,78 @@
+// @vitest-environment node
+import { describe, it, expect } from 'vitest'
+import { ModelGateway } from '../packages/model-gateway/src/gateway.ts'
+import { PromptRegistry } from '../packages/model-gateway/src/prompt-registry.ts'
+import { OpenAICompatibleProvider } from '../packages/model-gateway/src/providers/openai-compatible.ts'
+import { EvolutionChannelAdapter } from '../packages/channel-gateway/src/adapters/evolution.ts'
+import { ChannelGateway } from '../packages/channel-gateway/src/gateway.ts'
+import { reconcileApprovalDecision } from '../packages/agent-core/src/approval-reconciliation.ts'
+
+const tenant = 'tenant_00000000-0000-4000-8000-000000000001'
+const now = new Date('2026-10-28T00:00:00Z')
+function registry(classification: 'INTERNAL' | 'CLINICAL' = 'INTERNAL', status: 'approved' | 'revoked' = 'approved') {
+  const r = new PromptRegistry()
+  r.register({ promptId: 'audit-synthetic', version: '1.0.0', content: 'Approved synthetic instruction A.', owner: 'platform', approvedBy: 'reviewer', status, effectiveFrom: '2026-09-01T00:00:00Z', classification, tenantId: tenant })
+  return r
+}
+function request(classification: 'INTERNAL' | 'CLINICAL' = 'INTERNAL') {
+  return { requestId: 'req_audit_0625', tenantId: tenant, correlationId: 'corr_audit_0625', promptId: 'audit-synthetic', promptVersion: '1.0.0', modelProfile: 'fast' as const, dataClassification: classification, input: { system: 'Different synthetic instruction B.', messages: [{ role: 'user' as const, content: 'Synthetic input only' }] } }
+}
+function fakeProvider(location: 'local' | 'external', seen: unknown[]) {
+  return { id: 'fake', location, models: ['fake-v1'], execute: async (input: unknown) => { seen.push(input); return { text: 'synthetic response', usage: { inputTokens: 1, outputTokens: 1 }, providerId: 'fake', model: 'fake-v1', externalCall: location === 'external' } } }
+}
+function gateway(r: PromptRegistry, location: 'local' | 'external', seen: unknown[]) {
+  return new ModelGateway({ providers: [fakeProvider(location, seen)], profiles: { fast: { name: 'fast', providerId: 'fake', model: 'fake-v1', location, temperature: 0, maxTokens: 32, timeoutMs: 1000, maxCostUsd: 1, estimatedCostUsd: 0, maxRetries: 0, pricing: { inputPer1kUsd: 0, outputPer1kUsd: 0 } } }, prompts: r, clock: () => now })
+}
+
+describe('AUD0625 synthetic boundary characterizations; passing confirms observed behavior', () => {
+  it('forwards instruction B while returning the approved hash for A', async () => {
+    const seen: any[] = []; const r = registry(); const g = gateway(r, 'local', seen)
+    await g.generate(request())
+    expect(seen).toHaveLength(1)
+    expect(seen[0].input.system).toBe('Different synthetic instruction B.')
+    expect(seen[0].promptSha256).toBe(r.resolve({ promptId: 'audit-synthetic', version: '1.0.0' }, { tenantId: tenant, at: now }).sha256)
+  })
+  it('good control rejects a revoked prompt without dispatch', async () => {
+    const seen: unknown[] = []
+    await expect(gateway(registry('INTERNAL', 'revoked'), 'local', seen).generate(request())).rejects.toMatchObject({ code: 'prompt_revoked' })
+    expect(seen).toHaveLength(0)
+  })
+  it('good control rejects a CLINICAL request before an external fake provider', async () => {
+    const seen: unknown[] = []
+    await expect(gateway(registry('CLINICAL'), 'external', seen).generate(request('CLINICAL'))).rejects.toBeDefined()
+    expect(seen).toHaveLength(0)
+  })
+  it('CLINICAL registry with INTERNAL request reaches the external fake provider', async () => {
+    const seen: unknown[] = []
+    await gateway(registry('CLINICAL'), 'external', seen).generate(request('INTERNAL'))
+    expect(seen).toHaveLength(1)
+  })
+  it('a provider response without token counters becomes zero usage', async () => {
+    const p = new OpenAICompatibleProvider({ id: 'synthetic-http', baseUrl: 'https://synthetic.audit.invalid', model: 'fake-v1', location: 'local', dnsLookup: async () => ['93.184.216.34'], fetchImpl: async () => new Response(JSON.stringify({ choices: [{ message: { content: 'synthetic' } }] }), { status: 200 }) })
+    const result = await p.execute({ requestId: 'r', tenantId: tenant, correlationId: 'c', model: 'fake-v1', input: request().input, temperature: 0, maxTokens: 32, promptSha256: 'a'.repeat(64), signal: new AbortController().signal, timeoutMs: 1000 })
+    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0 })
+  })
+  for (const status of [200, 503]) {
+    it(`same channel operation HTTP ${status}: two caller dispatches yield ${status === 200 ? 'one' : 'two'} HTTP attempts`, async () => {
+      let calls = 0
+      const adapter = new EvolutionChannelAdapter({ enabled: true, baseUrl: 'https://synthetic.audit.invalid', apiKey: 'synthetic-noncredential', instance: 'audit', dnsLookup: async () => ['93.184.216.34'], fetchImpl: async () => { calls++; return new Response('{}', { status }) } })
+      const g = new ChannelGateway({ outboundAdapters: [adapter] })
+      const message = { messageId: 'msg_audit_0625', tenantId: tenant, conversationId: 'conv_audit', channel: 'whatsapp', recipient: { id: 'synthetic-recipient', type: 'phone' as const }, body: { text: 'Synthetic only', attachments: [] }, correlationId: 'corr_audit_0625', idempotencyKey: 'audit0625-same-op', metadata: {} }
+      for (let i = 0; i < 2; i++) {
+        if (status === 200) await g.dispatch(message, { takeoverActive: false })
+        else await expect(g.dispatch(message, { takeoverActive: false })).rejects.toMatchObject({ code: 'provider_rejected', retryable: true })
+      }
+      expect(calls).toBe(status === 200 ? 1 : 2)
+    })
+  }
+  for (const status of ['APPROVED', 'EXECUTED']) {
+    it(`reconciler after status ${status}: ${status === 'APPROVED' ? 'records' : 'rejects before recording'} the missing decision event`, async () => {
+      let appends = 0
+      const ports = { getApproval: () => ({ approvalId: 'a', status, approverId: 'synthetic.approver', decisionActorType: 'Approver', decisionCorrelationId: 'corr_audit', decisionCommandKey: 'cmd_audit', policyVersion: 'v1', payloadHash: 'a'.repeat(64), operationKey: 'op_audit', correlationId: 'corr_request' }), resolveExecution: async () => ({ id: 'e', state: 'QUEUED' }), appendAudit: async () => { appends++ } }
+      const result = reconcileApprovalDecision(ports as any, { tenantId: tenant, executionId: 'e', approvalId: 'a', decision: 'APPROVED' })
+      if (status === 'APPROVED') await result
+      else await expect(result).rejects.toThrow('reconciliation decision mismatch')
+      expect(appends).toBe(status === 'APPROVED' ? 1 : 0)
+    })
+  }
+})

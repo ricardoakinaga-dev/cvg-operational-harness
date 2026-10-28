@@ -1,0 +1,46 @@
+**Parecer final da lane A: FAIL.** A conferência adicional encontrou uma lacuna obrigatória de rastreabilidade e ampliou o achado de cancelamento. Mantive a revisão estática e a fonte intacta.
+
+1. **P1 adicional — Chamadas do modelo de decisão não passam pelo registro obrigatório do kernel. Confiança alta.**  
+   [`hybrid-orchestrator.ts:242`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/orchestrator/src/hybrid-orchestrator.ts:242) chama `decisionModel.complete` diretamente, inclusive nos reparos. A porta introduzida pelo runtime contabiliza orçamento, mas não registra requisição/resposta nem executa os hooks de `runModelCall`. O registro posterior em [`iterative-runtime.ts:946`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/harness/src/iterative-runtime.ts:946) conserva apenas tipo da decisão, razão e ferramenta.  
+   **Impacto:** o kernel não garante reconstrução das requisições que determinaram as ações, contrariando I6 da SPEC0181. Uma implementação de gateway poderia registrar por conta própria, mas isso não é exigido nessa composição.  
+   **Expectativa:** encaminhar decisão e reparos pelo pipeline governado de modelo, preservando orçamento sem contagem duplicada e registrando a requisição efetivamente enviada antes do envio.
+
+2. **P1 ampliado — O runtime durável também descarta o sinal de prazo em chamadas usuais. Confiança alta.**  
+   Além do shell integrado não encaminhar cancelamento, [`agent-runtime/runtime.ts:887`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/agent-runtime/src/runtime.ts:887) só entrega o sinal combinado ao executor quando o caller forneceu `cancelSignal`. A execução de efeito aprovado repete a condição na linha 1491.  
+   **Impacto:** sem sinal externo, o prazo interno encerra a espera do kernel, mas não é comunicado ao executor. O trabalho pode continuar depois do retorno. A afirmação de quiescência na linha 1052 não é sustentada pelo teardown: [`host.ts:129`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/harness/src/kernel/host.ts:129) aguarda disposers, sem acompanhar as promises de execução abandonadas.  
+   **Expectativa:** sempre encaminhar o sinal interno; distinguir encerramento do turno, término do executor e efeito incerto.
+
+Permanecem confirmados por leitura os demais achados:
+
+| Gravidade | Achado concreto | Âncora e expectativa |
+|---|---|---|
+| **P1** | Normalização elimina `descriptor.sandbox`; o kernel recebe ausência e seleciona `NONE`. O fingerprint também perde essa distinção. | [`capability-boundary.ts:249`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/harness/src/capability-boundary.ts:249). Preservar e validar contenção em toda a composição. |
+| **P1** | PROCESS monta `/` inteiro para leitura e herda ambiente; confinar `cwd` não limita arquivos nomeados nos argumentos. | [`sandbox/run.ts:74`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/sandbox/src/run.ts:74). Restringir mounts e ambiente conforme autoridade explícita. |
+| **P1** | Ferramentas FS operam na raiz capturada pela fábrica sem conferir a raiz concedida pelo gate. | [`fs-tools.ts:270`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/sandbox/src/fs-tools.ts:270). Recusar divergência entre configuração e concessão. |
+| **P1** | Escrita aguarda journal após resolver caminho; depois reabre caminhos nominais, permitindo troca concorrente de diretório por symlink. | [`fs-tools.ts:349`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/sandbox/src/fs-tools.ts:349). Vincular operações a diretórios cuja resolução não permita escape. |
+| **P2** | Log, sandbox e liquidação de aprovação têm esperas que não competem com prazo/cancelamento. | [`pipeline.ts:112`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/harness/src/kernel/pipeline.ts:112). Limitar cada fase e tratar conclusão tardia. |
+| **P2** | Hooks de capability podem alterar estado privilegiado e substituir resultado de recusa. | [`host.ts:215`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/harness/src/kernel/host.ts:215), [`kernel-runtime.ts:635`](/mnt/dados/cvg-work/aud-score-20261028/source/packages/harness/src/kernel/kernel-runtime.ts:635). Exigir monotonicidade. **Limite:** superfície interna, explicitamente não suportada para consumidores. |
+
+As notas finais recomendadas avaliam documentação e código conjuntamente:
+
+| Área | Nota | Confiança | Limite principal |
+|---|---:|---|---|
+| Contratos, arquitetura e isolamento | **80** | Alta estática | Direção de imports coerente; isolamento executável não demonstrado nesta revisão. |
+| Runtime, kernel e orquestração | **68** | Média-alta | Implementação compartilhada substancial; faltam rastreabilidade integral e encerramento consistente. |
+| Sandbox, contenção e cancelamento | **40** | Alta estática | Autoridade perde-se entre registro, concessão e executor. |
+| Sessões e SDK | **78** | Média-alta | Contratos, validação e eventos presentes; execução e durabilidade não verificadas. |
+| Ferramentas e MCP | **68** | Média | FS/shell implementados com falhas de integração. MCP continua opcional; origem `mcp` não demonstra adapter executável. |
+
+| Critério | Resultado |
+|---|---|
+| Separação estática núcleo/hosts → produto nos caminhos inspecionados | **PASS** |
+| Sequência padrão política/aprovação antes do executor | **PASS**, estrutural |
+| Preservação da contenção declarada e da autoridade de filesystem | **FAIL** |
+| Cancelamento/prazo até executores integrados | **FAIL** |
+| Registro reconstruível de todas as chamadas de modelo | **FAIL** |
+| Contratos e validação de sessões/SDK | **PASS**, estrutural |
+| Testes, contenção real, término de processos, isolamento executável e durabilidade | **NOT_RUN** |
+
+**Maior lacuna:** as garantias declaradas pelo kernel não acompanham integralmente o caminho real de execução. Isso inclui contenção, cancelamento e registro do modelo de decisão. Nenhuma média compensa esses gates.
+
+Nenhum teste ou probe foi executado ou creditado por mim; artefatos gerados pelo Lead não fundamentaram este parecer. Sem conclusões sobre produção real e sem gravações em fonte, GBrain ou ledgers.
