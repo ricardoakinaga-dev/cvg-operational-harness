@@ -642,8 +642,14 @@ export function createResolutionSession({
       if (!probe(parent)) continue
       for (const name of inventory(parent)) {
         const key = parent + '/' + name
-        if (!packagePart(name)) fail('UNKNOWN_WORKSPACE_CONFIG', key)
+        // SPEC0258: the entry type comes from the same no-follow lstat that
+        // records the stat premise. A true regular file (documentation such
+        // as legacy/packages/README.md) is not a workspace: it is ignored
+        // before any name validation and never opened. Links, special files
+        // and directories keep the rules below.
         const s = inspect(key)
+        if (s?.isFile()) continue
+        if (!packagePart(name)) fail('UNKNOWN_WORKSPACE_CONFIG', key)
         if (!s?.isDirectory()) fail('UNKNOWN_WORKSPACE_CONFIG', key)
         if (!workspaceNames.has(key)) {
           if (workspaceNames.size >= caps.maxWorkspaces)
