@@ -1,0 +1,56 @@
+import subprocess,os,sys,json,time,re,datetime
+from pathlib import Path
+r=Path('/mnt/dados/cvg-work/aud0625-debian13-codex-20261028');name=sys.argv[1];image=sys.argv[2];mode=sys.argv[3];task='AUD0625-DEBIAN13-CODEX-20261028'
+env={k:v for k,v in os.environ.items() if k in ['LANG','LC_ALL']};env.update(PATH='/usr/local/bin:/usr/bin:/bin',HOME=str(r/'home'),DOCKER_CONFIG=str(r/'docker-config'))
+args=['docker','create','--platform','linux/amd64','--pull=never','--label','cvg.task='+task,'--name','cvg-aud0625-d13-'+name,'--network','none','--read-only','--user','10001:10001','--cap-drop','ALL','--security-opt','no-new-privileges','--pids-limit','128','--memory','512m','--cpus','1','--tmpfs','/tmp:rw,noexec,nosuid,size=16m','--entrypoint','/usr/local/bin/node']
+payload=None
+if mode in ['inventory','tls-probe','heartbeat']:
+ helper=r/(mode+'.mjs');args+=['--mount','type=bind,src='+str(helper)+',dst=/cvg-qa.mjs,readonly']
+ if mode=='tls-probe':
+  args+=['-i'];p=r/'tls-fixtures';payload=json.dumps({key:(p/file).read_text() for key,file in [('ca','ca.crt'),('otherCa','other-ca.crt'),('key','leaf.key'),('leaf','leaf.crt'),('expired','expired.crt')]}).encode()
+ command=['/cvg-qa.mjs']
+elif mode=='api':command=['/app/scripts/runtime-image-smoke.mjs']
+elif mode=='worker':
+ args+=['--env','NODE_ENV=test','--env','CVG_WORKER_QUEUE_ADAPTER=controlled-memory','--env','CVG_WORKER_TENANT_ID=tenant_00000000-0000-4000-8000-000000000172','--env','CVG_WORKER_CONTROLLED_SMOKE=true'];command=['/app/apps/worker/dist/main.js']
+else:raise ValueError(mode)
+args += [image,*command];start=time.monotonic();record={'task':task,'probe':name,'mode':mode,'image_argument':image,'create_command':args,'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'probe_cap_seconds':60};cid=None;failed=None
+def run(cmd,timeout=15,**kw):return subprocess.run(cmd,env=env,capture_output=True,timeout=timeout,**kw)
+def inspect(cid):
+ x=run(['docker','container','inspect',cid]);assert x.returncode==0
+ d=json.loads(x.stdout)[0];assert d['Id']==cid and d['Config']['Labels'].get('cvg.task')==task
+ return d
+try:
+ x=run(args,timeout=30);record['create_exit']=x.returncode
+ if x.returncode!=0:raise RuntimeError('create failed: '+x.stderr.decode()[:1000])
+ cid=x.stdout.decode().strip();assert re.fullmatch('[0-9a-f]{64}',cid);record['container_id']=cid
+ d=inspect(cid);record['image_id']=d['Image'];record['hardening']={'user':d['Config']['User'],'network':d['HostConfig']['NetworkMode'],'read_only':d['HostConfig']['ReadonlyRootfs'],'cap_drop':d['HostConfig']['CapDrop'],'security_opt':d['HostConfig']['SecurityOpt'],'pids':d['HostConfig']['PidsLimit'],'memory':d['HostConfig']['Memory'],'nano_cpus':d['HostConfig']['NanoCpus'],'tmpfs':d['HostConfig']['Tmpfs'],'mounts':d['Mounts']}
+ (r/(name+'-resource.json')).write_text(json.dumps(record,indent=2)+'\n')
+ x=run(['docker','start','--attach',*(['--interactive'] if payload else []),cid],timeout=60,input=payload)
+ (r/(name+'.stdout')).write_bytes(x.stdout);(r/(name+'.stderr')).write_bytes(x.stderr);record['cli_exit']=x.returncode
+ d=inspect(cid);record['container_exit']=d['State']['ExitCode'];record['container_running']=d['State']['Running'];assert x.returncode==0 and not d['State']['Running'] and d['State']['ExitCode']==0
+ lines=[]
+ for line in x.stdout.decode().splitlines():
+  try:lines.append(json.loads(line))
+  except json.JSONDecodeError:pass
+ record['results']=lines
+ if mode=='api':assert any(v.get('status')=='PASS' and v.get('live')==200 and v.get('ready')==200 for v in lines)
+ if mode=='worker':assert any(v.get('event')=='worker.controlled_smoke_passed' and v.get('adapter')=='controlled-memory' and v.get('processed')==1 and v.get('durable') is False and v.get('externalEffects') is False for v in lines)
+ if mode in ['tls-probe','heartbeat']:assert any(v.get('status')=='PASS' for v in lines)
+ record['status']='PASS'
+except BaseException as e:
+ failed=e;record['status']='FAIL';record['error']=str(e)
+ if isinstance(e,subprocess.TimeoutExpired):
+  (r/(name+'.timeout-stdout')).write_bytes(e.stdout or b'');(r/(name+'.timeout-stderr')).write_bytes(e.stderr or b'')
+finally:
+ if cid:
+  try:
+   d=inspect(cid)
+   if d['State']['Running']:
+    record['cleanup_stop']=run(['docker','stop','--time','2',cid],timeout=7).returncode
+    d=inspect(cid)
+    if d['State']['Running']:record['cleanup_kill']=run(['docker','kill',cid],timeout=5).returncode
+   record['cleanup_remove']=run(['docker','rm',cid],timeout=10).returncode
+   z=run(['docker','container','inspect',cid]);record['cleanup_absence']=z.returncode!=0 and 'No such' in z.stderr.decode();assert record['cleanup_remove']==0 and record['cleanup_absence']
+  except BaseException as e:record['cleanup_error']=str(e);record['status']='FAIL';failed=failed or e
+ record['duration_seconds']=round(time.monotonic()-start,3);(r/(name+'-probe.json')).write_text(json.dumps(record,indent=2)+'\n')
+print(json.dumps({k:v for k,v in record.items() if k not in ['results','create_command','hardening']}));sys.exit(1 if failed else 0)
