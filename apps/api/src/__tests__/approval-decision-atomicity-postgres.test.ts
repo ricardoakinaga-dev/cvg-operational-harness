@@ -16,7 +16,15 @@ import {
 import type { ApprovalRequestInput } from '@cvg/approval-engine'
 import { assertApprovalDecisionAuditDedupe, buildServer } from '../server.ts'
 import { grantCase } from './case-authorization-fixtures.ts'
-import { reconcileStuckApprovalDecisions } from '../../../worker/src/homolog-worker.ts'
+import {
+  reconcileStuckApprovalDecisions,
+  STUCK_APPROVAL_DECISIONS_SQL
+} from '../../../worker/src/homolog-worker.ts'
+
+// SPEC 0272 fix: the worker waits 30 s before recovering; these tests recover at once.
+const noFloor = {
+  window: { minAgeSeconds: 0, maxAgeSeconds: null as number | null }
+}
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const pgRequired = process.env.AUD19_PG_REQUIRED === '1'
@@ -558,10 +566,10 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           pool: setup.pool
         } as never
         await expect(
-          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, noFloor)
         ).resolves.toBe(1)
         await expect(
-          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, noFloor)
         ).resolves.toBe(0)
         expect(await countDecisionEvents(setup.pool, approvalId)).toBe(1)
 
@@ -600,6 +608,416 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
             .query(`DROP FUNCTION ${functionName}()`)
             .catch(() => undefined)
         }
+        await teardownDatabase(setup)
+      }
+    }
+  )
+
+  for (const advancedStatus of ['RESERVED', 'EXECUTING', 'EXECUTED']) {
+    itWithPostgres(
+      `AUD0625 F08: worker records the decision event after the approval advanced to ${advancedStatus} (SPEC 0272)`,
+      async () => {
+        const setup = await setupDatabase()
+        const triggerName = `reject_audit_f08_${Date.now()}`
+        const functionName = `${triggerName}_fn`
+        let triggerInstalled = false
+        try {
+          const store = new PostgresOperationalExecutionStore(
+            setup.pool as unknown as PostgresPoolLike
+          )
+          const authority = new PostgresApprovalAuthority(
+            setup.pool as unknown as PostgresPoolLike
+          )
+          const { executionId, approvalId } = await waitingFixture(
+            store,
+            authority,
+            `pg-f08-${advancedStatus}-${Date.now()}`
+          )
+          await setup.pool.query(`
+            CREATE FUNCTION ${functionName}() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+              IF NEW.type = 'approval_decision' THEN
+                RAISE EXCEPTION 'injected approval audit failure';
+              END IF;
+              RETURN NEW;
+            END;
+            $$
+          `)
+          await setup.pool.query(
+            `CREATE TRIGGER ${triggerName}
+               BEFORE INSERT ON audit_events
+               FOR EACH ROW EXECUTE FUNCTION ${functionName}()`
+          )
+          triggerInstalled = true
+
+          const app = buildServer({
+            persistence: { kind: 'postgres', client: setup.pool as never },
+            operationalExecution: store as never,
+            operationalApprovalAuthority: authority as never
+          })
+          await grantExecution(app, executionId)
+          const first = await app.inject({
+            method: 'POST',
+            url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,
+            headers: decisionHeaders('pg-f08-command-1'),
+            payload: { decision: 'approved', note: 'f08 reason' }
+          })
+          await app.close()
+          expect(first.statusCode).toBe(500)
+          expect(await countDecisionEvents(setup.pool, approvalId)).toBe(0)
+
+          await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
+          await setup.pool.query(`DROP FUNCTION ${functionName}()`)
+          triggerInstalled = false
+
+          // The execution advanced after the crash: the approval left APPROVED.
+          await setup.pool.query(
+            `UPDATE runtime_approvals SET status = $2 WHERE approval_id = $1`,
+            [approvalId, advancedStatus]
+          )
+          const stateBefore = (await store.get(tenantA, executionId))?.state
+
+          const runtime = {
+            approvalAuthority: authority,
+            store,
+            pool: setup.pool
+          } as never
+          const ticks = await Promise.all([
+            reconcileStuckApprovalDecisions(
+              setup.pool,
+              tenantA,
+              runtime,
+              noFloor
+            ),
+            reconcileStuckApprovalDecisions(
+              setup.pool,
+              tenantA,
+              runtime,
+              noFloor
+            )
+          ])
+          expect(ticks.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(1)
+          await expect(
+            reconcileStuckApprovalDecisions(
+              setup.pool,
+              tenantA,
+              runtime,
+              noFloor
+            )
+          ).resolves.toBe(0)
+          expect(await countDecisionEvents(setup.pool, approvalId)).toBe(1)
+          expect((await store.get(tenantA, executionId))?.state).toBe(
+            stateBefore
+          )
+
+          const event = await setup.pool.query<{
+            payload: Record<string, unknown>
+          }>(
+            `SELECT payload FROM audit_events
+              WHERE type = 'approval_decision' AND payload->>'approvalId' = $1`,
+            [approvalId]
+          )
+          expect(event.rows[0]?.payload).toMatchObject({
+            decision: 'approved',
+            commandKey: 'pg-f08-command-1',
+            recovered: true,
+            observedApprovalStatus: advancedStatus
+          })
+        } finally {
+          if (triggerInstalled) {
+            await setup.pool
+              .query(`DROP TRIGGER ${triggerName} ON audit_events`)
+              .catch(() => undefined)
+            await setup.pool
+              .query(`DROP FUNCTION ${functionName}()`)
+              .catch(() => undefined)
+          }
+          await teardownDatabase(setup)
+        }
+      }
+    )
+  }
+
+  // SPEC 0272 review fixes (D9): age window, envelope filter, infra errors, plan.
+  /**
+   * Builds one waiting execution per tag, then decides every one of them with
+   * the audit append failing (the crash), so no tag's resume re-queues an
+   * execution another tag still has to claim.
+   */
+  async function crashedDecisions(
+    setup: Awaited<ReturnType<typeof setupDatabase>>,
+    tags: string[]
+  ) {
+    const store = new PostgresOperationalExecutionStore(
+      setup.pool as unknown as PostgresPoolLike
+    )
+    const authority = new PostgresApprovalAuthority(
+      setup.pool as unknown as PostgresPoolLike
+    )
+    const waiting: Array<{
+      tag: string
+      executionId: string
+      approvalId: string
+    }> = []
+    for (const tag of tags) {
+      const fixture = await waitingFixture(
+        store,
+        authority,
+        `pg-f08-${tag}-${Date.now()}`
+      )
+      waiting.push({ tag, ...fixture })
+    }
+    const triggerName = `reject_audit_f08_${Date.now()}`
+    await setup.pool.query(`
+      CREATE FUNCTION ${triggerName}_fn() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.type = 'approval_decision' THEN
+          RAISE EXCEPTION 'injected approval audit failure';
+        END IF;
+        RETURN NEW;
+      END;
+      $$
+    `)
+    await setup.pool.query(
+      `CREATE TRIGGER ${triggerName}
+         BEFORE INSERT ON audit_events
+         FOR EACH ROW EXECUTE FUNCTION ${triggerName}_fn()`
+    )
+    // The case authority lives in PostgreSQL: a second grant for the same
+    // principal hits a stale revision, so each execution gets its own approver.
+    for (const [index, item] of waiting.entries()) {
+      const operatorId = `approver.f08.${index}`
+      const app = buildServer({
+        persistence: { kind: 'postgres', client: setup.pool as never },
+        operationalExecution: store as never,
+        operationalApprovalAuthority: authority as never
+      })
+      await app.caseAuthority.registerExecutionLink(
+        tenantA as never,
+        item.executionId,
+        {
+          kind: 'independent',
+          conversationId: 'conversation_atomic_pg_synthetic',
+          sessionId: 'session_atomic_pg_synthetic'
+        },
+        true
+      )
+      await grantCase(app, {
+        kind: 'independent_execution',
+        resourceId: item.executionId,
+        operatorId,
+        role: 'Approver',
+        tenantId: tenantA as never
+      })
+      const response = await app.inject({
+        method: 'POST',
+        url: `/v1/executions/${item.executionId}/approvals/${item.approvalId}/decision`,
+        headers: {
+          ...decisionHeaders(`pg-f08-${item.tag}-command`),
+          'x-operator-id': operatorId
+        },
+        payload: { decision: 'approved', note: 'f08 window' }
+      })
+      await app.close()
+      expect(response.statusCode).toBe(500)
+    }
+    await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
+    await setup.pool.query(`DROP FUNCTION ${triggerName}_fn()`)
+    return {
+      items: waiting,
+      runtime: {
+        approvalAuthority: authority,
+        store,
+        pool: setup.pool
+      } as never
+    }
+  }
+
+  const age = (setup: { pool: Pool }, executionId: string, interval: string) =>
+    setup.pool.query(
+      `UPDATE operational_executions SET updated_at = now() - $2::interval WHERE id = $1`,
+      [executionId, interval]
+    )
+
+  itWithPostgres(
+    'AUD0625 F08 fix: wait floor of 30 s (fresh row left alone, aged row recovered)',
+    async () => {
+      const setup = await setupDatabase()
+      try {
+        const { items, runtime } = await crashedDecisions(setup, ['floor'])
+        const fresh = items[0]!
+        await expect(
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+        ).resolves.toBe(0)
+        expect(await countDecisionEvents(setup.pool, fresh.approvalId)).toBe(0)
+        await age(setup, fresh.executionId, '2 minutes')
+        await expect(
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+        ).resolves.toBe(1)
+        expect(await countDecisionEvents(setup.pool, fresh.approvalId)).toBe(1)
+      } finally {
+        await teardownDatabase(setup)
+      }
+    }
+  )
+
+  itWithPostgres(
+    'AUD0625 F08 fix: default 24 h ceiling ignores old history; no ceiling (backfill) recovers it',
+    async () => {
+      const setup = await setupDatabase()
+      try {
+        const { items, runtime } = await crashedDecisions(setup, ['ceiling'])
+        const old = items[0]!
+        await age(setup, old.executionId, '48 hours')
+        await expect(
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+        ).resolves.toBe(0)
+        expect(await countDecisionEvents(setup.pool, old.approvalId)).toBe(0)
+        await expect(
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, {
+            window: { minAgeSeconds: 30, maxAgeSeconds: null }
+          })
+        ).resolves.toBe(1)
+        expect(await countDecisionEvents(setup.pool, old.approvalId)).toBe(1)
+      } finally {
+        await teardownDatabase(setup)
+      }
+    }
+  )
+
+  itWithPostgres(
+    'AUD0625 F08 fix (N1): rows without the persisted envelope do not take the batch slots and are counted',
+    async () => {
+      const setup = await setupDatabase()
+      try {
+        const { items, runtime } = await crashedDecisions(setup, [
+          'bad',
+          'good'
+        ])
+        const [bad, good] = items as [(typeof items)[0], (typeof items)[0]]
+        await setup.pool.query(
+          `UPDATE runtime_approvals SET decision_command_key = NULL WHERE approval_id = $1`,
+          [bad.approvalId]
+        )
+        await age(setup, bad.executionId, '10 minutes')
+        await age(setup, good.executionId, '5 minutes')
+        const counts: number[] = []
+        const failures: Array<{ approvalId: string }> = []
+        await expect(
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, {
+            limit: 1,
+            onIncompleteEnvelope: (count) => counts.push(count),
+            onRowFailed: (failure) => failures.push(failure)
+          })
+        ).resolves.toBe(1)
+        // limit 1 and the oldest row is unrecoverable: it must not hold the slot.
+        expect(await countDecisionEvents(setup.pool, good.approvalId)).toBe(1)
+        expect(await countDecisionEvents(setup.pool, bad.approvalId)).toBe(0)
+        expect(counts).toEqual([1])
+        expect(failures).toEqual([])
+      } finally {
+        await teardownDatabase(setup)
+      }
+    }
+  )
+
+  itWithPostgres(
+    'AUD0625 F08 fix (N2): a server shutdown (57P01) in the middle of the loop fails the tick',
+    async () => {
+      const setup = await setupDatabase()
+      try {
+        const { items, runtime } = await crashedDecisions(setup, ['a', 'b'])
+        for (const item of items)
+          await age(setup, item.executionId, '5 minutes')
+        const failing = {
+          ...(runtime as unknown as Record<string, unknown>),
+          approvalAuthority: {
+            get: async () => {
+              throw Object.assign(new Error('terminating connection'), {
+                code: '57P01'
+              })
+            }
+          }
+        } as never
+        await expect(
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, failing)
+        ).rejects.toMatchObject({ code: '57P01' })
+      } finally {
+        await teardownDatabase(setup)
+      }
+    }
+  )
+
+  itWithPostgres(
+    'AUD0625 F08 fix: plan of the final selector on ~10k synthetic rows uses uq_audit_approval_decision',
+    async () => {
+      const setup = await setupDatabase()
+      const client = await setup.pool.connect()
+      try {
+        const { items } = await crashedDecisions(setup, ['seed'])
+        const seed = items[0]!
+        await age(setup, seed.executionId, '10 minutes')
+        const total = 10_000
+        // Clone the real rows (jsonb keeps every NOT NULL column valid).
+        await client.query(
+          `INSERT INTO runtime_approvals
+             SELECT (jsonb_populate_record(NULL::runtime_approvals,
+               to_jsonb(a) || jsonb_build_object(
+                 'approval_id', 'syn_' || g,
+                 'operation_key', 'syn_op_' || g))).*
+             FROM runtime_approvals a, generate_series(1, $2::int) AS g
+            WHERE a.approval_id = $1`,
+          [seed.approvalId, total]
+        )
+        await client.query(
+          `INSERT INTO operational_executions
+             SELECT (jsonb_populate_record(NULL::operational_executions,
+               to_jsonb(e) || jsonb_build_object(
+                 'id', 'syn_exec_' || g,
+                 'approval_id', 'syn_' || g,
+                 'idempotency_key', 'syn_key_' || g,
+                 'updated_at', now() - (g || ' seconds')::interval))).*
+             FROM operational_executions e, generate_series(1, $2::int) AS g
+            WHERE e.id = $1`,
+          [seed.executionId, total]
+        )
+        // Half already carry their decision event (what the NOT EXISTS skips).
+        await client.query(
+          `INSERT INTO audit_events
+             (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload)
+           SELECT $1, 'syn_audit_' || g, 'approval_decision', 'Approver', 'synthetic',
+                  'corr_syn_' || g, 'policy-v1',
+                  jsonb_build_object('approvalId', 'syn_' || g, 'decision', 'approved')
+             FROM generate_series(1, $2::int) AS g WHERE g % 2 = 0`,
+          [tenantA, total]
+        )
+        await client.query('ANALYZE')
+        await client.query(`SELECT set_config('cvg.tenant_id', $1, false)`, [
+          tenantA
+        ])
+        const explain = async (settings: string) => {
+          await client.query(settings)
+          const plan = await client.query<{ 'QUERY PLAN': string }>(
+            `EXPLAIN (ANALYZE, BUFFERS) ${STUCK_APPROVAL_DECISIONS_SQL}`,
+            [25, 30, 86_400]
+          )
+          return plan.rows.map((row) => row['QUERY PLAN']).join('\n')
+        }
+        const natural = await explain('RESET enable_seqscan')
+        const forced = await explain('SET enable_seqscan = off')
+        const out = process.env.F08_EXPLAIN_OUT
+        if (out) {
+          const { writeFileSync } = await import('node:fs')
+          writeFileSync(
+            out,
+            `-- ${total} synthetic approvals/executions, half with their event; window 30 s .. 24 h\n-- natural plan\n${natural}\n\n-- enable_seqscan = off (index availability)\n${forced}\n`
+          )
+        }
+        expect(forced).toContain('uq_audit_approval_decision')
+      } finally {
+        client.release()
         await teardownDatabase(setup)
       }
     }
