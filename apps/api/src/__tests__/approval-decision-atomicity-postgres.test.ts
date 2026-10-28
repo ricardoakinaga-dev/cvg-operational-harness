@@ -18,6 +18,11 @@ import { assertApprovalDecisionAuditDedupe, buildServer } from '../server.ts'
 import { grantCase } from './case-authorization-fixtures.ts'
 import { reconcileStuckApprovalDecisions } from '../../../worker/src/homolog-worker.ts'
 
+// SPEC 0272 fix: the worker waits 30 s before recovering; these tests recover at once.
+const noFloor = {
+  window: { minAgeSeconds: 0, maxAgeSeconds: null as number | null }
+}
+
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const pgRequired = process.env.AUD19_PG_REQUIRED === '1'
 const pgEnabled = Boolean(testDatabaseUrl)
@@ -558,10 +563,10 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           pool: setup.pool
         } as never
         await expect(
-          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, noFloor)
         ).resolves.toBe(1)
         await expect(
-          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+          reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, noFloor)
         ).resolves.toBe(0)
         expect(await countDecisionEvents(setup.pool, approvalId)).toBe(1)
 
@@ -676,12 +681,27 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
             pool: setup.pool
           } as never
           const ticks = await Promise.all([
-            reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime),
-            reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+            reconcileStuckApprovalDecisions(
+              setup.pool,
+              tenantA,
+              runtime,
+              noFloor
+            ),
+            reconcileStuckApprovalDecisions(
+              setup.pool,
+              tenantA,
+              runtime,
+              noFloor
+            )
           ])
           expect(ticks.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(1)
           await expect(
-            reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+            reconcileStuckApprovalDecisions(
+              setup.pool,
+              tenantA,
+              runtime,
+              noFloor
+            )
           ).resolves.toBe(0)
           expect(await countDecisionEvents(setup.pool, approvalId)).toBe(1)
           expect((await store.get(tenantA, executionId))?.state).toBe(
