@@ -1,6 +1,6 @@
 # SPEC 0267 — Model gateway: vínculo prompt↔instrução, classificação efetiva e contabilização de uso
 
-Data: 28/10/2026. Estado: **PROPOSED_FOR_HUMAN_T3_REVIEW**. Trilha T3 (policy/segurança). BUILD **não autorizado** até revisão explícita do Ricardo. Produção continua NO_GO; esta SPEC não concede release.
+Data: 28/10/2026. Estado: **IMPLEMENTED_LOCAL** (era PROPOSED_FOR_HUMAN_T3_REVIEW; o Ricardo aprovou o BUILD T3 local e sintético em 28/10/2026 com as recomendações de Q1, Q2 e Q3, recibo `docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-2.json`, vinculado ao sha256 `d0d8b19c…` desta SPEC antes da atualização de estado). Trilha T3 (policy/segurança). Produção continua NO_GO; esta SPEC não concede release, push nem PR.
 
 Task: `AUD0625-MODEL-GATEWAY-D9-20261028`. Origem: auditoria 0625 (`docs/04_audit/0625_repository_score_audit_2026-10-28.md`) achados **F06 (P1)**, **F10 (P2)** e **F11 (P2)**. Base: `origin/main` 61e5cf8f.
 
@@ -8,19 +8,19 @@ Esta SPEC é **delta** da SPEC 0167, módulo **UP91-013** ("prompt aprovado e by
 
 ## 1. Recon (CURRENT, arquivo:linha em 61e5cf8f)
 
-| Fato | Onde |
-| --- | --- |
-| `ModelInput` aceita `system` livre (≤16.000) e mensagens com role `system`; nada o relaciona ao registry | `packages/model-gateway/src/contracts.ts:17-31` |
-| `generate` valida o wire, resolve o prompt só para checar status/tenant/efetividade/hash de referência e devolve o `PromptRecord` | `gateway.ts:164-177`, `#resolvePrompt` `:556-595` |
-| O provider recebe `input: request.input` (do caller) e `promptSha256: prompt.sha256` (do registry), lado a lado, sem vínculo | `gateway.ts:350-358` |
-| `ProviderRequest` não carrega conteúdo aprovado nem digest da instrução enviada; adapters montam `system` a partir de `request.input.system` | `contracts.ts:81-94`, `providers/openai-compatible.ts:133-139`, `providers/ollama.ts` (idem) |
-| O registry calcula `sha256(content)` e confere `reference.sha256` opcional, mas a referência vem do caller e só prova qual versão foi citada | `prompt-registry.ts:55-57`, `:145-150` |
-| `#resolvePrompt` calcula `strictest`, mas só o usa para negar quando o request é **mais amplo** que o prompt; o valor não é devolvido | `gateway.ts:569-583` |
-| A rota usa a classificação do request (`dataClassification` do wire, default `INTERNAL`) | `gateway.ts:173-182`, `router.ts:60-76` |
-| Adapters convertem uso ausente em zero | `providers/openai-compatible.ts:238-241`, `providers/ollama.ts:209-211` (o `deterministic.ts:37` devolve 0/0 legítimo) |
-| O gateway executa `#parseOutput` **antes** de validar/registrar usage, meter e settle; saída recusada lança antes de `meter.record` e `budget.settle` | `gateway.ts:367-386` |
-| `BudgetGuard` reserva a estimativa e só cobra diferença positiva em `settle`; nunca estorna | `budget.ts:140-152` |
-| Consumidores: runtime e adapters chamam `generate`; ver SPEC 0167/013 para a lista | `packages/agent-runtime`, `packages/adapters/src/model-adapter.ts`, `products/shift-assistant/src/organizer.ts` |
+| Fato                                                                                                                                                  | Onde                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `ModelInput` aceita `system` livre (≤16.000) e mensagens com role `system`; nada o relaciona ao registry                                              | `packages/model-gateway/src/contracts.ts:17-31`                                                                        |
+| `generate` valida o wire, resolve o prompt só para checar status/tenant/efetividade/hash de referência e devolve o `PromptRecord`                     | `gateway.ts:164-177`, `#resolvePrompt` `:556-595`                                                                      |
+| O provider recebe `input: request.input` (do caller) e `promptSha256: prompt.sha256` (do registry), lado a lado, sem vínculo                          | `gateway.ts:350-358`                                                                                                   |
+| `ProviderRequest` não carrega conteúdo aprovado nem digest da instrução enviada; adapters montam `system` a partir de `request.input.system`          | `contracts.ts:81-94`, `providers/openai-compatible.ts:133-139`, `providers/ollama.ts` (idem)                           |
+| O registry calcula `sha256(content)` e confere `reference.sha256` opcional, mas a referência vem do caller e só prova qual versão foi citada          | `prompt-registry.ts:55-57`, `:145-150`                                                                                 |
+| `#resolvePrompt` calcula `strictest`, mas só o usa para negar quando o request é **mais amplo** que o prompt; o valor não é devolvido                 | `gateway.ts:569-583`                                                                                                   |
+| A rota usa a classificação do request (`dataClassification` do wire, default `INTERNAL`)                                                              | `gateway.ts:173-182`, `router.ts:60-76`                                                                                |
+| Adapters convertem uso ausente em zero                                                                                                                | `providers/openai-compatible.ts:238-241`, `providers/ollama.ts:209-211` (o `deterministic.ts:37` devolve 0/0 legítimo) |
+| O gateway executa `#parseOutput` **antes** de validar/registrar usage, meter e settle; saída recusada lança antes de `meter.record` e `budget.settle` | `gateway.ts:367-386`                                                                                                   |
+| `BudgetGuard` reserva a estimativa e só cobra diferença positiva em `settle`; nunca estorna                                                           | `budget.ts:140-152`                                                                                                    |
+| Consumidores: runtime e adapters chamam `generate`; ver SPEC 0167/013 para a lista                                                                    | `packages/agent-runtime`, `packages/adapters/src/model-adapter.ts`, `products/shift-assistant/src/organizer.ts`        |
 
 Reprodução (auditoria): `docs/04_audit/evidence/AUD-SCORE-20261028/audit0625-boundaries.test.ts.txt`. Reaproveitada e ampliada em `packages/model-gateway/src/__tests__/aud0625-binding-classification-usage.test.ts` (21 testes: 10 controles + 11 `it.fails` do comportamento-alvo). Evidência em `docs/04_audit/evidence/AUD0625-MODEL-GATEWAY-D9-20261028/`.
 
@@ -78,28 +78,28 @@ Fora de escopo: preços, aprovação de provider externo, reconciliação financ
 
 Fase atual (feita): `packages/model-gateway/src/__tests__/aud0625-binding-classification-usage.test.ts`.
 
-| Teste | Tipo hoje | Cobre |
-| --- | --- | --- |
-| revoked → sem dispatch | controle | I3 |
-| system idêntico entregue com hash e mensagens em ordem | controle | I1/I2 |
-| dados dinâmicos diferentes continuam permitidos | controle | I2 |
-| system divergente → `prompt_content_mismatch`, zero provider | `it.fails` | C1 |
-| mensagem `system` divergente → `prompt_content_mismatch` | `it.fails` | C1 |
-| sem system → entrega o texto aprovado | `it.fails` | I1 |
-| `promptBinding` com digests (instrução e material) | `it.fails` | C1/C2 |
-| CLINICAL request recusado antes do externo | controle | I5 |
-| INTERNAL/INTERNAL alcança externo | controle | I5 |
-| request amplo demais continua negado | controle | I5 |
-| CLINICAL registry + INTERNAL request em local | controle | I5 |
-| CLINICAL registry + INTERNAL request recusado no externo | `it.fails` | C3 |
-| default de schema não afrouxa CLINICAL | `it.fails` | C3/I6 |
-| substituição local pela classe efetiva | `it.fails` | C3 |
-| usage reportado preservado; zero reportado preservado | controle | I7 |
-| sem usage ≠ 0/0 no adapter | `it.fails` | C4 |
-| sem usage → `usageStatus` e custo ≥ reserva | `it.fails` | C4/I8 |
-| saída recusada: meter registra usage | `it.fails` | C5 |
-| saída recusada: orçamento cobra custo real | `it.fails` | C5 |
-| schema_invalid continua rejeitando | controle | — |
+| Teste                                                        | Tipo hoje  | Cobre |
+| ------------------------------------------------------------ | ---------- | ----- |
+| revoked → sem dispatch                                       | controle   | I3    |
+| system idêntico entregue com hash e mensagens em ordem       | controle   | I1/I2 |
+| dados dinâmicos diferentes continuam permitidos              | controle   | I2    |
+| system divergente → `prompt_content_mismatch`, zero provider | `it.fails` | C1    |
+| mensagem `system` divergente → `prompt_content_mismatch`     | `it.fails` | C1    |
+| sem system → entrega o texto aprovado                        | `it.fails` | I1    |
+| `promptBinding` com digests (instrução e material)           | `it.fails` | C1/C2 |
+| CLINICAL request recusado antes do externo                   | controle   | I5    |
+| INTERNAL/INTERNAL alcança externo                            | controle   | I5    |
+| request amplo demais continua negado                         | controle   | I5    |
+| CLINICAL registry + INTERNAL request em local                | controle   | I5    |
+| CLINICAL registry + INTERNAL request recusado no externo     | `it.fails` | C3    |
+| default de schema não afrouxa CLINICAL                       | `it.fails` | C3/I6 |
+| substituição local pela classe efetiva                       | `it.fails` | C3    |
+| usage reportado preservado; zero reportado preservado        | controle   | I7    |
+| sem usage ≠ 0/0 no adapter                                   | `it.fails` | C4    |
+| sem usage → `usageStatus` e custo ≥ reserva                  | `it.fails` | C4/I8 |
+| saída recusada: meter registra usage                         | `it.fails` | C5    |
+| saída recusada: orçamento cobra custo real                   | `it.fails` | C5    |
+| schema_invalid continua rejeitando                           | controle   | —     |
 
 Para o BUILD (ainda sem teste): revogação antes de retry/fallback; Ollama sem usage; mutação tardia do input; ordem de erros (`prompt_content_mismatch` antes de orçamento); eventos de roteamento com classe efetiva; multi-attempt com saída recusada.
 
@@ -116,3 +116,17 @@ Perguntas que mudam rumo (recomendação em negrito):
 ## 7. Fora de escopo e não-aprovações
 
 Sem implementação nesta fase; sem push/PR/merge; sem lockfile, certify, E2E, Postgres ou Docker; sem provider, canal ou dado real; sem alterar `packages/sandbox`, `packages/harness/src/capability-boundary.ts` ou `kernel/`. A aprovação desta SPEC pelo Ricardo é condição para o BUILD; esta entrega não é aceite.
+
+## 8. Resultado do BUILD (AUD0625-MODEL-GATEWAY-BUILD-D9-20261028)
+
+Conteúdo normativo das seções 1 a 7 inalterado; só a linha de estado e esta seção mudaram. Implementado no commit local desta branch, evidência em `docs/04_audit/evidence/AUD0625-MODEL-GATEWAY-BUILD-D9-20261028/`.
+
+Escolhas de implementação dentro da SPEC:
+
+- `PromptBinding` e o renderer ficam em `src/prompt-binding.ts`. `ProviderRequest.promptBinding` é opcional no tipo, para não quebrar chamadores diretos de adapter; o gateway sempre o preenche e os adapters (OpenAI-compatible, Ollama, determinístico) conferem system único e os dois digests antes do wire quando ele existe.
+- Novo código `prompt_content_mismatch` (não retryável). O gateway resolve de novo o registry antes de **cada** tentativa; prompt revogado ou alterado bloqueia retry e fallback.
+- Classe efetiva: `request > registry` segue negado; senão o registry governa a rota. Como CLINICAL/FINANCIAL/CREDENTIAL são `NO_MODEL` e CONFIDENTIAL é `LOCAL_ONLY`, um prompt CLINICAL não alcança mais nenhum provider.
+- Uso ausente: o adapter omite `usage` (OpenAI-compatible e Ollama exigem os dois contadores). `ModelResult.usage` continua obrigatório; com `usageStatus: 'unreported'` ele carrega o **limite superior de contabilização** (bytes UTF-8 da entrada renderizada como tokens de entrada e `maxTokens` como saída), não uma medição. Custo = `max(reserva, custo desse limite)`. `TokenMeter.unreportedRequests` conta à parte e não soma tokens.
+- Ordem: o uso é validado, medido e liquidado no orçamento **antes** do parse da saída; saída recusada continua cobrada e o evento `model.call.failed` leva tokens e custo. O circuito só registra sucesso depois do parse. A liquidação cobre a reserva só na primeira tentativa contabilizada; as seguintes são cobradas integralmente (hoje inalcançável, porque só `schema_invalid` falha depois da contabilização e não é retryável).
+
+Testes: os 11 `it.fails` viraram `it`. Ajustes nos testes de caracterização da fase 1 (meus): o pedido padrão passou a trazer o `system` aprovado; o controle "CLINICAL registry + INTERNAL request em provider local" foi trocado por CONFIDENTIAL, e a substituição local usa CONFIDENTIAL, porque CLINICAL é NO_MODEL (a fase 1 supunha local permitido). Testes antigos ajustados: ver `evidence/.../existing-tests-adjusted.md`.

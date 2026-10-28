@@ -303,10 +303,12 @@ describe('gateway routing substitution and policy', () => {
   })
 
   it('accepts a request class narrower than the approved prompt class', async () => {
+    // SPEC 0267 §3.2: the prompt class governs routing, so the class must
+    // still allow the (local) profile; a CLINICAL prompt allows no model.
     const gateway = new ModelGateway({
       providers: [successfulProvider()],
       profiles: { fast: profile('fast') },
-      prompts: registryFor('CLINICAL'),
+      prompts: registryFor('CONFIDENTIAL'),
       clock: () => NOW
     })
     const result = await gateway.generate(

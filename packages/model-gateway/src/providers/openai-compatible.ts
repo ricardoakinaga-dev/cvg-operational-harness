@@ -13,6 +13,7 @@ import type {
   ProviderResult
 } from '../contracts.ts'
 import { ModelProviderError } from '../errors.ts'
+import { verifyPromptBinding } from '../prompt-binding.ts'
 import {
   networkError,
   providerHttpError,
@@ -129,6 +130,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
   }
 
   async execute(request: ProviderRequest): Promise<ProviderResult> {
+    const bindingError = verifyPromptBinding(request)
+    if (bindingError !== undefined) {
+      throw new ModelProviderError(this.id, 'invalid_request', bindingError)
+    }
     const endpoint = `${this.#baseUrl}/chat/completions`
     const signal = combineTimeoutSignal(request.signal, request.timeoutMs)
     const messages = [
@@ -235,10 +240,16 @@ export class OpenAICompatibleProvider implements ModelProvider {
     const text = choice.message.content ?? ''
     return {
       text,
-      usage: {
-        inputTokens: parsed.data.usage?.prompt_tokens ?? 0,
-        outputTokens: parsed.data.usage?.completion_tokens ?? 0
-      },
+      // SPEC 0267 §3.3: absent counters are unknown, never zero.
+      ...(parsed.data.usage?.prompt_tokens !== undefined &&
+      parsed.data.usage.completion_tokens !== undefined
+        ? {
+            usage: {
+              inputTokens: parsed.data.usage.prompt_tokens,
+              outputTokens: parsed.data.usage.completion_tokens
+            }
+          }
+        : {}),
       providerId: this.id,
       model: this.#model,
       externalCall: this.location === 'external',

@@ -3,6 +3,7 @@ export const ModelGatewayErrorCodes = {
   prompt_unknown: 'prompt_unknown',
   prompt_revoked: 'prompt_revoked',
   prompt_hash_mismatch: 'prompt_hash_mismatch',
+  prompt_content_mismatch: 'prompt_content_mismatch',
   profile_unknown: 'profile_unknown',
   provider_unknown: 'provider_unknown',
   policy_denied: 'policy_denied',
