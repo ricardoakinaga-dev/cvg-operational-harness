@@ -13,6 +13,19 @@
 
 export type ApprovalDecision = 'APPROVED' | 'REJECTED'
 
+/**
+ * A row that cannot be reconciled because of its own data: not decided yet, a
+ * decision that disagrees with the record, or an incomplete persisted
+ * envelope. Callers may isolate these per row; any other error (connection
+ * loss, server shutdown, a failing port) must propagate.
+ */
+export class ApprovalReconciliationDataError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ApprovalReconciliationDataError'
+  }
+}
+
 /** Statuses an APPROVED approval moves through while its execution advances. */
 export const ADVANCED_APPROVED_STATUSES: ReadonlySet<string> = new Set([
   'RESERVED',
@@ -90,7 +103,7 @@ export async function reconcileApprovalDecision(
 ): Promise<ApprovalReconciliationReport> {
   const approval = await ports.getApproval(input.tenantId, input.approvalId)
   if (approval.status === 'PENDING' || approval.status === 'REQUESTED') {
-    throw new Error(
+    throw new ApprovalReconciliationDataError(
       `reconciliation requires a decided approval (status=${approval.status})`
     )
   }
@@ -99,12 +112,12 @@ export async function reconcileApprovalDecision(
   // state never authorises the opposite decision.
   const advanced = ADVANCED_APPROVED_STATUSES.has(approval.status)
   if (!advanced && approval.status !== input.decision) {
-    throw new Error(
+    throw new ApprovalReconciliationDataError(
       `reconciliation decision mismatch (recorded=${approval.status} requested=${input.decision})`
     )
   }
   if (advanced && input.decision !== 'APPROVED') {
-    throw new Error(
+    throw new ApprovalReconciliationDataError(
       `reconciliation decision mismatch (recorded=${approval.status} requested=${input.decision})`
     )
   }
@@ -113,7 +126,7 @@ export async function reconcileApprovalDecision(
   const correlationId = approval.decisionCorrelationId
   const commandKey = approval.decisionCommandKey
   if (!actorId || !actorType || !correlationId || !commandKey) {
-    throw new Error(
+    throw new ApprovalReconciliationDataError(
       'reconciliation requires a complete persisted approval decision envelope'
     )
   }

@@ -16,9 +16,14 @@
  */
 import { Pool } from 'pg'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
+import { ApprovalError } from '@cvg/approval-engine'
+import { OperationalExecutionError } from '@cvg/harness'
 import { createShutdownController } from '@cvg/shared'
 import { sweepExpiredApprovals } from '@cvg/agent-runtime'
-import { reconcileApprovalDecision } from '@cvg/agent-core'
+import {
+  ApprovalReconciliationDataError,
+  reconcileApprovalDecision
+} from '@cvg/agent-core'
 import {
   TenantScopedPostgresRuntimeRepository,
   withTenantContext,
@@ -213,22 +218,21 @@ export const INCOMPLETE_ENVELOPE_COUNT_SQL = `SELECT count(*)::integer AS incomp
        ${stuckDecisionsFrom('$1', '$2')}
           AND NOT (${ENVELOPE_COMPLETE})`
 
-const INFRA_ERROR_CODES = new Set([
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'EPIPE',
-  'ENOTFOUND',
-  '57P01',
-  '57P02',
-  '57P03'
-])
-
-/** Connection and server-shutdown failures: the whole tick must fail. */
-export function isInfrastructureError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code
-  if (typeof code !== 'string') return false
-  return INFRA_ERROR_CODES.has(code) || code.startsWith('08')
+/**
+ * Errors that belong to one row and repeat on every tick for it: the reconciler's
+ * own data errors, an execution that no longer accepts the resume
+ * (`invalid_action`, `conflict`) and an approval that is gone (`not_found`).
+ * Matched by type and `code`, never by message. Everything else (lease_lost,
+ * pg and pg-pool errors with or without a code, a plain Error) is not a row's
+ * fault and fails the tick.
+ */
+export function isRowDataError(error: unknown): boolean {
+  if (error instanceof ApprovalReconciliationDataError) return true
+  if (error instanceof OperationalExecutionError) {
+    return error.code === 'invalid_action' || error.code === 'conflict'
+  }
+  if (error instanceof ApprovalError) return error.code === 'not_found'
+  return false
 }
 
 export interface StuckDecisionOptions {
@@ -335,9 +339,11 @@ export async function reconcileStuckApprovalDecisions(
       )
       reconciled += 1
     } catch (error) {
-      // A broken connection or a server shutdown is not a bad row: the whole
-      // tick fails so worker.homolog_sweep_failed fires.
-      if (isInfrastructureError(error)) throw error
+      // Only the row's own persistent problems are isolated (isRowDataError).
+      // Anything else (a connection that dropped, a server shutdown, pg-pool
+      // errors that carry no code, lease_lost) fails the whole tick so
+      // worker.homolog_sweep_failed fires.
+      if (!isRowDataError(error)) throw error
       onRowFailed({
         approvalId: row.approval_id,
         reason: error instanceof Error ? error.message : 'unknown'
