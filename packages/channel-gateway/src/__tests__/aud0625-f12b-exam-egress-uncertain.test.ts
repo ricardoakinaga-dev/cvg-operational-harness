@@ -10,10 +10,10 @@ import {
   createExamUploadTool
 } from '../index.ts'
 
-// SPEC 0273 (AUD0625 F12b), phase 1: characterization of exam-egress after the
-// request left. `it.fails` states the target behaviour and passes today only
-// because the defect exists; plain `it` are controls that hold before and
-// after the fix. Synthetic data, injected fetch, zero egress.
+// SPEC 0273 (AUD0625 F12b): exam-egress after the request left. The upload
+// 5xx cases were `it.fails` in phase 1 and are plain `it` since the BUILD;
+// the rest are controls that hold before and after. Synthetic data, injected
+// fetch, zero egress.
 
 const context: ToolExecutionContext = {
   tenantId: 'tenant-f12b' as never,
@@ -78,35 +78,20 @@ async function runTwice(
 
 describe('F12b exam.upload: a 5xx after the request left', () => {
   for (const status of [500, 502, 503, 504]) {
-    it.fails(
-      `HTTP ${status} keeps the upload UNCERTAIN and never resends it`,
-      async () => {
-        const result = await runTwice(
-          createExamUploadTool,
-          async () => new Response('{}', { status })
-        )
-        expect(result.attempts).toBe(1)
-        expect(result.state).toBe('UNCERTAIN')
-        expect(result.first).toMatchObject({
-          status: 'FAILED',
-          error: expect.stringContaining('effect_uncertain')
-        })
-        expect(result.second.status).toBe('FAILED')
-      }
-    )
-  }
-
-  it('characterization: today a 503 is recorded FAILED "provider rejected" with 1 attempt', async () => {
-    const result = await runTwice(
-      createExamUploadTool,
-      async () => new Response('{}', { status: 503 })
-    )
-    expect(result.attempts).toBe(1)
-    expect(result.state).toBe('FAILED')
-    expect(result.first).toMatchObject({
-      error: expect.stringContaining('provider rejected exam.upload (HTTP 503)')
+    it(`HTTP ${status} keeps the upload UNCERTAIN and never resends it`, async () => {
+      const result = await runTwice(
+        createExamUploadTool,
+        async () => new Response('{}', { status })
+      )
+      expect(result.attempts).toBe(1)
+      expect(result.state).toBe('UNCERTAIN')
+      expect(result.first).toMatchObject({
+        status: 'FAILED',
+        error: expect.stringContaining('effect_uncertain')
+      })
+      expect(result.second.status).toBe('FAILED')
     })
-  })
+  }
 
   it('control: the same key is never resent after a 503 (no blind retry)', async () => {
     const result = await runTwice(
