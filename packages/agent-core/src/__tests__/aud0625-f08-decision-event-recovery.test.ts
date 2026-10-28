@@ -139,10 +139,10 @@ describe('F08: o evento de decisão é recuperável depois que a execução avan
     await expect(run(world({ ...decided, status: 'PENDING' }))).rejects.toThrow(
       'decided approval'
     )
-    const incomplete: Partial<ReconciliationApproval> = { ...decided }
+    const incomplete: Record<string, unknown> = { ...decided }
     delete incomplete.decisionCommandKey
     await expect(
-      run(world(incomplete as ReconciliationApproval))
+      run(world(incomplete as unknown as ReconciliationApproval))
     ).rejects.toThrow('envelope')
   })
 })
