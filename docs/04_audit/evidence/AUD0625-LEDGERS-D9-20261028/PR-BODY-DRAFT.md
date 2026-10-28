@@ -69,7 +69,7 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 - **O que mudou:** upload com 5xx depois do envio fica `UNCERTAIN` (pede reconciliação); download, 4xx, 429 e 2xx não mudam.
 - **SHAs:** SPEC e testes `cd754e6c`; BUILD `d9a35aa9`.
 - **Testes:** `channel-gateway` 17 arquivos e 198 testes; 8 de 8 mutações morrem.
-- **Revisão independente:** ainda não feita (mudança pequena, com mutações completas).
+- **Revisão independente:** Claude DF, APPROVE, sem achados (o upload com 5xx reusa o `uncertain()` existente e o predicado `statusEffectOptions`; download, 4xx e 429 seguem `FAILED`; as 8 mutações morrem).
 - **Testes antigos ajustados:** `pdsh-016-exam-egress.test.ts:258–280` usava um 503 como exemplo de rejeição; passou a usar um 400, e o 503 do upload é afirmado por quatro testes novos.
 
 ### 7. Livros e README (F20)
