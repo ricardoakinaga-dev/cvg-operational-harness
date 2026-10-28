@@ -1,4 +1,5 @@
 export * from './db.ts'
+export * from './api-creation.ts'
 export * from './outbox.ts'
 export * from './outbox-content-hash.ts'
 export * from './tenant-schema.ts'

@@ -542,6 +542,7 @@ function replaceState(target: DatabaseState, source: DatabaseState): void {
   target.ownerDrafts = source.ownerDrafts
   target.patientDrafts = source.patientDrafts
   target.appointmentDrafts = source.appointmentDrafts
+  target.apiCreationReceipts = source.apiCreationReceipts
 }
 
 function cloneState(state: DatabaseState): DatabaseState {
