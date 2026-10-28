@@ -24,6 +24,8 @@ export interface ApprovalsPanelProps {
   onAssumeHandoff?: (approvalId: string) => void
   /** Cases whose conversation is loaded and can be opened from the row. */
   openableSessionIds?: readonly string[]
+  /** More conversations exist than are loaded: unloaded cases are searched on open. */
+  searchUnloadedCases?: boolean
   onOpenCase?: (sessionId: string) => void
   pageInfo?: PageControlsInfo | null
   onPreviousPage?: () => void
@@ -48,6 +50,7 @@ export function ApprovalsPanel({
   onReject,
   onAssumeHandoff,
   openableSessionIds = [],
+  searchUnloadedCases = false,
   onOpenCase,
   pageInfo = null,
   onPreviousPage,
@@ -119,7 +122,8 @@ export function ApprovalsPanel({
                   </span>
                   {sessionId &&
                   onOpenCase &&
-                  openableSessionIds.includes(sessionId) ? (
+                  (searchUnloadedCases ||
+                    openableSessionIds.includes(sessionId)) ? (
                     <button
                       type="button"
                       aria-label={`Abrir caso ${sessionId}`}

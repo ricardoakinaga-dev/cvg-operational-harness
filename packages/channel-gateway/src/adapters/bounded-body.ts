@@ -11,6 +11,18 @@ export const RESPONSE_TOO_LARGE_ERROR = 'ResponseTooLargeError'
 export const DEFAULT_CHANNEL_SEND_TIMEOUT_MS = 20_000
 export const MAX_CHANNEL_SEND_TIMEOUT_MS = 120_000
 
+/**
+ * SPEC 0268 — a 5xx means the request reached the destination but the outcome
+ * is unknown (proxy 502/504, 500 after processing): the gateway must keep the
+ * operation UNCERTAIN instead of releasing it for a blind resend. 429 is an
+ * explicit refusal before processing and stays retryable.
+ */
+export function statusEffectOptions(status: number): {
+  effectUnknown?: boolean
+} {
+  return status >= 500 ? { effectUnknown: true } : {}
+}
+
 /** The ceiling error; the transport attaches the response status. */
 export function responseTooLarge(status?: number): Error {
   const error = new Error('Response exceeds maxResponseBytes')
@@ -24,7 +36,7 @@ export function isResponseTooLarge(error: unknown): error is Error {
 
 /**
  * Maps a body over its ceiling. A known non-2xx status wins and maps as that
- * status does (provider_rejected, retryable for 5xx and 429); otherwise the
+ * status does (provider_rejected; 5xx is effect-unknown, 429 retryable); otherwise the
  * adapter's size rejection stays as it was.
  */
 export function oversizedResponseError(
@@ -36,7 +48,8 @@ export function oversizedResponseError(
     return new ChannelError(
       'provider_rejected',
       `${label} responded with status ${status}`,
-      status >= 500 || status === 429
+      status === 429,
+      statusEffectOptions(status)
     )
   }
   return new ChannelError(
