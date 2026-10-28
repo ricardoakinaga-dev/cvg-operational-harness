@@ -1,5 +1,6 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -281,5 +282,119 @@ describe('AUD0625 SPEC0270 boundaries of the fix', () => {
     )
     expect(result.status).toBe('SUCCEEDED')
     expect(readdirSync(root)).toEqual(['out.txt'])
+  })
+})
+
+describe('AUD0625 SPEC0270 review AUD0625-REVIEW-0270-D9 follow-ups', () => {
+  it('fs.write refuses a final symlink inside the workspace and keeps both files', async () => {
+    const root = base()
+    writeFileSync(join(root, 'real.txt'), 'SYNTHETIC-REAL')
+    symlinkSync(join(root, 'real.txt'), join(root, 'alias.txt'))
+    const result = await tool(root, 'fs.write', {
+      record: async () => {}
+    }).execute(
+      {
+        path: 'alias.txt',
+        content: 'SYNTHETIC-NEW',
+        intent: 'synthetic probe'
+      },
+      context(workspaceHandle(root))
+    )
+    expect(result.status).toBe('REJECTED')
+    expect(readFileSync(join(root, 'real.txt'), 'utf8')).toBe('SYNTHETIC-REAL')
+    expect(lstatSync(join(root, 'alias.txt')).isSymbolicLink()).toBe(true)
+  })
+
+  it('rejects a grant whose path is only a sibling prefix of the root', async () => {
+    const dir = base()
+    const granted = join(dir, 'ws')
+    const root = join(dir, 'ws2')
+    mkdirSync(granted)
+    mkdirSync(root)
+    writeFileSync(join(root, 'file.txt'), 'SYNTHETIC')
+    const result = await tool(root, 'fs.read').execute(
+      { path: 'file.txt' },
+      context(workspaceHandle(granted))
+    )
+    expect(result.status).toBe('REJECTED')
+  })
+
+  for (const [label, patch] of [
+    ['a relative workspaceRoot', { workspaceRoot: 'relative/root' }],
+    ['a NUL in workspaceRoot', { workspaceRoot: '/tmp/\0x' }],
+    ['a non-boolean allowNetwork', { allowNetwork: 'no' }],
+    ['a non-positive deadlineMs', { deadlineMs: 0 }]
+  ] as const) {
+    it(`rejects a handle with ${label}`, async () => {
+      const root = base()
+      writeFileSync(join(root, 'file.txt'), 'SYNTHETIC')
+      const handle = {
+        ...workspaceHandle(root),
+        ...patch
+      } as unknown as SandboxHandle
+      const result = await tool(root, 'fs.read').execute(
+        { path: 'file.txt' },
+        context(handle)
+      )
+      expect(result.status).toBe('REJECTED')
+    })
+  }
+
+  for (const id of ['fs.list', 'fs.write', 'fs.edit']) {
+    it(`${id} rejects an intermediate symlink inside the workspace`, async () => {
+      const root = base()
+      mkdirSync(join(root, 'real'))
+      writeFileSync(join(root, 'real', 'file.txt'), 'SYNTHETIC')
+      symlinkSync(join(root, 'real'), join(root, 'alias'))
+      const result = await tool(root, id, { record: async () => {} }).execute(
+        {
+          path: id === 'fs.list' ? 'alias' : 'alias/file.txt',
+          content: 'SYNTHETIC-NEW',
+          find: 'SYNTHETIC',
+          replace: 'SYNTHETIC-EDIT',
+          intent: 'synthetic probe'
+        },
+        context(workspaceHandle(root))
+      )
+      expect(result.status).toBe('REJECTED')
+      expect(readFileSync(join(root, 'real', 'file.txt'), 'utf8')).toBe(
+        'SYNTHETIC'
+      )
+    })
+  }
+
+  it('closes every descriptor on success and on error paths', async () => {
+    const root = base()
+    mkdirSync(join(root, 'sub'))
+    writeFileSync(join(root, 'sub', 'file.txt'), 'SYNTHETIC')
+    symlinkSync(join(root, 'sub'), join(root, 'alias'))
+    const handle = context(workspaceHandle(root))
+    const all = Object.fromEntries(
+      createFsTools({ workspaceRoot: root }).map((t) => [t.id, t])
+    )
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['fs.list', { path: 'sub' }],
+      ['fs.list', { path: 'alias' }],
+      ['fs.list', { path: 'missing' }],
+      ['fs.read', { path: 'sub/file.txt' }],
+      ['fs.read', { path: 'alias/file.txt' }],
+      ['fs.read', { path: 'sub/missing.txt' }],
+      ['fs.write', { path: 'sub/out.txt', content: 'X', intent: 'probe' }],
+      ['fs.write', { path: 'alias/out.txt', content: 'X', intent: 'probe' }],
+      ['fs.write', { path: 'missing/out.txt', content: 'X', intent: 'probe' }],
+      [
+        'fs.edit',
+        { path: 'sub/file.txt', find: 'SYN', replace: 'syn', intent: 'probe' }
+      ],
+      [
+        'fs.edit',
+        { path: 'sub/file.txt', find: 'absent', replace: 'x', intent: 'probe' }
+      ]
+    ]
+    const before = readdirSync('/proc/self/fd').length
+    for (let round = 0; round < 3; round++) {
+      for (const [id, input] of calls) await all[id]!.execute(input, handle)
+    }
+    expect(readdirSync('/proc/self/fd').length).toBe(before)
   })
 })

@@ -5,7 +5,7 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
-  readFileSync,
+  readSync,
   readdirSync,
   realpathSync,
   renameSync,
@@ -24,6 +24,7 @@ import {
   atFd,
   closeQuietly,
   directoryDescriptorsAvailable,
+  isSymlinkAt,
   openDirectoryChain,
   openFileAt,
   sameDirectory
@@ -163,7 +164,25 @@ function readBodyAt(
       return { ok: false, result: failed('file exceeds maxReadBytes') }
     }
     try {
-      const content = readFileSync(opened.fd, 'utf8')
+      // Read at most maxBytes + 1 so a file that grows after fstat is still
+      // refused instead of being read to EOF.
+      const buffer = Buffer.alloc(maxBytes + 1)
+      let total = 0
+      for (;;) {
+        const read = readSync(
+          opened.fd,
+          buffer,
+          total,
+          buffer.length - total,
+          null
+        )
+        if (read === 0) break
+        total += read
+        if (total > maxBytes) {
+          return { ok: false, result: failed('file exceeds maxReadBytes') }
+        }
+      }
+      const content = buffer.toString('utf8', 0, total)
       return { ok: true, content, bytes: Buffer.byteLength(content, 'utf8') }
     } catch {
       return { ok: false, result: failed('file could not be read') }
@@ -529,6 +548,12 @@ export function createFsTools(
       // SPEC 0197 order: journal first, then the write fails.
       const parent = openDirectoryChain(root, prepared.parentParts)
       if (!parent.ok && parent.reason === 'symlink') {
+        return rejected(SYMLINK_IN_PATH)
+      }
+      // Invariant 4 / D2: a final symlink is refused, not replaced, even when
+      // it points inside the workspace.
+      if (parent.ok && isSymlinkAt(parent.fd, prepared.name)) {
+        closeQuietly(parent.fd)
         return rejected(SYMLINK_IN_PATH)
       }
       try {

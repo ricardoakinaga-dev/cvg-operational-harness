@@ -198,3 +198,37 @@ barreira, só textual: escape, absoluto, NUL e temporário reservado.
   [build-gates.txt](../04_audit/evidence/AUD0625-FS-TOOLS-DF-20261028/build-gates.txt).
 - **Fora do local:** `test:postgres` e E2E não rodaram aqui. Nenhum teste de PG
   ou de E2E importa as ferramentas `fs`, e a barra da CI os executa no PR.
+
+### 9.1 Revisão independente AUD0625-REVIEW-0270-D9 (REVISE pequeno) e correções
+
+Revisor não autor: sessão Claude D9, relatório em
+`docs/04_audit/evidence/AUD0625-REVIEW-0270-D9-20261028/REVIEW.md` (branch
+própria). Nenhuma brecha de segurança encontrada. Correções aplicadas:
+
+- **P2, symlink final em `fs.write`.** O §3.2 item 5 dizia que o `rename`
+  substitui um symlink final; o invariante 4, o §5 e a decisão D2 aprovada
+  pedem recusa. Vale a decisão aprovada: `fs.write` agora recusa (`REJECTED`)
+  symlink final antes do journal, como já faziam `fs.read` e `fs.edit`. A
+  frase do §3.2 item 5 fica superada por esta nota.
+- **P3, testes.** Novos casos: concessão que é só prefixo irmão da raiz
+  (`/ws` × `/ws2`), contagem de descritores em sucesso e erro nas quatro
+  ferramentas, campos inválidos do handle, symlink intermediário em
+  `fs.list`/`fs.write`/`fs.edit` e symlink final em `fs.write`. As três
+  mutações que antes sobreviviam (prefixo sem separador, `fs.list` sem fechar
+  o descritor, escrita trocando o symlink) agora são mortas.
+- **P3, identidade.** `dev`/`ino` comparados como `bigint`.
+- **P3, leitura limitada.** A leitura para em `maxBytes + 1` bytes mesmo se o
+  arquivo crescer depois do `fstat`; antes, lia até o EOF.
+
+Limites residuais, aceitos e registrados:
+
+- O `fsync` do arquivo é síncrono e pode segurar o event loop com o disco
+  ocupado (o revisor mediu 0,4 s e 2,5 s). O diretório não recebe `fsync`
+  depois do `rename`. As escritas da 0197 já eram síncronas.
+- A raiz configurada é aberta pelo nome, com `O_NOFOLLOW` só no último
+  componente. Os ancestrais da raiz são do host, não do workspace.
+- Um processo externo com escrita dos dois lados pode mover o diretório pai
+  para fora entre a conferência e o `rename`. Não há `await` nesse intervalo,
+  então isso não acontece dentro do próprio processo.
+- Um hardlink criado dentro do workspace para um arquivo de fora continua
+  legível, como antes. Recusar `nlink > 1` fica como follow-up AUD0625-F03b.

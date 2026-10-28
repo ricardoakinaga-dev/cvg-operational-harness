@@ -113,11 +113,20 @@ export function sameDirectory(
   const reopened = openDirectoryChain(root, parts)
   if (!reopened.ok) return false
   try {
-    const held = fstatSync(fd)
-    const current = fstatSync(reopened.fd)
+    const held = fstatSync(fd, { bigint: true })
+    const current = fstatSync(reopened.fd, { bigint: true })
     return held.dev === current.dev && held.ino === current.ino
   } finally {
     closeSync(reopened.fd)
+  }
+}
+
+/** True when `name` inside the directory behind `dirFd` is a symlink. */
+export function isSymlinkAt(dirFd: number, name: string): boolean {
+  try {
+    return lstatSync(atFd(dirFd, name)).isSymbolicLink()
+  } catch {
+    return false
   }
 }
 
