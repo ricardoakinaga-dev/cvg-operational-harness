@@ -1,18 +1,33 @@
 import { createHash, randomBytes } from 'node:crypto'
 import {
+  constants,
   existsSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
   readFileSync,
   readdirSync,
   realpathSync,
   renameSync,
-  rmSync,
   statSync,
+  unlinkSync,
   writeFileSync
 } from 'node:fs'
-import { dirname, isAbsolute, join } from 'node:path'
-import type { ToolDefinition, ToolResult } from '@cvg/harness-contracts'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+import type {
+  ToolDefinition,
+  ToolExecutionContext,
+  ToolResult
+} from '@cvg/harness-contracts'
 import { TEMP_PREFIX, confinePath } from './confine.ts'
+import {
+  atFd,
+  closeQuietly,
+  directoryDescriptorsAvailable,
+  openDirectoryChain,
+  openFileAt,
+  sameDirectory
+} from './dir-fd.ts'
 
 export interface FsWriteJournalEntry {
   readonly tenantId: string
@@ -111,41 +126,81 @@ const succeeded = (output: unknown): ToolResult => ({
   output
 })
 
-function readBody(
-  path: string,
+const SYMLINK_IN_PATH = 'path traverses a symlink'
+
+/** Reads `name` inside the directory behind `dirFd`, never following it. */
+function readBodyAt(
+  dirFd: number,
+  name: string,
   maxBytes: number
 ):
   | { readonly ok: true; readonly content: string; readonly bytes: number }
-  | { readonly ok: false; readonly error: string } {
-  let stats: ReturnType<typeof statSync>
+  | { readonly ok: false; readonly result: ToolResult } {
+  const opened = openFileAt(
+    dirFd,
+    name,
+    constants.O_RDONLY | constants.O_NONBLOCK
+  )
+  if (!opened.ok) {
+    if (opened.reason === 'symlink') {
+      return { ok: false, result: rejected(SYMLINK_IN_PATH) }
+    }
+    return {
+      ok: false,
+      result: failed(
+        opened.reason === 'missing'
+          ? 'file does not exist'
+          : 'file could not be read'
+      )
+    }
+  }
   try {
-    stats = statSync(path)
-  } catch {
-    return { ok: false, error: 'file does not exist' }
-  }
-  if (!stats.isFile()) {
-    return { ok: false, error: 'path is not a regular file' }
-  }
-  if (stats.size > maxBytes) {
-    return { ok: false, error: 'file exceeds maxReadBytes' }
-  }
-  try {
-    const content = readFileSync(path, 'utf8')
-    return { ok: true, content, bytes: Buffer.byteLength(content, 'utf8') }
-  } catch {
-    return { ok: false, error: 'file could not be read' }
+    const stats = fstatSync(opened.fd)
+    if (!stats.isFile()) {
+      return { ok: false, result: failed('path is not a regular file') }
+    }
+    if (stats.size > maxBytes) {
+      return { ok: false, result: failed('file exceeds maxReadBytes') }
+    }
+    try {
+      const content = readFileSync(opened.fd, 'utf8')
+      return { ok: true, content, bytes: Buffer.byteLength(content, 'utf8') }
+    } catch {
+      return { ok: false, result: failed('file could not be read') }
+    }
+  } finally {
+    closeQuietly(opened.fd)
   }
 }
 
-/** Atomic write: temp file in the same directory, then rename (SPEC 0197 §3). */
-function writeAtomic(abs: string, content: string): void {
-  const dir = dirname(abs)
-  const temp = join(dir, `${TEMP_PREFIX}${randomBytes(8).toString('hex')}`)
+/**
+ * Atomic write bound to the directory behind `dirFd`: temp file created with
+ * O_EXCL|O_NOFOLLOW, fsync, then rename inside that same directory (SPEC 0197
+ * §3, SPEC 0270 §3.2). A renamed or swapped path cannot redirect it.
+ */
+function writeAtomicAt(dirFd: number, name: string, content: string): void {
+  const temp = `${TEMP_PREFIX}${randomBytes(8).toString('hex')}`
+  const opened = openFileAt(
+    dirFd,
+    temp,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+    0o666
+  )
+  if (!opened.ok) throw new Error('temp file could not be created')
   try {
-    writeFileSync(temp, content, 'utf8')
-    renameSync(temp, abs)
+    try {
+      writeFileSync(opened.fd, content, 'utf8')
+      fsyncSync(opened.fd)
+    } finally {
+      closeQuietly(opened.fd)
+    }
+    renameSync(atFd(dirFd, temp), atFd(dirFd, name))
   } catch (error) {
-    rmSync(temp, { force: true })
+    try {
+      unlinkSync(atFd(dirFd, temp))
+    } catch {
+      // The temp file was never created or is already gone.
+    }
     throw error
   }
 }
@@ -169,9 +224,11 @@ function intentOf(
 }
 
 /**
- * The fs capability family (SPEC 0197). Every tool declares
- * `sandbox: 'WORKSPACE'` so the kernel seam of PDSH-010 gates each call, and
- * every path is re-confined here as defense in depth.
+ * The fs capability family (SPEC 0197, SPEC 0270). Every tool declares
+ * `sandbox: 'WORKSPACE'` so the kernel seam of PDSH-010 gates each call; each
+ * call must carry the governed handle, the configured root must lie inside its
+ * grant, and every path is walked component by component from directory
+ * descriptors without following symlinks.
  */
 export function createFsTools(
   options: FsToolsOptions
@@ -187,6 +244,13 @@ export function createFsTools(
     )
   }
   const root = realpathSync(rootRaw)
+  if (!directoryDescriptorsAvailable()) {
+    // Directory-bound operations need /proc/self/fd (SPEC 0270 §3.2, D3);
+    // without it the factory boot-fails closed instead of using names.
+    throw new Error(
+      'fs tools require Linux /proc/self/fd for directory-bound operations'
+    )
+  }
   const limits = resolveLimits(options.limits)
   const journal = options.writeJournal
   if (options.requireWriteJournal && !journal) {
@@ -197,19 +261,84 @@ export function createFsTools(
     )
   }
 
-  const prepareWrite = (
-    input: unknown
+  /**
+   * The governed handle bounds the root (SPEC 0270 §3.1): it must be a valid
+   * WORKSPACE/PROCESS grant and the configured root must lie inside it. The
+   * handle only narrows; the effective root stays the configured one.
+   */
+  const grantError = (
+    context: ToolExecutionContext | undefined
+  ): string | undefined => {
+    const handle = context?.sandboxHandle
+    if (
+      !handle ||
+      (handle.mode !== 'WORKSPACE' && handle.mode !== 'PROCESS') ||
+      typeof handle.allowNetwork !== 'boolean' ||
+      typeof handle.allowSubprocess !== 'boolean' ||
+      typeof handle.workspaceRoot !== 'string' ||
+      !isAbsolute(handle.workspaceRoot) ||
+      handle.workspaceRoot.includes('\0') ||
+      (handle.deadlineMs !== undefined &&
+        (!Number.isFinite(handle.deadlineMs) || handle.deadlineMs <= 0))
+    ) {
+      return 'a valid governed WORKSPACE sandbox handle is required'
+    }
+    let grantedRoot: string
+    try {
+      grantedRoot = realpathSync(handle.workspaceRoot)
+      if (!statSync(grantedRoot).isDirectory()) {
+        return 'sandbox workspaceRoot must be a directory'
+      }
+    } catch {
+      return 'sandbox workspaceRoot cannot be resolved'
+    }
+    const prefix = grantedRoot.endsWith(sep) ? grantedRoot : grantedRoot + sep
+    if (root !== grantedRoot && !root.startsWith(prefix)) {
+      return 'configured workspace root is outside the sandbox grant'
+    }
+    return undefined
+  }
+
+  /** Textual confinement plus the nominal components walked by descriptor. */
+  const locate = (
+    raw: unknown
   ):
     | {
         readonly ok: true
         readonly rel: string
-        readonly abs: string
+        readonly parts: readonly string[]
+      }
+    | { readonly ok: false; readonly result: ToolResult } => {
+    const confined = confinePath(root, raw)
+    if (!confined.ok) return { ok: false, result: rejected(confined.error) }
+    const nominal = relative(root, resolve(root, (raw as string).trim()))
+    const parts = nominal === '' ? [] : nominal.split(sep)
+    if (parts.some((part) => part.startsWith(TEMP_PREFIX))) {
+      return {
+        ok: false,
+        result: rejected('path uses the reserved temp namespace')
+      }
+    }
+    return { ok: true, rel: nominal === '' ? '.' : nominal, parts }
+  }
+
+  const prepareWrite = (
+    input: unknown,
+    context: ToolExecutionContext | undefined
+  ):
+    | {
+        readonly ok: true
+        readonly rel: string
+        readonly parentParts: readonly string[]
+        readonly name: string
         readonly intent: string
       }
     | { readonly ok: false; readonly result: ToolResult } => {
+    const denied = grantError(context)
+    if (denied !== undefined) return { ok: false, result: rejected(denied) }
     const record = input as Record<string, unknown> | null
-    const confined = confinePath(root, record?.['path'])
-    if (!confined.ok) return { ok: false, result: rejected(confined.error) }
+    const target = locate(record?.['path'])
+    if (!target.ok) return target
     const intent = intentOf(input, limits.maxIntentLength)
     if (!intent.ok) return { ok: false, result: rejected(intent.error) }
     if (!journal) {
@@ -220,12 +349,38 @@ export function createFsTools(
         }
       }
     }
+    const name = target.parts.at(-1)
+    if (name === undefined) {
+      return { ok: false, result: failed('path is not a regular file') }
+    }
     return {
       ok: true,
-      rel: confined.rel,
-      abs: confined.abs,
+      rel: target.rel,
+      parentParts: target.parts.slice(0, -1),
+      name,
       intent: intent.intent
     }
+  }
+
+  /**
+   * Re-checks the held parent after the journal await, then writes through it.
+   * A path changed meanwhile fails closed without writing (SPEC 0270 §3.2).
+   */
+  const commitWrite = (
+    parentFd: number,
+    parentParts: readonly string[],
+    name: string,
+    content: string
+  ): ToolResult | undefined => {
+    if (!sameDirectory(parentFd, root, parentParts)) {
+      return failed('workspace directory changed during the operation')
+    }
+    try {
+      writeAtomicAt(parentFd, name, content)
+    } catch {
+      return failed('file could not be written')
+    }
+    return undefined
   }
 
   const recordWrite = async (
@@ -267,19 +422,30 @@ export function createFsTools(
     sideEffect: 'READ',
     idempotent: true,
     sandbox: 'WORKSPACE',
-    execute: async (input) => {
-      const confined = confinePath(
-        root,
-        (input as Record<string, unknown> | null)?.['path']
-      )
-      if (!confined.ok) return rejected(confined.error)
-      const body = readBody(confined.abs, limits.maxReadBytes)
-      if (!body.ok) return failed(body.error)
-      return succeeded({
-        path: confined.rel,
-        content: body.content,
-        bytes: body.bytes
-      })
+    execute: async (input, context) => {
+      const denied = grantError(context)
+      if (denied !== undefined) return rejected(denied)
+      const target = locate((input as Record<string, unknown> | null)?.['path'])
+      if (!target.ok) return target.result
+      const name = target.parts.at(-1)
+      if (name === undefined) return failed('path is not a regular file')
+      const parent = openDirectoryChain(root, target.parts.slice(0, -1))
+      if (!parent.ok) {
+        return parent.reason === 'symlink'
+          ? rejected(SYMLINK_IN_PATH)
+          : failed('file does not exist')
+      }
+      try {
+        const body = readBodyAt(parent.fd, name, limits.maxReadBytes)
+        if (!body.ok) return body.result
+        return succeeded({
+          path: target.rel,
+          content: body.content,
+          bytes: body.bytes
+        })
+      } finally {
+        closeQuietly(parent.fd)
+      }
     }
   }
 
@@ -291,37 +457,49 @@ export function createFsTools(
     sideEffect: 'READ',
     idempotent: true,
     sandbox: 'WORKSPACE',
-    execute: async (input) => {
+    execute: async (input, context) => {
+      const denied = grantError(context)
+      if (denied !== undefined) return rejected(denied)
       const record = input as Record<string, unknown> | null
       const raw =
         record?.['path'] === undefined || record?.['path'] === ''
           ? '.'
           : record?.['path']
-      const confined = confinePath(root, raw)
-      if (!confined.ok) return rejected(confined.error)
-      let entries: string[]
+      const target = locate(raw)
+      if (!target.ok) return target.result
+      const dir = openDirectoryChain(root, target.parts)
+      if (!dir.ok) {
+        return dir.reason === 'symlink'
+          ? rejected(SYMLINK_IN_PATH)
+          : failed('directory does not exist or cannot be read')
+      }
       try {
-        entries = readdirSync(confined.abs)
-      } catch {
-        return failed('directory does not exist or cannot be read')
-      }
-      if (entries.length > limits.maxListEntries) {
-        return failed('directory exceeds maxListEntries')
-      }
-      const listed = entries.map((name) => {
+        let entries: string[]
         try {
-          const stats = lstatSync(join(confined.abs, name))
-          const kind = stats.isFile()
-            ? 'file'
-            : stats.isDirectory()
-              ? 'directory'
-              : 'other'
-          return { name, kind }
+          entries = readdirSync(atFd(dir.fd))
         } catch {
-          return { name, kind: 'other' as const }
+          return failed('directory does not exist or cannot be read')
         }
-      })
-      return succeeded({ path: confined.rel, entries: listed })
+        if (entries.length > limits.maxListEntries) {
+          return failed('directory exceeds maxListEntries')
+        }
+        const listed = entries.map((name) => {
+          try {
+            const stats = lstatSync(atFd(dir.fd, name))
+            const kind = stats.isFile()
+              ? 'file'
+              : stats.isDirectory()
+                ? 'directory'
+                : 'other'
+            return { name, kind }
+          } catch {
+            return { name, kind: 'other' as const }
+          }
+        })
+        return succeeded({ path: target.rel, entries: listed })
+      } finally {
+        closeQuietly(dir.fd)
+      }
     }
   }
 
@@ -335,7 +513,7 @@ export function createFsTools(
     idempotent: false,
     sandbox: 'WORKSPACE',
     execute: async (input, context) => {
-      const prepared = prepareWrite(input)
+      const prepared = prepareWrite(input, context)
       if (!prepared.ok) return prepared.result
       const record = input as Record<string, unknown> | null
       const content = record?.['content']
@@ -346,23 +524,37 @@ export function createFsTools(
       if (bytes > limits.maxWriteBytes) {
         return rejected('content exceeds maxWriteBytes')
       }
-      const journaled = await recordWrite(
-        'fs.write',
-        'write',
-        { rel: prepared.rel, intent: prepared.intent, content },
-        {
-          tenantId: context.tenantId,
-          operationKey: context.operationKey ?? 'fs.write'
-        }
-      )
-      if (journaled !== undefined) {
-        // Fail closed: the intent ledger rejected the write, so no mutation.
-        return failed(`write journal rejected the mutation: ${journaled}`)
+      // Hold the parent before the journal await so a later swap of the path
+      // cannot move the write (SPEC 0270 §3.2). A missing parent keeps the
+      // SPEC 0197 order: journal first, then the write fails.
+      const parent = openDirectoryChain(root, prepared.parentParts)
+      if (!parent.ok && parent.reason === 'symlink') {
+        return rejected(SYMLINK_IN_PATH)
       }
       try {
-        writeAtomic(prepared.abs, content)
-      } catch {
-        return failed('file could not be written')
+        const journaled = await recordWrite(
+          'fs.write',
+          'write',
+          { rel: prepared.rel, intent: prepared.intent, content },
+          {
+            tenantId: context.tenantId,
+            operationKey: context.operationKey ?? 'fs.write'
+          }
+        )
+        if (journaled !== undefined) {
+          // Fail closed: the intent ledger rejected the write, so no mutation.
+          return failed(`write journal rejected the mutation: ${journaled}`)
+        }
+        if (!parent.ok) return failed('file could not be written')
+        const refused = commitWrite(
+          parent.fd,
+          prepared.parentParts,
+          prepared.name,
+          content
+        )
+        if (refused !== undefined) return refused
+      } finally {
+        if (parent.ok) closeQuietly(parent.fd)
       }
       return succeeded({
         path: prepared.rel,
@@ -382,7 +574,7 @@ export function createFsTools(
     idempotent: false,
     sandbox: 'WORKSPACE',
     execute: async (input, context) => {
-      const prepared = prepareWrite(input)
+      const prepared = prepareWrite(input, context)
       if (!prepared.ok) return prepared.result
       const record = input as Record<string, unknown> | null
       const find = record?.['find']
@@ -393,42 +585,58 @@ export function createFsTools(
       if (typeof replace !== 'string') {
         return rejected('replace must be a string')
       }
-      const current = readBody(prepared.abs, limits.maxWriteBytes)
-      if (!current.ok) return failed(current.error)
-      const occurrences = current.content.split(find).length - 1
-      if (occurrences === 0) {
-        return failed('find string does not occur in the file')
-      }
-      if (occurrences > 1) {
-        return failed('find string occurs more than once; refine the edit')
-      }
-      const next = current.content.replace(find, replace)
-      const bytes = Buffer.byteLength(next, 'utf8')
-      if (bytes > limits.maxWriteBytes) {
-        return rejected('resulting content exceeds maxWriteBytes')
-      }
-      const journaled = await recordWrite(
-        'fs.edit',
-        'edit',
-        { rel: prepared.rel, intent: prepared.intent, content: next },
-        {
-          tenantId: context.tenantId,
-          operationKey: context.operationKey ?? 'fs.edit'
-        }
-      )
-      if (journaled !== undefined) {
-        return failed(`write journal rejected the mutation: ${journaled}`)
+      const parent = openDirectoryChain(root, prepared.parentParts)
+      if (!parent.ok) {
+        return parent.reason === 'symlink'
+          ? rejected(SYMLINK_IN_PATH)
+          : failed('file does not exist')
       }
       try {
-        writeAtomic(prepared.abs, next)
-      } catch {
-        return failed('file could not be written')
+        const current = readBodyAt(
+          parent.fd,
+          prepared.name,
+          limits.maxWriteBytes
+        )
+        if (!current.ok) return current.result
+        const occurrences = current.content.split(find).length - 1
+        if (occurrences === 0) {
+          return failed('find string does not occur in the file')
+        }
+        if (occurrences > 1) {
+          return failed('find string occurs more than once; refine the edit')
+        }
+        const next = current.content.replace(find, replace)
+        const bytes = Buffer.byteLength(next, 'utf8')
+        if (bytes > limits.maxWriteBytes) {
+          return rejected('resulting content exceeds maxWriteBytes')
+        }
+        const journaled = await recordWrite(
+          'fs.edit',
+          'edit',
+          { rel: prepared.rel, intent: prepared.intent, content: next },
+          {
+            tenantId: context.tenantId,
+            operationKey: context.operationKey ?? 'fs.edit'
+          }
+        )
+        if (journaled !== undefined) {
+          return failed(`write journal rejected the mutation: ${journaled}`)
+        }
+        const refused = commitWrite(
+          parent.fd,
+          prepared.parentParts,
+          prepared.name,
+          next
+        )
+        if (refused !== undefined) return refused
+        return succeeded({
+          path: prepared.rel,
+          bytes,
+          sha256: createHash('sha256').update(next, 'utf8').digest('hex')
+        })
+      } finally {
+        closeQuietly(parent.fd)
       }
-      return succeeded({
-        path: prepared.rel,
-        bytes,
-        sha256: createHash('sha256').update(next, 'utf8').digest('hex')
-      })
     }
   }
 

@@ -18,8 +18,8 @@ import type {
 } from '@cvg/harness-contracts'
 import { createFsTools, type FsWriteJournal } from '../index.ts'
 
-// SPEC0270 (AUD0625 F03/F04). `it.fails` cases state the target behaviour and
-// fail today for the audited defect; they become plain `it` in the BUILD.
+// SPEC0270 (AUD0625 F03/F04). The first eight cases failed before the BUILD
+// for the audited defect (red-output.txt in the evidence) and pass after it.
 // Controls pass before and after the fix. Synthetic owned directories only.
 
 const dirs: string[] = []
@@ -79,25 +79,22 @@ function swappingJournal(root: string, outside: string): FsWriteJournal {
 }
 
 describe('AUD0625 F03: the handle bounds the fs tools root (SPEC0270 §3.1)', () => {
-  it.fails(
-    'rejects fs.read when the handle grants a different workspace',
-    async () => {
-      const dir = base()
-      const a = join(dir, 'A')
-      const b = join(dir, 'B')
-      mkdirSync(a)
-      mkdirSync(b)
-      writeFileSync(join(b, 'sentinel.txt'), 'SYNTHETIC-B')
-      const result = await tool(b, 'fs.read').execute(
-        { path: 'sentinel.txt' },
-        context(workspaceHandle(a))
-      )
-      expect(result.status).toBe('REJECTED')
-    }
-  )
+  it('rejects fs.read when the handle grants a different workspace', async () => {
+    const dir = base()
+    const a = join(dir, 'A')
+    const b = join(dir, 'B')
+    mkdirSync(a)
+    mkdirSync(b)
+    writeFileSync(join(b, 'sentinel.txt'), 'SYNTHETIC-B')
+    const result = await tool(b, 'fs.read').execute(
+      { path: 'sentinel.txt' },
+      context(workspaceHandle(a))
+    )
+    expect(result.status).toBe('REJECTED')
+  })
 
   for (const id of ['fs.read', 'fs.list', 'fs.write', 'fs.edit']) {
-    it.fails(`rejects ${id} without a governed handle`, async () => {
+    it(`rejects ${id} without a governed handle`, async () => {
       const root = base()
       writeFileSync(join(root, 'file.txt'), 'SYNTHETIC')
       const result = await tool(root, id).execute(
@@ -142,56 +139,50 @@ describe('AUD0625 F03: the handle bounds the fs tools root (SPEC0270 §3.1)', ()
 
 describe('AUD0625 F04: operations keep the directory identity (SPEC0270 §3.2)', () => {
   for (const id of ['fs.write', 'fs.edit']) {
-    it.fails(
-      `${id} fails closed when a directory is swapped during the journal`,
-      async () => {
-        const dir = base()
-        const root = join(dir, 'workspace')
-        const outside = join(dir, 'synthetic-outside')
-        mkdirSync(root)
-        mkdirSync(outside)
-        mkdirSync(join(root, 'sub'))
-        writeFileSync(join(root, 'sub', 'sentinel.txt'), 'SYNTHETIC-BEFORE')
-        writeFileSync(join(outside, 'sentinel.txt'), 'SYNTHETIC-BEFORE')
-        const result = await tool(
-          root,
-          id,
-          swappingJournal(root, outside)
-        ).execute(
-          {
-            path: 'sub/sentinel.txt',
-            content: 'SYNTHETIC-ESCAPE',
-            find: 'BEFORE',
-            replace: 'ESCAPE',
-            intent: 'synthetic swap probe'
-          },
-          context(workspaceHandle(root))
-        )
-        expect(result.status).toBe('FAILED')
-        expect(readFileSync(join(outside, 'sentinel.txt'), 'utf8')).toBe(
-          'SYNTHETIC-BEFORE'
-        )
-        expect(
-          readdirSync(outside).filter((name) => name.startsWith('.cvg-fs-tmp-'))
-        ).toEqual([])
-      }
-    )
-  }
-
-  it.fails(
-    'rejects a symlinked directory that stays inside the workspace',
-    async () => {
-      const root = base()
-      mkdirSync(join(root, 'real'))
-      writeFileSync(join(root, 'real', 'file.txt'), 'SYNTHETIC')
-      symlinkSync(join(root, 'real'), join(root, 'alias'))
-      const result = await tool(root, 'fs.read').execute(
-        { path: 'alias/file.txt' },
+    it(`${id} fails closed when a directory is swapped during the journal`, async () => {
+      const dir = base()
+      const root = join(dir, 'workspace')
+      const outside = join(dir, 'synthetic-outside')
+      mkdirSync(root)
+      mkdirSync(outside)
+      mkdirSync(join(root, 'sub'))
+      writeFileSync(join(root, 'sub', 'sentinel.txt'), 'SYNTHETIC-BEFORE')
+      writeFileSync(join(outside, 'sentinel.txt'), 'SYNTHETIC-BEFORE')
+      const result = await tool(
+        root,
+        id,
+        swappingJournal(root, outside)
+      ).execute(
+        {
+          path: 'sub/sentinel.txt',
+          content: 'SYNTHETIC-ESCAPE',
+          find: 'BEFORE',
+          replace: 'ESCAPE',
+          intent: 'synthetic swap probe'
+        },
         context(workspaceHandle(root))
       )
-      expect(result.status).toBe('REJECTED')
-    }
-  )
+      expect(result.status).toBe('FAILED')
+      expect(readFileSync(join(outside, 'sentinel.txt'), 'utf8')).toBe(
+        'SYNTHETIC-BEFORE'
+      )
+      expect(
+        readdirSync(outside).filter((name) => name.startsWith('.cvg-fs-tmp-'))
+      ).toEqual([])
+    })
+  }
+
+  it('rejects a symlinked directory that stays inside the workspace', async () => {
+    const root = base()
+    mkdirSync(join(root, 'real'))
+    writeFileSync(join(root, 'real', 'file.txt'), 'SYNTHETIC')
+    symlinkSync(join(root, 'real'), join(root, 'alias'))
+    const result = await tool(root, 'fs.read').execute(
+      { path: 'alias/file.txt' },
+      context(workspaceHandle(root))
+    )
+    expect(result.status).toBe('REJECTED')
+  })
 
   it('control: an ordinary journaled write lands inside the root', async () => {
     const root = base()
@@ -230,5 +221,65 @@ describe('AUD0625 F04: operations keep the directory identity (SPEC0270 §3.2)',
     )
     expect(result.status).toBe('REJECTED')
     expect(existsSync(join(outside, 'secret.txt'))).toBe(true)
+  })
+})
+
+describe('AUD0625 SPEC0270 boundaries of the fix', () => {
+  it('boot-fails closed where /proc/self/fd directory binding is unavailable', () => {
+    const root = base()
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    try {
+      expect(() => createFsTools({ workspaceRoot: root })).toThrow(
+        /\/proc\/self\/fd/
+      )
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original)
+    }
+  })
+
+  it('rejects a final symlink that stays inside the workspace', async () => {
+    const root = base()
+    writeFileSync(join(root, 'real.txt'), 'SYNTHETIC')
+    symlinkSync(join(root, 'real.txt'), join(root, 'alias.txt'))
+    const result = await tool(root, 'fs.read').execute(
+      { path: 'alias.txt' },
+      context(workspaceHandle(root))
+    )
+    expect(result.status).toBe('REJECTED')
+  })
+
+  it('accepts a PROCESS handle and refuses a NONE handle', async () => {
+    const root = base()
+    writeFileSync(join(root, 'file.txt'), 'SYNTHETIC')
+    const read = tool(root, 'fs.read')
+    const processHandle: SandboxHandle = {
+      mode: 'PROCESS',
+      workspaceRoot: root,
+      allowNetwork: false,
+      allowSubprocess: true
+    }
+    const noneHandle: SandboxHandle = {
+      mode: 'NONE',
+      workspaceRoot: root,
+      allowNetwork: false,
+      allowSubprocess: false
+    }
+    expect(
+      (await read.execute({ path: 'file.txt' }, context(processHandle))).status
+    ).toBe('SUCCEEDED')
+    expect(
+      (await read.execute({ path: 'file.txt' }, context(noneHandle))).status
+    ).toBe('REJECTED')
+  })
+
+  it('leaves no temp file behind after a successful write', async () => {
+    const root = base()
+    const result = await tool(root, 'fs.write').execute(
+      { path: 'out.txt', content: 'SYNTHETIC', intent: 'synthetic control' },
+      context(workspaceHandle(root))
+    )
+    expect(result.status).toBe('SUCCEEDED')
+    expect(readdirSync(root)).toEqual(['out.txt'])
   })
 })

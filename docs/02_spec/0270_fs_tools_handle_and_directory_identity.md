@@ -3,9 +3,9 @@
 R1, 28/10/2026. Task `AUD0625-FS-TOOLS-DF-20261028`. Achados F03 e F04 da
 [auditoria 0625](../04_audit/0625_repository_score_audit_2026-10-28.md).
 Delta da [SPEC0197](0197_pdsh012_fs_tool.md) (PDSH-012). Estado
-`PROPOSED_FOR_HUMAN_T3_REVIEW`. T3: segurança e comportamento de export
-público (`createFsTools` em `@cvg/sandbox`). **Sem BUILD até revisão humana
-explícita deste documento.** Não trata F01 (capability-boundary), F02 (runner
+`IMPLEMENTED_LOCAL` (BUILD local e sintético; revisão humana T3 aprovada em
+28/10/2026 sobre o texto de sha256 `86f5178b…`, ver §9). T3: segurança e
+comportamento de export público (`createFsTools` em `@cvg/sandbox`). Não trata F01 (capability-boundary), F02 (runner
 de processo) nem F05 (cancelamento do shell); esses continuam com os titulares
 do Codex.
 
@@ -168,3 +168,33 @@ barreira, só textual: escape, absoluto, NUL e temporário reservado.
   symlink" pedida pela auditoria.
 - **D3.** Resolução por `/proc/self/fd`, com falha no boot fora do Linux.
   Recomendado: sim.
+
+## 9. Notas de fechamento (BUILD local, 28/10/2026)
+
+- **Aprovação:** o Ricardo aprovou "como está" as decisões D1, D2 e D3
+  ([recibo](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-2.json)),
+  vinculadas ao sha256
+  `86f5178b79e7bf1cdd024fe3e7a1c397e9ea6ca92fa53cd90336978e4fd2375f` das §1–§8.
+  Esta seção e a linha de estado foram acrescentadas depois do BUILD.
+- **Código:** `packages/sandbox/src/fs-tools.ts` e o módulo interno novo
+  `packages/sandbox/src/dir-fd.ts`, sem export público novo.
+- **Desvio deliberado da §3.1:** a validação do handle ficou em `fs-tools.ts`
+  e não foi extraída para uma função comum com `shell-tool.ts`. O
+  `shell-tool.ts` está na frente F05 do Codex, e esta fatia não o altera. As
+  regras e as mensagens são as do shell, com o modo `WORKSPACE` também aceito.
+  A unificação fica para o titular do shell.
+- **Detalhe de plataforma:** com `O_DIRECTORY | O_NOFOLLOW`, o Linux devolve
+  `ENOTDIR`, e não `ELOOP`, para symlink de diretório. O `lstat` relativo ao
+  descritor distingue symlink de arquivo comum.
+- **Ordem preservada da 0197:** com o diretório pai inexistente, `fs.write`
+  ainda grava o journal antes de falhar (`file could not be written`). Symlink
+  no caminho é recusado antes do journal.
+- **Testes:** os 8 casos que falhavam pelo defeito
+  ([saída RED](../04_audit/evidence/AUD0625-FS-TOOLS-DF-20261028/red-output.txt))
+  passam. Somam-se 4 controles e 4 casos de fronteira: boot fora do Linux,
+  symlink final interno, handle `PROCESS` aceito e `NONE` recusado, e nenhum
+  temporário órfão. Os testes `pdsh-012` mudaram só para enviar um handle
+  `WORKSPACE` que concede o diretório temporário. Gates com Node 22 em
+  [build-gates.txt](../04_audit/evidence/AUD0625-FS-TOOLS-DF-20261028/build-gates.txt).
+- **Fora do local:** `test:postgres` e E2E não rodaram aqui. Nenhum teste de PG
+  ou de E2E importa as ferramentas `fs`, e a barra da CI os executa no PR.
