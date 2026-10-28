@@ -41,7 +41,7 @@ describe('REM21-016 runtime image contract', () => {
       dockerfile.lastIndexOf('\nFROM ', dockerfile.indexOf(' AS web'))
     )
     expect(runtime).toMatch(
-      /gcr\.io\/distroless\/cc-debian12:nonroot@sha256:[0-9a-f]{64} AS runtime/
+      /gcr\.io\/distroless\/cc-debian13:nonroot@sha256:[0-9a-f]{64} AS runtime/
     )
     expect(runtime).not.toMatch(/^RUN /m)
     expect(runtime).toContain('USER cvg')
