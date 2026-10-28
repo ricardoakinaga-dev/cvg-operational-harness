@@ -5,6 +5,7 @@ import { TenantIdSchema } from '@cvg/platform'
 import {
   runPostgresMigrations,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   TenantScopedPostgresRuntimeRepository,
   withTenantContext
 } from '@cvg/persistence'
@@ -405,7 +406,7 @@ describe('SPEC0249 PostgreSQL continuous worker lease integrity', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schemaName} TO ${role}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schemaName}."${table}" TO ${role}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schemaName}."${table}" TO ${role}`
       )
     }
     const url = new URL(databaseUrl)

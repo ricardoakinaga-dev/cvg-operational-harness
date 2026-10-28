@@ -13,6 +13,7 @@ import {
   ensureCoreConversationRootInTransaction,
   runPostgresMigrations,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   withTenantContext
 } from '@cvg/persistence'
 import type { TenantId } from '@cvg/platform'
@@ -78,7 +79,7 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtimeRole}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${runtimeRole}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}."${table}" TO ${runtimeRole}`
       )
     }
     const runtimeUrl = new URL(testDatabaseUrl as string)

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   PostgresCaseAuthority,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   linkAuditEventToCoreSessionWhenAvailable,
   runPostgresMigrations
 } from '@cvg/persistence'
@@ -161,7 +162,7 @@ describePg('SPEC0176 PostgreSQL case authority', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtimeRole}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}.${table} TO ${runtimeRole}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}.${table} TO ${runtimeRole}`
       )
     }
     await admin.query(
