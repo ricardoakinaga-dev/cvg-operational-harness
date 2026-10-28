@@ -17,7 +17,14 @@ const context: ToolExecutionContext = {
   agentId: 'agent-fs' as never,
   correlationId: 'corr-fs' as never,
   traceId: 'trace-fs' as never,
-  operationKey: 'fs-op-1'
+  operationKey: 'fs-op-1',
+  // SPEC 0270 §3.1: every workspace below the temp dir is inside this grant.
+  sandboxHandle: {
+    mode: 'WORKSPACE',
+    workspaceRoot: tmpdir(),
+    allowNetwork: false,
+    allowSubprocess: false
+  }
 }
 
 const tempDirs: string[] = []

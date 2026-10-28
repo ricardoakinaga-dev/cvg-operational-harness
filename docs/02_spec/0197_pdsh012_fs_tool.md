@@ -50,7 +50,7 @@ export interface FsToolsOptions {
 }
 ```
 
-O vínculo ao workspace acontece **na composição** (o host cria a tool com o `workspaceRoot` do tenant). O `SandboxHandle` não é repassado ao corpo da tool pelo kernel (PDSH-010 grava-o em `call.sandboxHandle`), então a tool não depende do handle para achar a raiz — ela revalida o confinamento por conta própria. A raiz é validada no boot da fábrica (absoluta, existe, é diretório, `realpath` aplicado).
+O vínculo ao workspace acontece **na composição** (o host cria a tool com o `workspaceRoot` do tenant). O `SandboxHandle` não é repassado ao corpo da tool pelo kernel (PDSH-010 grava-o em `call.sandboxHandle`), então a tool não depende do handle para achar a raiz — ela revalida o confinamento por conta própria. **Superado pela [SPEC0270](0270_fs_tools_handle_and_directory_identity.md) (28/10/2026):** o kernel passou a repassar o handle validado, as tools `fs` passaram a exigi-lo e a operar por descritor de diretório, sem atravessar symlink. A raiz é validada no boot da fábrica (absoluta, existe, é diretório, `realpath` aplicado).
 
 ### 2. Descriptor e matriz
 
