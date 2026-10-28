@@ -15,9 +15,9 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 - **Achado:** a instrução enviada ao modelo podia ser outra que a aprovada (só o hash era conferido); a classificação do prompt não valia na rota; uso de tokens ausente virava zero.
 - **SPEC e recibo:** 0267, aprovada com o texto de sha256 `d0d8b19c95cb94567f4218c91271cd73c970f68348e8e442c09fb5869fdcc8e6`; recibo `human-decisions-2` (`6d4659f1…`), com as três recomendações. O arquivo depois do BUILD tem `76b76479…` (só estado e §8).
 - **O que mudou:** o gateway monta ele mesmo a instrução a partir do prompt aprovado e recusa (`prompt_content_mismatch`) qualquer outra; a classe mais restritiva entre prompt e pedido decide a rota; sem contadores o resultado vem como `unreported` com custo conservador, e uso e orçamento são registrados antes de a saída ser validada.
-- **SHAs:** SPEC e testes `cb787dc4`/`ca515ac3`; BUILD `d6d92958`.
-- **Testes:** pacote `model-gateway` 171 + servidor de falhas 41 = 212 passam; typecheck e lint sem erro.
-- **Revisão independente (sessão 07, `26a4cd55`):** APPROVE com achados (sem P0/P1). Um P2 de teste: o teste de custo não reportado passa mesmo sem a regra nova. P3: o medidor não olha `usageStatus`, falta teste do digest do material e de alguns eventos. 12 de 22 mutações sobreviveram. **Correção dos P2/P3 pendente.**
+- **SHAs:** SPEC e testes `cb787dc4`/`ca515ac3`; BUILD `d6d92958`; correções da revisão `91b6777e`.
+- **Testes:** pacote `model-gateway` mais servidor de falhas, 12 arquivos e 225 testes passam (eram 212); typecheck e lint sem erro.
+- **Revisão independente (sessão 07, `26a4cd55`):** APPROVE com achados (sem P0/P1). Um P2 de teste: o teste de custo não reportado passa mesmo sem a regra nova. P3: o medidor não olha `usageStatus`, falta teste do digest do material e de alguns eventos. 12 de 22 mutações sobreviviam. **Corrigido em `91b6777e`:** o medidor passa a respeitar `usageStatus` (R2), o teste de custo ganhou preço e custo exato (R1), e há testes para o adaptador, os eventos, uso parcial, duas mensagens `system` e o corpo ponta a ponta (R3–R6); R7–R9 ficam registrados. Agora 21 das 22 mutações morrem; a que sobra é código defensivo inalcançável.
 - **Testes antigos ajustados:** `gateway-hardening` (prompt CLINICAL virou CONFIDENTIAL, porque CLINICAL não alcança modelo algum); `local-http-providers` ×2 (sem contadores agora é indefinido, não 0/0); `tests/model-fault-server.test.ts`, 6 casos MF01/MF02, com um adaptador de teste que repassa só as mensagens dinâmicas porque o servidor de falhas fixa um corpo de uma mensagem (acompanhamento F06b).
 
 ### 2. SPEC 0268, canais (F12) e acompanhamento do 2xx grande
@@ -25,18 +25,18 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 - **Achado:** um erro 5xx depois do envio liberava o reenvio da mesma mensagem.
 - **SPEC e recibo:** 0268, sha256 `1c3f23978b34b919b53cb2bd91e98e5a122154df869551da307cf31077639992`; recibo `human-decisions-2`.
 - **O que mudou:** 5xx deixa a operação incerta (`UNCERTAIN`) e não reenvia; 429 continua podendo repetir; 4xx continua definitivo. No acompanhamento, uma resposta 2xx com corpo acima do limite também fica incerta (antes virava `FAILED`, o que dizia "não enviado" de uma mensagem aceita). A SPEC não foi alterada; o complemento está em `BUILD-RESULT.md`.
-- **SHAs:** BUILD `ba965eab` (sessão 07); acompanhamento `358d981b`.
+- **SHAs:** BUILD `ba965eab` (sessão 07); acompanhamento `358d981b`, completado por `b1b5995f`.
 - **Testes:** `channel-gateway` 185 passam; com o acompanhamento, `channel-gateway` + `apps/web` 50 arquivos e 356 testes. 10 mutações no código novo, 10 mortas; 12 de 13 no acompanhamento (a que sobra é equivalente).
 - **Revisão independente:** minha, `1fa821e6`: APPROVE com um P2 anterior ao diff (o 2xx grande), corrigido em `358d981b`; a revisão da sessão 07 sobre o acompanhamento deu APPROVE.
 - **Testes antigos ajustados:** `channel-gateway.test.ts:343` e `aud0621-0248-channel-bounds.test.ts:226` passaram de `retryable: true` para `retryable: false` + `effectUnknown: true` (mais fortes, não mais fracos); três casos de corpo grande do mesmo arquivo agora afirmam `UNCERTAIN`.
-- **Não corrige:** 429 sem espera nem teto de tentativas (F12c).
+- **Decisão registrada (G2):** um 3xx com corpo grande continua `FAILED` (um redirecionamento não processa o pedido), agora fixado em teste nos dois adaptadores (`b1b5995f`). **Não corrige:** 429 sem espera nem teto de tentativas (F12c).
 
 ### 3. SPEC 0269, console (F17), mais testes
 
 - **Achado:** o console só mostrava as 25 primeiras conversas; "Abrir caso" de uma aprovação mais distante nunca achava a conversa.
 - **SPEC:** 0269 é T2 (sem mudança de contrato nem de API); não há recibo.
 - **O que mudou:** botão "Carregar mais conversas" e busca por páginas ao abrir um caso, com teto de 20 páginas, mensagem própria para falha de rede, descarte de página que chega depois de trocar o operador, sem duplicar conversas. Só `App.tsx` e os testes.
-- **SHAs:** implementação `8f22e350` (sessão 07); correções e testes `358d981b`.
+- **SHAs:** implementação `8f22e350` (sessão 07); correções e testes `358d981b`, dentro do acompanhamento `b1b5995f`.
 - **Testes:** 11 casos (eram 3); 12 de 13 mutações morrem.
 - **Revisão:** minha em `1fa821e6` (APPROVE, com a lacuna de teste que `358d981b` fechou) e da sessão 07 (APPROVE).
 - **Testes antigos ajustados:** nenhum.
@@ -52,14 +52,14 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 - **Testes antigos ajustados:** `pdsh-012-fs-tools` só passa a enviar uma concessão `WORKSPACE`.
 - **Limites aceitos, com acompanhamento F03b:** `fsync` síncrono, hardlink para fora, raiz aberta pelo nome.
 
-### 5. SPEC 0272, decisão de aprovação (F08) — **correção da revisão pendente**
+### 5. SPEC 0272, decisão de aprovação (F08) — **SHA final pendente**
 
 - **Achado:** se o sistema caía entre decidir a aprovação e registrar o evento, e a execução já avançava, o evento nunca mais era registrado.
 - **SPEC e recibo:** 0272, sha256 `78b43491d82858257673c88351e8d1f1d908ce2331654028f32fe19f0b7e3477`; recibo `human-decisions-3` (`8e667305…`), opção A.
 - **O que mudou:** a recuperação aceita as aprovações já avançadas (`RESERVED`, `EXECUTING`, `EXECUTED`) sem retomar a execução, e o worker passa a procurá-las; o evento recuperado leva `recovered: true`.
-- **SHAs:** SPEC `2078711a`; BUILD `65cb22f0` (sessão 07).
+- **SHAs:** SPEC `2078711a`; BUILD `65cb22f0` (sessão 07); correção da revisão `f250bf72`; o SHA final entra quando a sessão 07 terminar N1/N2.
 - **Testes:** PostgreSQL 16.15 descartável 11/11; `vitest` de agent-core, worker e api 1.006 passam; a suíte completa teve 7.109 passando e um tempo esgotado por carga em um arquivo não tocado.
-- **Revisão independente (minha, `5fee567b`): REVISE pequeno.** A lógica de recuperação está correta, mas o seletor ampliado tem dois P2: uma linha irrecuperável trava as seguintes, e o custo cresce com o histórico (41 ms → 249 ms com 100 mil aprovações). **A correção da revisão está pendente, com a sessão 07; este PR só deve entrar com ela, ou a frente sai da onda.**
+- **Revisão independente (minha):** primeira rodada REVISE pequeno (`5fee567b`): o seletor ampliado tinha dois P2, uma linha irrecuperável travava as seguintes e o custo crescia com o histórico (41 ms → 249 ms com 100 mil aprovações). A sessão 07 corrigiu (isolamento por linha, piso de 30 s, teto de 24 h configurável, pool de teste que interpreta o SQL) e a confirmação deu **APPROVE em `f250bf72`** (`33997910`; as minhas 10 mutações morrem 10/10). Duas observações novas estão em correção: N1 (o modo backfill pode travar com 25 linhas sem envelope) e N2 (erro de infraestrutura engolido por linha); a passada PostgreSQL está em curso e o plano da consulta ainda não foi medido.
 - **Testes antigos ajustados:** o teste de caracterização "decision mismatch" foi trocado por "não retoma e marca recuperado"; o controle do seletor acompanha o novo SQL.
 
 ### 6. SPEC 0273, exames (F12b)
@@ -86,15 +86,17 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 
 ## Fora desta onda (com dono)
 
-- **Imagem com base Debian 13 (F09):** Codex AUD0625, PR próprio, vai antes.
+- **Imagem com base Debian 13 (F09):** Codex AUD0625, PR próprio, vai antes. API, worker e TLS passam em `6494d2f63`; heartbeat e inventário estão em curso; **ainda não qualificada**.
 - **F01, F02, F05; SPECs 0257, 0258, 0262, 0263; F13, F18, F19:** Codex.
 - **F15 (SPEC 0271):** adiada, dono DF; só afeta bancos com eventos de atendimento anteriores à migration 0021.
 - **Acompanhamentos:** F12c (429 sem espera), F06b (oráculo da SPEC 0232 aceitar o `system`), F03b (hardlink), F08b (correções da revisão da 0272, dono DF/07).
+- **Achado 9104:** `tests/claude100/reference-port/controller.test.js` falha também na `main` local, sem relação com a onda; dono Codex.
 - **Servidor (U10), IdP (U09) e piloto (U23):** Ricardo e hospital.
 
 ## Não concede
 
 - **Produção continua `NO_GO`.** Nada aqui é aceite de produção, deploy, servidor nem dado real.
+- Regra de carga (8980): nada de `npm test` completo nem `test:postgres` em paralelo; só `vitest` focado com `--maxWorkers=2`.
 - Os testes foram todos locais e sintéticos. A suíte completa da onda roda uma vez, na integração, com a máquina menos carregada; o PostgreSQL e o E2E dependem da CI deste PR.
 - Merge só com `squash`, no SHA exato, depois dos 5 checks obrigatórios verdes.
 
