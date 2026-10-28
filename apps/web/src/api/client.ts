@@ -1,4 +1,6 @@
 import { redactSensitiveText, type ApiEnvelope } from '@cvg/shared'
+import { consoleLoginProfile } from './console-profile.ts'
+import { resolveApiUrl } from './origin.ts'
 
 export interface TimelineItem {
   id: string
@@ -707,11 +709,33 @@ function isRetryable(error: unknown): boolean {
   return false
 }
 
+/**
+ * SPEC0259 §4.7: in the OIDC profile a call carries only `accept` and
+ * `content-type`; a token, `Authorization` or identity header is a
+ * programming error raised before any request.
+ */
+const OIDC_ALLOWED_REQUEST_HEADERS = new Set(['accept', 'content-type'])
+
+function assertOidcRequestHeaders(headers: HeadersInit | undefined): void {
+  if (headers === undefined) return
+  for (const name of new Headers(headers).keys()) {
+    if (!OIDC_ALLOWED_REQUEST_HEADERS.has(name)) {
+      throw new Error(
+        'Console request header is not allowed in the OIDC profile'
+      )
+    }
+  }
+}
+
 async function requestOnce<T>(
   path: string,
   init: RequestInit | undefined,
   behavior: RequestBehavior
 ): Promise<{ data: T; meta: Record<string, unknown> }> {
+  // SPEC0259 §4.7: the single URL function; it throws before any request.
+  const url = resolveApiUrl(consoleLoginProfile, path)
+  if (consoleLoginProfile.kind === 'oidc')
+    assertOidcRequestHeaders(init?.headers)
   const controller = new AbortController()
   let timedOut = false
   const timeout = setTimeout(() => {
@@ -724,9 +748,9 @@ async function requestOnce<T>(
       : controller.signal
     let response: Response
     try {
-      response = await fetch(path, {
+      response = await fetch(url, {
         ...init,
-        credentials: init?.credentials ?? 'include',
+        credentials: 'include',
         signal
       })
     } catch (error) {
@@ -852,15 +876,28 @@ export const apiClient = {
   ): Promise<OperatorSessionView> {
     // SPEC0250 §3.5: the caller owns this 401 (first visit is not an expired
     // session), and a one-use bootstrap token is never resent by a retry.
+    // SPEC0259 §4.6: the OIDC bundle has no bootstrap token path; the
+    // compile-time comparison lets the bundler drop the header literal.
+    const tokenHeaders: Record<string, string> =
+      __CVG_OPERATOR_LOGIN__ !== 'oidc' && bootstrapToken
+        ? { 'x-cvg-operator-token': bootstrapToken }
+        : {}
     return request(
       '/v1/session',
-      {
-        headers: bootstrapToken
-          ? { 'x-cvg-operator-token': bootstrapToken }
-          : {},
-        credentials: 'include'
-      },
+      { headers: tokenHeaders, credentials: 'include' },
       { notifyUnauthorized: false, retry: bootstrapToken === null }
+    )
+  },
+
+  /**
+   * SPEC0259 §4.8 — starts the OIDC login: no body, no content type, no
+   * retry and no ambient 401 hook. The caller validates `authorizationUrl`.
+   */
+  async startOidcLogin(): Promise<{ authorizationUrl: unknown }> {
+    return request(
+      '/v1/auth/oidc/start',
+      { method: 'POST', credentials: 'include' },
+      { notifyUnauthorized: false, retry: false }
     )
   },
 

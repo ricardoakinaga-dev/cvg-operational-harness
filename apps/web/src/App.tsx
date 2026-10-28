@@ -34,6 +34,12 @@ import {
   type WebIdentityMode,
   type WebSessionStatus
 } from './auth/session.ts'
+import { consoleLoginProfile } from './api/console-profile.ts'
+import {
+  parseAuthorizationUrl,
+  readLoginFragment,
+  type LoginLanding
+} from './api/origin.ts'
 
 interface PanelState<T> {
   data: T
@@ -51,9 +57,15 @@ const loaded = <T,>(data: T): PanelState<T> => ({
   error: null,
   isLoading: false
 })
-const failed = <T,>(data: T): PanelState<T> => ({
+// SPEC0259 §4.8 (all profiles): a 403 is "no permission", distinct from the
+// unavailable text that network, 429 and 5xx keep (J10).
+const forbiddenPanelMessage = 'Sem permissão para esta área.'
+const failed = <T,>(data: T, error?: unknown): PanelState<T> => ({
   data,
-  error: 'Erro ao carregar dados operacionais.',
+  error:
+    error instanceof ApiRequestError && error.status === 403
+      ? forbiddenPanelMessage
+      : 'Erro ao carregar dados operacionais.',
   isLoading: false
 })
 
@@ -84,6 +96,27 @@ function isUnavailableItem(error: unknown): boolean {
 
 const unavailableItemMessage = 'Este item não está mais disponível para você.'
 
+/** SPEC0259 §4.8 — texts of the OIDC profile (the current profile keeps its own). */
+const oidcText = {
+  signIn: 'Entre com sua conta para continuar.',
+  expired: 'A sessão expirou. Entre novamente.',
+  sessionUnavailable: 'Sessão indisponível no momento. Tente novamente.',
+  apiRefusedConfiguration: 'A configuração do console não é aceita pela API.',
+  invalidConfiguration: 'Configuração do console inválida.',
+  opening: 'Abrindo o login…',
+  loginUnavailable: 'Login indisponível no momento. Tente novamente.',
+  signedOut: 'Sessão encerrada.'
+} as const
+
+const landingText: Record<LoginLanding, string> = {
+  negado: 'Não foi possível entrar com esta conta.',
+  indisponivel: oidcText.loginUnavailable
+}
+
+function defaultNavigate(url: string): void {
+  window.location.assign(url)
+}
+
 function canReviewAuditEvidence(role: OperatorRole): boolean {
   return role === 'Supervisor' || role === 'Admin'
 }
@@ -108,9 +141,15 @@ function formatSessionExpiry(expiresAt: string): string {
 export interface AppProps {
   identityMode?: WebIdentityMode
   sessionBootstrap?: SessionBootstrap
+  /** SPEC0259 §4.8 (PB13): top-level navigation to the IdP. */
+  navigate?: (url: string) => void
 }
 
-export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
+export function App({
+  identityMode,
+  sessionBootstrap,
+  navigate = defaultNavigate
+}: AppProps = {}) {
   const resolvedIdentityMode = identityMode ?? getDefaultWebIdentityMode()
   const trustedMode = resolvedIdentityMode === 'trusted'
   const simulationMode = controlledTestProfile && !trustedMode
@@ -119,6 +158,17 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       'Simulation web identity mode requires an explicit controlled test profile'
     )
   }
+  const loginProfile = consoleLoginProfile
+  const oidcMode = loginProfile.kind === 'oidc'
+  if (oidcMode && !trustedMode) {
+    throw new Error('The OIDC console requires the trusted identity mode')
+  }
+  // SPEC0259 J1: from a divergent origin the console makes no call at all.
+  const [originMismatch] = useState(
+    () =>
+      loginProfile.kind === 'oidc' &&
+      window.location.origin !== loginProfile.consoleOrigin
+  )
   const effectiveSessionBootstrap =
     sessionBootstrap ?? defaultTrustedSessionBootstrap
 
@@ -179,9 +229,22 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
   const [trustedSession, setTrustedSession] =
     useState<TrustedWebSession | null>(null)
   const [sessionStatus, setSessionStatus] = useState<WebSessionStatus>(
-    trustedMode ? 'loading' : 'authenticated'
+    originMismatch
+      ? 'configuration_error'
+      : trustedMode
+        ? 'loading'
+        : 'authenticated'
   )
-  const [sessionError, setSessionError] = useState<string | null>(null)
+  const [sessionError, setSessionError] = useState<string | null>(
+    originMismatch ? oidcText.invalidConfiguration : null
+  )
+  const [loginOpening, setLoginOpening] = useState(false)
+  // Bumped when the focus must return to the action without a state change
+  // (a failed start keeps the same state; SPEC0259 §4.8 accessibility).
+  const [focusRequest, setFocusRequest] = useState(0)
+  // SPEC0259 §4.8: the landing fragment is read once, before the session.
+  const landingRef = useRef<LoginLanding | null | undefined>(undefined)
+  const sessionNoticeRef = useRef<HTMLParagraphElement | null>(null)
   const trustedBootstrapAttemptRef = useRef(0)
   const trustedBootstrapInFlightRef = useRef<{
     attempt: number
@@ -212,11 +275,29 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       try {
         const session = await promise
         if (trustedBootstrapAttemptRef.current !== attempt) return
+        // A landing message is shown at most once (SPEC0259 §4.8).
+        if (landingRef.current) landingRef.current = null
         setTrustedSession(session)
         setSessionStatus('authenticated')
       } catch (error) {
         if (trustedBootstrapAttemptRef.current !== attempt) return
         setTrustedSession(null)
+        if (oidcMode) {
+          // SPEC0259 §4.8 / J8: unavailable never turns into a login request.
+          if (isSessionUnavailable(error)) {
+            setSessionStatus('unavailable')
+            setSessionError(oidcText.sessionUnavailable)
+          } else if (error instanceof ApiRequestError && error.status === 401) {
+            setSessionStatus('authentication_required')
+            const landing = landingRef.current
+            if (landing) landingRef.current = null
+            setSessionError(landing ? landingText[landing] : oidcText.signIn)
+          } else {
+            setSessionStatus('configuration_error')
+            setSessionError(oidcText.apiRefusedConfiguration)
+          }
+          return
+        }
         // SPEC0250 §3.5 (AUD0621 F12): a 401 here is "no session yet", not
         // an expiry; an unavailable store or network keeps the cookie and
         // offers a retry instead of asking for authentication.
@@ -237,7 +318,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         }
       }
     },
-    [effectiveSessionBootstrap]
+    [effectiveSessionBootstrap, oidcMode]
   )
 
   useEffect(() => {
@@ -247,14 +328,31 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         ? () => {
             trustedBootstrapAttemptRef.current += 1
             setTrustedSession(null)
+            if (oidcMode) {
+              setSessionStatus('expired')
+              setSessionError(oidcText.expired)
+              return
+            }
             setSessionStatus('authentication_required')
             setSessionError('A sessão operacional expirou. Reautentique-se.')
           }
         : () => undefined
     })
-  }, [simulationMode, trustedMode])
+  }, [simulationMode, trustedMode, oidcMode])
 
   useEffect(() => {
+    if (originMismatch) return
+    if (oidcMode && landingRef.current === undefined) {
+      const landing = readLoginFragment(window.location.hash)
+      landingRef.current = landing
+      if (landing) {
+        window.history.replaceState(
+          window.history.state,
+          '',
+          `${window.location.pathname}${window.location.search}`
+        )
+      }
+    }
     if (simulationMode) {
       trustedBootstrapAttemptRef.current += 1
       setTrustedSession(null)
@@ -263,7 +361,13 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       return
     }
     void loadTrustedSession('loading')
-  }, [loadTrustedSession, simulationMode, trustedMode])
+  }, [
+    loadTrustedSession,
+    simulationMode,
+    trustedMode,
+    originMismatch,
+    oidcMode
+  ])
 
   useEffect(() => {
     if (!trustedMode || !trustedSession) return
@@ -283,7 +387,11 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         trustedBootstrapAttemptRef.current += 1
         setTrustedSession(null)
         setSessionStatus('expired')
-        setSessionError('A sessão operacional expirou. Reautentique-se.')
+        setSessionError(
+          oidcMode
+            ? oidcText.expired
+            : 'A sessão operacional expirou. Reautentique-se.'
+        )
         return
       }
       timeout = window.setTimeout(
@@ -296,7 +404,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       active = false
       if (timeout !== undefined) window.clearTimeout(timeout)
     }
-  }, [trustedMode, trustedSession])
+  }, [trustedMode, trustedSession, oidcMode])
 
   useEffect(() => {
     if (!trustedMode) return
@@ -306,19 +414,58 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       sessionStatus === 'unavailable'
     ) {
       sessionActionRef.current?.focus()
+    } else if (sessionStatus === 'configuration_error') {
+      // No action to offer: the focus goes to the notice (SPEC0259 §4.8).
+      sessionNoticeRef.current?.focus()
     }
-  }, [sessionStatus, trustedMode])
+  }, [sessionStatus, trustedMode, focusRequest])
 
   const endTrustedSession = async () => {
     trustedBootstrapAttemptRef.current += 1
     try {
       await effectiveSessionBootstrap.logout()
+      if (oidcMode) setSessionError(oidcText.signedOut)
     } catch {
       setSessionError('Não foi possível encerrar a sessão no servidor.')
     } finally {
       setTrustedSession(null)
       setSessionStatus('authentication_required')
     }
+  }
+
+  /**
+   * SPEC0259 §4.8 — "Entrar": one start request, then a top-level navigation
+   * to an `https:` authorization URL without credentials (PB13).
+   */
+  const startOidcLogin = async () => {
+    if (loginOpening) return
+    setLoginOpening(true)
+    setSessionError(oidcText.opening)
+    let authorizationUrl: string | null
+    try {
+      const started = await apiClient.startOidcLogin()
+      authorizationUrl = parseAuthorizationUrl(started.authorizationUrl)
+    } catch (error) {
+      setLoginOpening(false)
+      if (
+        error instanceof ApiRequestError &&
+        (error.status === 400 || error.status === 403)
+      ) {
+        setSessionStatus('configuration_error')
+        setSessionError(oidcText.apiRefusedConfiguration)
+        return
+      }
+      setSessionError(oidcText.loginUnavailable)
+      setFocusRequest((request) => request + 1)
+      return
+    }
+    if (!authorizationUrl) {
+      setLoginOpening(false)
+      setSessionStatus('configuration_error')
+      setSessionError(oidcText.invalidConfiguration)
+      return
+    }
+    navigate(authorizationUrl)
   }
 
   const normalizedOperatorId = operatorIdentity.operatorId.trim()
@@ -437,11 +584,11 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           setAuditEvidence(loaded(null))
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!active || !isCurrentIdentity(scope)) return
-        setConversations(failed([]))
-        setMessages(failed([]))
-        setAuditEvents(failed([]))
+        setConversations(failed([], error))
+        setMessages(failed([], error))
+        setAuditEvents(failed([], error))
       })
 
     apiClient
@@ -455,8 +602,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         setApprovals(loaded(page.items))
         setApprovalPageInfo(page.pageInfo)
       })
-      .catch(() => {
-        if (active && isCurrentIdentity(scope)) setApprovals(failed([]))
+      .catch((error: unknown) => {
+        if (active && isCurrentIdentity(scope)) setApprovals(failed([], error))
       })
 
     apiClient
@@ -470,8 +617,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         setTasks(loaded(page.items))
         setTaskPageInfo(page.pageInfo)
       })
-      .catch(() => {
-        if (active && isCurrentIdentity(scope)) setTasks(failed([]))
+      .catch((error: unknown) => {
+        if (active && isCurrentIdentity(scope)) setTasks(failed([], error))
       })
 
     return () => {
@@ -493,8 +640,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         if (active && isCurrentViewScope(scope))
           setMessages(loaded(timeline.messages))
       })
-      .catch(() => {
-        if (active && isCurrentViewScope(scope)) setMessages(failed([]))
+      .catch((error: unknown) => {
+        if (active && isCurrentViewScope(scope)) setMessages(failed([], error))
       })
 
     return () => {
@@ -521,8 +668,9 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         if (active && isCurrentViewScope(scope))
           setAuditEvents(loaded(audit.events))
       })
-      .catch(() => {
-        if (active && isCurrentViewScope(scope)) setAuditEvents(failed([]))
+      .catch((error: unknown) => {
+        if (active && isCurrentViewScope(scope))
+          setAuditEvents(failed([], error))
       })
 
     return () => {
@@ -571,8 +719,9 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         if (active && isCurrentViewScope(scope))
           setAuditEvidence(loaded(evidence))
       })
-      .catch(() => {
-        if (active && isCurrentViewScope(scope)) setAuditEvidence(failed(null))
+      .catch((error: unknown) => {
+        if (active && isCurrentViewScope(scope))
+          setAuditEvidence(failed(null, error))
       })
 
     return () => {
@@ -616,9 +765,9 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           null
         setAuditEvidenceCheckpoint(loaded(current))
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (active && isCurrentViewScope(scope))
-          setAuditEvidenceCheckpoint(failed(null))
+          setAuditEvidenceCheckpoint(failed(null, error))
       })
     return () => {
       active = false
@@ -674,8 +823,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         setApprovals(loaded(page.items))
         setApprovalPageInfo(page.pageInfo)
       })
-      .catch(() => {
-        if (isCurrentIdentity(scope)) setApprovals(failed(previous))
+      .catch((error: unknown) => {
+        if (isCurrentIdentity(scope)) setApprovals(failed(previous, error))
       })
   }
 
@@ -924,8 +1073,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         setTasks(loaded(page.items))
         setTaskPageInfo(page.pageInfo)
       })
-      .catch(() => {
-        if (isCurrentIdentity(scope)) setTasks(failed(previous))
+      .catch((error: unknown) => {
+        if (isCurrentIdentity(scope)) setTasks(failed(previous, error))
       })
   }
 
@@ -973,7 +1122,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           if (isCurrentViewScope(scope)) setApprovals(failed(approvals.data))
         }
       } else {
-        setApprovals(failed(approvals.data))
+        setApprovals(failed(approvals.data, error))
       }
     } finally {
       if (isCurrentViewScope(scope)) setApprovalActionId(null)
@@ -1016,7 +1165,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           // fall through to the failed state below
         }
       }
-      if (isCurrentViewScope(scope)) setTasks(failed(tasks.data))
+      if (isCurrentViewScope(scope)) setTasks(failed(tasks.data, error))
     } finally {
       if (isCurrentViewScope(scope)) setTaskActionId(null)
     }
@@ -1046,7 +1195,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
     authentication_required: 'Autenticação necessária',
     expired: 'Sessão expirada',
     reauthenticating: 'Reautenticando…',
-    unavailable: 'Sessão indisponível'
+    unavailable: 'Sessão indisponível',
+    configuration_error: 'Configuração inválida'
   }
 
   return (
@@ -1099,6 +1249,28 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
                 >
                   Encerrar sessão
                 </button>
+              ) : oidcMode ? (
+                sessionStatus === 'unavailable' ? (
+                  <button
+                    type="button"
+                    className="sessionButton"
+                    ref={sessionActionRef}
+                    onClick={() => void loadTrustedSession('reauthenticating')}
+                  >
+                    Tentar novamente
+                  </button>
+                ) : sessionStatus === 'authentication_required' ||
+                  sessionStatus === 'expired' ? (
+                  <button
+                    type="button"
+                    className="sessionButton"
+                    ref={sessionActionRef}
+                    disabled={loginOpening}
+                    onClick={() => void startOidcLogin()}
+                  >
+                    Entrar
+                  </button>
+                ) : null
               ) : (
                 <button
                   type="button"
@@ -1177,7 +1349,12 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           )}
         </form>
         {trustedMode && sessionStatus !== 'authenticated' ? (
-          <p className="sessionNotice" role="status">
+          <p
+            className="sessionNotice"
+            role="status"
+            ref={sessionNoticeRef}
+            tabIndex={-1}
+          >
             {sessionError ?? sessionStatusLabel[sessionStatus]}
           </p>
         ) : null}

@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { canonicalizeJson } from '@cvg/harness-contracts'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import { normalizeOrigin, parseAllowedOrigins } from './http-security.ts'
+import type { OperatorCookieProfile } from './operator-session.ts'
 
 export const OPERATOR_LOGIN_ENV = 'CVG_OPERATOR_LOGIN'
 export const OIDC_CALLBACK_PATH = '/v1/auth/oidc/callback'
@@ -69,6 +70,11 @@ export interface OidcLoginConfig {
   readonly mfaPolicy: OidcMfaPolicy
   readonly groupMatrix: OidcGroupMatrix
   readonly authorityVersion: string
+  /**
+   * SPEC0259 §4.3: `host-prefixed` in the HTTPS profile (API_REQUIRE_HTTPS=true),
+   * `legacy` otherwise. The server composes only with the same profile.
+   */
+  readonly cookieProfile: OperatorCookieProfile
 }
 
 function invalid(name: string): Error {
@@ -368,6 +374,19 @@ export function parseOperatorLoginConfig(
   if (!allowed.includes(consoleOrigin) || consoleOrigin === issuerUrl.origin) {
     throw invalid('CVG_OPERATOR_CONSOLE_ORIGIN')
   }
+  // SPEC0259 §4.1: the HTTPS profile needs an https: console on a host other
+  // than the API host (the redirect host) and an https: redirect.
+  const httpsProfile = env.API_REQUIRE_HTTPS === 'true'
+  if (httpsProfile) {
+    const consoleUrl = new URL(consoleOrigin)
+    if (
+      consoleUrl.protocol !== 'https:' ||
+      consoleUrl.hostname === redirect.hostname
+    ) {
+      throw invalid('CVG_OPERATOR_CONSOLE_ORIGIN')
+    }
+    if (redirect.protocol !== 'https:') throw invalid('CVG_OIDC_REDIRECT_URI')
+  }
 
   const rawKey = required(env, 'CVG_OIDC_PENDING_COOKIE_KEY')
   const pendingCookieKey = Buffer.from(rawKey, 'base64url')
@@ -397,6 +416,7 @@ export function parseOperatorLoginConfig(
       clientId,
       mfaPolicy,
       groupMatrix
-    })
+    }),
+    cookieProfile: httpsProfile ? 'host-prefixed' : 'legacy'
   }
 }

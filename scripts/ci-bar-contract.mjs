@@ -234,6 +234,16 @@ export const CI_BAR_GATES = [
     artifacts: ['certification/rem21-014-browser-proof.json'],
     skipPolicy: 'none'
   },
+  // SPEC0259 PB6: Chromium proof of the OIDC console on three synthetic HTTPS
+  // hosts (real NGINX by Docker, API entrypoint with PostgreSQL, synthetic
+  // IdP). Its runner validates its own report contract.
+  {
+    id: 'browser-oidc-hosts',
+    marker: 'node scripts/ci-bar.mjs gate browser-oidc-hosts',
+    command: npm('run', 'test:e2e:oidc-hosts'),
+    artifacts: ['certification/logs/oidc-hosts-browser-proof.json'],
+    skipPolicy: 'none'
+  },
   {
     id: 'image',
     marker: 'node scripts/ci-bar.mjs gate image',
@@ -314,6 +324,7 @@ const REQUIRED_PACKAGE_SCRIPTS = [
   'docs:check-links',
   'test:e2e',
   'test:e2e:rem21-014',
+  'test:e2e:oidc-hosts',
   'audit:security',
   'sbom',
   'licenses:check',

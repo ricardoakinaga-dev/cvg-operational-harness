@@ -1,0 +1,58 @@
+{
+  "task": "UP91-025-OIDC-B-20261023",
+  "stage": "CodeQL do PR #29 antes do merge",
+  "date": "2026-10-24",
+  "prHead": "81f1991987dcd87e80dea1f51305f60dfe7443b1",
+  "requiredChecks": "5/5 pass no 81f19919; o agregado CodeQL (não obrigatório) falhou com dois alertas novos",
+  "alerts": [
+    {
+      "number": 35,
+      "rule": "js/cors-misconfiguration-for-credentials",
+      "severity": "high",
+      "location": "apps/api/src/http-security.ts:381",
+      "triage": "O valor de access-control-allow-origin vinha da origem da requisição na mesma função que liga as credenciais. As credenciais só valem quando a origem é igual à origem do console configurada, e os dois chamadores já recusam origem fora da allowlist. Não há exploração conhecida, mas o padrão é o que a regra procura.",
+      "fix": "applyCorsHeaders escreve a entrada da allowlist configurada (allowedOrigins.find) e nunca o valor da requisição; sem entrada correspondente, não escreve cabeçalho CORS. O comportamento é o mesmo para origens permitidas."
+    },
+    {
+      "number": 34,
+      "rule": "js/polynomial-redos",
+      "severity": "high",
+      "location": "tests/support/oidc-hosts/edge.ts:85",
+      "triage": "Helper só de teste (borda da prova de navegador). A regex /^[ \\t]+|[ \\t]+$/g é quadrática com muitos HTAB seguidos.",
+      "fix": "trimSpHtab: trim linear que só apara SP e HTAB, com a mesma semântica (NBSP preservado)."
+    }
+  ],
+  "verification": {
+    "node": "22.23.2",
+    "prettier": "PASS nos 2 arquivos",
+    "eslint": "PASS, 0 problemas",
+    "typecheck": "PASS",
+    "focalTests": "60/60 em apps/api/src/__tests__/oidc-console-hosts-api.test.ts, apps/api/src/__tests__/http-security-edge-branches.test.ts, tests/oidc-hosts-support.test.ts",
+    "mutantsOnNewCode": [
+      {
+        "id": "M1",
+        "what": "ACAC para toda origem permitida",
+        "killed": true,
+        "by": "Q2 keeps another allowed origin without ACAC and refuses a sibling without ACAO; never sends ACAC without the OIDC login"
+      },
+      {
+        "id": "M2",
+        "what": "find devolve a primeira entrada da allowlist",
+        "killed": true,
+        "by": "Q2 keeps another allowed origin without ACAC and refuses a sibling without ACAO"
+      },
+      {
+        "id": "M3",
+        "what": "sem a recusa do chamador e com ACAO refletindo origem fora da lista",
+        "killed": true,
+        "by": "Q2 keeps another allowed origin without ACAC and refuses a sibling without ACAO"
+      }
+    ],
+    "restoredSha256Prefix": "694bcdda5802eef0"
+  },
+  "files": {
+    "apps/api/src/http-security.ts": "694bcdda5802eef02d1b253742d6e483ebb66e68c1e7568955167efea9e25590",
+    "tests/support/oidc-hosts/edge.ts": "67492413b0d8fc133c729bd6a0a1577dd59b99028d041ec79e4fac47096b859d"
+  },
+  "notDone": "Nenhum alerta foi encerrado manualmente; o CodeQL do novo HEAD decide."
+}

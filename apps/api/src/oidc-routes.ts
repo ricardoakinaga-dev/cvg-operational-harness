@@ -29,9 +29,12 @@ import {
 } from './oidc-login-transaction.ts'
 import {
   clearOperatorSessionCookie,
+  hasExactOperatorSessionCookie,
+  HOST_OPERATOR_SESSION_COOKIE,
   OPERATOR_SESSION_COOKIE,
   parseOperatorSessionCookie,
   serializeOperatorSessionCookie,
+  type OperatorCookiePolicy,
   type OperatorSessionRecord,
   type OperatorSessionStore
 } from './operator-session.ts'
@@ -51,6 +54,13 @@ const PROBE_PATHS = new Set([
 ])
 const START_LIMIT = { max: 10, windowMs: 60_000 }
 const CALLBACK_LIMIT = { max: 30, windowMs: 60_000 }
+const OPERATOR_SESSION_COOKIE_NAMES = new Set([
+  OPERATOR_SESSION_COOKIE,
+  HOST_OPERATOR_SESSION_COOKIE
+])
+
+/** SPEC0259 §4.5 (DB1): the only two failure fragments of the landing. */
+export type OperatorLoginLanding = 'negado' | 'indisponivel'
 
 /** `BuildServerOptions.operatorLogin` (SPEC0254 §4.8). */
 export interface OperatorLoginComposition {
@@ -78,15 +88,17 @@ export interface OperatorLoginRouteDependencies {
     'readSnapshot' | 'applyVerifiedPrincipalState'
   >
   readonly rateLimiter: RateLimiterPort
-  readonly secureCookies: boolean
+  /** SPEC0259 §4.3: the operational cookie profile of the server. */
+  readonly cookiePolicy: OperatorCookiePolicy
   readonly log: (entry: OperatorLoginLogEntry) => void
 }
 
 /**
- * The cookie name as `parseOperatorSessionCookie` cuts it (segments by `;`,
- * name before the first `=`, trimmed), with any value, and every element of
- * an array header. Segments are also cut by `,` (how `inject` joins an array
- * header): the guard may see more cookies than the parser, never fewer.
+ * Either operational cookie name (legacy or `__Host-`, SPEC0259 §4.3), cut
+ * more widely than the exact parser: segments by `;` and `,` (how `inject`
+ * joins an array header), name before the first `=`, JavaScript `trim()`,
+ * any value, every element of an array header. The guard may see more
+ * cookies than the parser, never fewer.
  */
 export function hasOperatorSessionCookieName(value: unknown): boolean {
   const headers = Array.isArray(value) ? value : [value]
@@ -95,8 +107,8 @@ export function hasOperatorSessionCookieName(value: unknown): boolean {
       typeof header === 'string' &&
       header
         .split(/[;,]/)
-        .some(
-          (segment) => segment.split('=')[0]?.trim() === OPERATOR_SESSION_COOKIE
+        .some((segment) =>
+          OPERATOR_SESSION_COOKIE_NAMES.has(segment.split('=')[0]?.trim() ?? '')
         )
   )
 }
@@ -170,6 +182,19 @@ function readCallbackParameters(
     return codes[0] ? { state: states[0], code: codes[0] } : null
   }
   return { state: states[0], error: errors[0]! }
+}
+
+/** HTTP class of an unexpected callback failure; 500 when it has none. */
+function failureStatus(error: unknown): number {
+  if (typeof error === 'object' && error !== null) {
+    const { statusCode, status } = error as {
+      statusCode?: unknown
+      status?: unknown
+    }
+    if (typeof statusCode === 'number') return statusCode
+    if (typeof status === 'number') return status
+  }
+  return 500
 }
 
 function isEmptyBody(body: unknown): boolean {
@@ -278,8 +303,13 @@ export function registerOperatorLoginRoutes(
       // Step 5: only a single valid cookie of a live session is carried.
       const cookies: string[] = []
       let previousSessionId: string | undefined
-      if (hasOperatorSessionCookieName(request.headers.cookie)) {
-        const sessionId = parseOperatorSessionCookie(request.headers.cookie)
+      if (
+        hasExactOperatorSessionCookie(request.headers.cookie, deps.cookiePolicy)
+      ) {
+        const sessionId = parseOperatorSessionCookie(
+          request.headers.cookie,
+          deps.cookiePolicy
+        )
         let record: OperatorSessionRecord | null = null
         if (sessionId) {
           try {
@@ -292,7 +322,7 @@ export function registerOperatorLoginRoutes(
         if (sessionId && record && record.expiresAt > Date.now()) {
           previousSessionId = sessionId
         } else {
-          cookies.push(clearOperatorSessionCookie(deps.secureCookies))
+          cookies.push(clearOperatorSessionCookie(deps.cookiePolicy))
         }
       }
       let started
@@ -329,142 +359,177 @@ export function registerOperatorLoginRoutes(
           ...(reasonCode ? { reasonCode } : {}),
           correlationId
         })
-      // Step 1: answers before step 2 never touch the pending cookie (I8).
-      let limit
+      // SPEC0259 §4.5: the callback is a top-level navigation, so every
+      // answer of the handler goes back to the fixed console origin. The
+      // fragment carries only the category; the reason goes to the log.
+      const land = (outcome: OperatorLoginLanding, setCookie?: string) => {
+        reply
+          .code(303)
+          .header('location', `${login.consoleOrigin}/#cvg-login=${outcome}`)
+        if (setCookie !== undefined) reply.header('set-cookie', setCookie)
+        return reply.send()
+      }
+      // I8: the default exit below clears the pending cookie only from step
+      // 2 on, and never on the state-store outage of step 3.
+      let clearPendingOnFailure = false
       try {
-        limit = await deps.rateLimiter.check(
-          `oidc:callback:ip:${request.ip}`,
-          CALLBACK_LIMIT
-        )
-      } catch {
-        log('rate_limit', 'error', 'rate_limited')
-        return unavailable(reply, correlationId)
-      }
-      if (!limit.allowed) {
-        log('rate_limit', 'error', 'rate_limited')
-        reply.code(429).header('retry-after', String(limit.retryAfterSeconds))
-        return fail(
-          'rate_limited',
-          'Request rate limit exceeded. Retry later.',
-          correlationId
-        )
-      }
-      const clearPending = login.authority.clearPendingCookie()
-      // One body for every refusal; the reason goes only to the log (M21).
-      const refuse = (step: string, reasonCode: OidcLoginReasonCode) => {
-        log(step, 'error', reasonCode)
-        reply.code(401).header('set-cookie', clearPending)
-        return fail('unauthorized', 'Operator login failed', correlationId)
-      }
-      const outage = (step: string, reasonCode: OidcLoginReasonCode) => {
-        log(step, 'error', reasonCode)
-        reply.header('set-cookie', clearPending)
-        return unavailable(reply, correlationId)
-      }
-
-      // Step 2.
-      const parameters = readCallbackParameters(request.raw.url)
-      if (!parameters) return refuse('parameters', 'state_invalid')
-
-      // Step 3: the state is consumed before any call to the token endpoint.
-      let pending: PendingOidcLogin
-      try {
-        pending = await login.authority.readCallback({
-          cookieHeader: request.headers.cookie,
-          state: parameters.state,
-          stateStore: login.stateStore
-        })
-      } catch (error) {
-        if (error instanceof OidcLoginStateUnavailableError) {
-          // The pending cookie stays: the operator can retry the same callback.
-          log('state', 'error', 'state_unavailable')
-          return unavailable(reply, correlationId)
+        // Step 1: answers before step 2 never touch the pending cookie (I8).
+        let limit
+        try {
+          limit = await deps.rateLimiter.check(
+            `oidc:callback:ip:${request.ip}`,
+            CALLBACK_LIMIT
+          )
+        } catch {
+          log('rate_limit', 'error', 'rate_limited')
+          return land('indisponivel')
         }
-        return refuse('state', 'state_invalid')
-      }
-
-      // Step 4.
-      if (parameters.code === undefined) return refuse('idp', 'idp_error')
-
-      // Step 5.
-      let claims: Record<string, unknown>
-      try {
-        claims = await login.authority.complete({
-          code: parameters.code,
-          state: parameters.state,
-          pending
-        })
-      } catch (error) {
-        return error instanceof OidcIdpUnavailableError
-          ? outage('token', 'idp_unavailable')
-          : refuse('token', 'token_rejected')
-      }
-
-      // Step 6.
-      let mapped: MappedOidcIdentity
-      try {
-        mapped = mapVerifiedOidcIdentity(claims, login.authority.identityPolicy)
-      } catch (error) {
-        return refuse(
-          'claims',
-          error instanceof OidcLoginRefusal
-            ? error.reasonCode
-            : 'token_rejected'
-        )
-      }
-
-      // Step 7: the principal is current BEFORE the session exists (I2).
-      try {
-        await produceVerifiedPrincipal(deps.caseAuthority, {
-          tenantId: mapped.identity.tenantId,
-          operatorId: mapped.identity.operatorId,
-          role: mapped.identity.role,
-          entryActive: mapped.active,
-          authorityVersion: login.authorityVersion,
-          proofRef: mapped.proofRef
-        })
-      } catch (error) {
-        if (error instanceof PrincipalProducerError && error.status === 401) {
-          return refuse('principal', error.reasonCode)
+        if (!limit.allowed) {
+          log('rate_limit', 'error', 'rate_limited')
+          return land('indisponivel')
         }
-        return outage(
-          'principal',
-          error instanceof PrincipalProducerError
-            ? error.reasonCode
-            : 'principal_unavailable'
-        )
-      }
-      if (!mapped.active) return refuse('principal', 'inactive_group')
-
-      // Step 8: every login starts a new family; a live previous session of
-      // this browser is retired in the same unit (D7).
-      const next = { identity: mapped.identity, expiresAt: mapped.expiresAt }
-      let record: OperatorSessionRecord
-      try {
-        const previous = pending.previousSessionId
-        if (previous !== undefined && deps.sessionStore.switchIdentity) {
-          record = await deps.sessionStore.switchIdentity(previous, next)
-        } else if (previous !== undefined) {
-          // Stores without an atomic switch (the in-memory test store).
-          await deps.sessionStore.revoke(previous)
-          record = await deps.sessionStore.create(next)
-        } else {
-          record = await deps.sessionStore.create(next)
+        clearPendingOnFailure = true
+        const clearPending = login.authority.clearPendingCookie()
+        // One landing for every refusal; the reason goes only to the log (M21).
+        const refuse = (step: string, reasonCode: OidcLoginReasonCode) => {
+          log(step, 'error', reasonCode)
+          return land('negado', clearPending)
         }
-      } catch {
-        return outage('session', 'session_unavailable')
-      }
+        const outage = (step: string, reasonCode: OidcLoginReasonCode) => {
+          log(step, 'error', reasonCode)
+          return land('indisponivel', clearPending)
+        }
 
-      // Step 9.
-      log('session', 'ok')
-      reply
-        .code(303)
-        .header('location', `${login.consoleOrigin}/`)
-        .header('set-cookie', [
-          serializeOperatorSessionCookie(record, deps.secureCookies),
+        // Step 2.
+        const parameters = readCallbackParameters(request.raw.url)
+        if (!parameters) return refuse('parameters', 'state_invalid')
+
+        // Step 3: the state is consumed before any call to the token endpoint.
+        let pending: PendingOidcLogin
+        try {
+          pending = await login.authority.readCallback({
+            cookieHeader: request.headers.cookie,
+            state: parameters.state,
+            stateStore: login.stateStore
+          })
+        } catch (error) {
+          if (error instanceof OidcLoginStateUnavailableError) {
+            // The pending cookie stays: the operator can retry the same callback.
+            clearPendingOnFailure = false
+            log('state', 'error', 'state_unavailable')
+            return land('indisponivel')
+          }
+          return refuse('state', 'state_invalid')
+        }
+
+        // Step 4.
+        if (parameters.code === undefined) return refuse('idp', 'idp_error')
+
+        // Step 5.
+        let claims: Record<string, unknown>
+        try {
+          claims = await login.authority.complete({
+            code: parameters.code,
+            state: parameters.state,
+            pending
+          })
+        } catch (error) {
+          return error instanceof OidcIdpUnavailableError
+            ? outage('token', 'idp_unavailable')
+            : refuse('token', 'token_rejected')
+        }
+
+        // Step 6.
+        let mapped: MappedOidcIdentity
+        try {
+          mapped = mapVerifiedOidcIdentity(
+            claims,
+            login.authority.identityPolicy
+          )
+        } catch (error) {
+          return refuse(
+            'claims',
+            error instanceof OidcLoginRefusal
+              ? error.reasonCode
+              : 'token_rejected'
+          )
+        }
+
+        // Step 7: the principal is current BEFORE the session exists (I2).
+        try {
+          await produceVerifiedPrincipal(deps.caseAuthority, {
+            tenantId: mapped.identity.tenantId,
+            operatorId: mapped.identity.operatorId,
+            role: mapped.identity.role,
+            entryActive: mapped.active,
+            authorityVersion: login.authorityVersion,
+            proofRef: mapped.proofRef
+          })
+        } catch (error) {
+          if (error instanceof PrincipalProducerError && error.status === 401) {
+            return refuse('principal', error.reasonCode)
+          }
+          return outage(
+            'principal',
+            error instanceof PrincipalProducerError
+              ? error.reasonCode
+              : 'principal_unavailable'
+          )
+        }
+        if (!mapped.active) return refuse('principal', 'inactive_group')
+
+        // Step 8: every login starts a new family; a live previous session of
+        // this browser is retired in the same unit (D7).
+        const next = { identity: mapped.identity, expiresAt: mapped.expiresAt }
+        let record: OperatorSessionRecord
+        try {
+          const previous = pending.previousSessionId
+          if (previous !== undefined && deps.sessionStore.switchIdentity) {
+            record = await deps.sessionStore.switchIdentity(previous, next)
+          } else if (previous !== undefined) {
+            // Stores without an atomic switch (the in-memory test store).
+            await deps.sessionStore.revoke(previous)
+            record = await deps.sessionStore.create(next)
+          } else {
+            record = await deps.sessionStore.create(next)
+          }
+        } catch {
+          return outage('session', 'session_unavailable')
+        }
+
+        // Step 9.
+        log('session', 'ok')
+        reply
+          .code(303)
+          .header('location', `${login.consoleOrigin}/`)
+          .header('set-cookie', [
+            serializeOperatorSessionCookie(record, deps.cookiePolicy),
+            clearPending
+          ])
+        return reply.send()
+      } catch (error) {
+        // SPEC0259 §4.5 default exit (rebase rule with the U04; build note
+        // O5): a failure of the handler outside the table lands on the
+        // console instead of the global 500 JSON. Class 4xx is "negado",
+        // anything else "indisponivel". The pending cookie follows I8
+        // (cleared from step 2 on, kept on the state-store outage); no other
+        // cookie of this answer survives (never a partial session cookie).
+        if (reply.sent) throw error
+        reply.removeHeader('set-cookie')
+        let clearPending: string | undefined
+        if (clearPendingOnFailure) {
+          try {
+            clearPending = login.authority.clearPendingCookie()
+          } catch {
+            clearPending = undefined
+          }
+        }
+        const status = failureStatus(error)
+        return land(
+          status >= 400 && status < 500 ? 'negado' : 'indisponivel',
           clearPending
-        ])
-      return reply.send()
+        )
+      }
     }
   )
 }
