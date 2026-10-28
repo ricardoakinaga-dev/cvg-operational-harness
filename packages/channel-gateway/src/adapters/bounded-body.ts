@@ -36,8 +36,8 @@ export function isResponseTooLarge(error: unknown): error is Error {
 
 /**
  * Maps a body over its ceiling. A known non-2xx status wins and maps as that
- * status does (provider_rejected; 5xx is effect-unknown, 429 retryable); otherwise the
- * adapter's size rejection stays as it was.
+ * status does (provider_rejected; 5xx is effect-unknown, 429 retryable); a 2xx
+ * whose body is over the ceiling stays effect-unknown, never FAILED.
  */
 export function oversizedResponseError(
   error: Error,
@@ -52,9 +52,15 @@ export function oversizedResponseError(
       statusEffectOptions(status)
     )
   }
+  // No non-2xx status: the destination answered 2xx (it accepted the send)
+  // but its body was cut, so the provider id is lost. The outcome stays
+  // UNCERTAIN and is never resent (SPEC 0268 invariant 1; follow-up
+  // AUD0625-FOLLOWUP-0268-0269).
   return new ChannelError(
     'provider_rejected',
-    `${label} response exceeded the size limit`
+    `${label} response exceeded the size limit`,
+    false,
+    { effectUnknown: true }
   )
 }
 

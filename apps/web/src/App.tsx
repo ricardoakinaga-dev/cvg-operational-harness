@@ -145,6 +145,9 @@ export interface AppProps {
   navigate?: (url: string) => void
 }
 
+/** Most extra conversation pages "Abrir caso" walks before giving up. */
+const maxCaseSearchPages = 20
+
 export function App({
   identityMode,
   sessionBootstrap,
@@ -830,21 +833,24 @@ export function App({
 
   /**
    * SPEC 0269 — appends the next conversation page. Returns the grown list and
-   * the page info, or null when the view changed or the request failed.
+   * the page info, `'stale'` when the view changed meanwhile (the page is
+   * discarded) or `'failed'` when the request failed.
    */
   const fetchMoreConversations = async (
     loadedItems: ConversationView[],
     pageInfo: ListPageInfo
-  ): Promise<{ items: ConversationView[]; pageInfo: ListPageInfo } | null> => {
+  ): Promise<
+    { items: ConversationView[]; pageInfo: ListPageInfo } | 'stale' | 'failed'
+  > => {
     const identity = currentOperatorIdentity()
     const scope = viewScopeToken
-    if (!identity) return null
+    if (!identity) return 'stale'
     try {
       const page = await apiClient.listConversations(identity, {
         limit: pageInfo.limit,
         offset: pageInfo.offset + pageInfo.limit
       })
-      if (!isCurrentViewScope(scope)) return null
+      if (!isCurrentViewScope(scope)) return 'stale'
       const known = new Set(loadedItems.map((item) => item.id))
       const items = [
         ...loadedItems,
@@ -854,7 +860,7 @@ export function App({
       setConversationPageInfo(page.pageInfo)
       return { items, pageInfo: page.pageInfo }
     } catch {
-      return null
+      return isCurrentViewScope(scope) ? 'failed' : 'stale'
     }
   }
 
@@ -873,16 +879,35 @@ export function App({
     let items = conversations.data
     let pageInfo = conversationPageInfo
     let conversation = items.find((item) => item.openSessionId === sessionId)
-    // The case may sit past the loaded pages: keep paging until it appears.
-    while (!conversation && pageInfo?.hasNextPage) {
+    // The case may sit past the loaded pages: keep paging until it appears,
+    // up to a ceiling so a missing case cannot walk a huge list.
+    let pagesFetched = 0
+    while (
+      !conversation &&
+      pageInfo?.hasNextPage &&
+      pagesFetched < maxCaseSearchPages
+    ) {
       const next = await fetchMoreConversations(items, pageInfo)
-      if (!next) break
+      // A changed view owns the screen now: say nothing about the old one.
+      if (next === 'stale') return
+      if (next === 'failed') {
+        setApprovalMessage('Não foi possível carregar mais conversas.')
+        return
+      }
+      pagesFetched += 1
       items = next.items
       pageInfo = next.pageInfo
       conversation = items.find((item) => item.openSessionId === sessionId)
     }
-    if (conversation) selectConversation(conversation)
-    else setApprovalMessage('Caso não encontrado entre as conversas.')
+    if (conversation) {
+      selectConversation(conversation)
+    } else {
+      setApprovalMessage(
+        pageInfo?.hasNextPage
+          ? 'Caso não encontrado nas conversas carregadas.'
+          : 'Caso não encontrado entre as conversas.'
+      )
+    }
   }
 
   const refreshAudit = async (scope = viewScopeToken) => {
