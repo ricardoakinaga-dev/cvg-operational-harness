@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { InMemoryCostBudgetStore } from '../budget.ts'
 import type {
+  ModelGatewayEvent,
   ModelGatewayRequest,
   ModelProfile,
   ProviderRequest,
@@ -372,27 +373,91 @@ describe('AUD0625 F11 — unknown usage is not zero and a rejected output is sti
     expect(result.usage).not.toEqual({ inputTokens: 0, outputTokens: 0 })
   })
 
-  it('marks the gateway result as unreported and charges at least the reservation when usage is absent', async () => {
-    const seen: ProviderRequest[] = []
-    const store = new InMemoryCostBudgetStore()
-    const g = gateway(
-      registry(),
-      'local',
-      seen,
-      { budget: { store, limits: { tenant: 100 } } },
-      { usage: undefined as never },
-      { estimatedCostUsd: 0.5 }
-    )
-    const result = await g.generate(
-      request({
-        input: {
-          system: INSTRUCTION_A,
-          messages: [{ role: 'user', content: 'x' }]
-        }
+  describe('unreported usage is charged at its exact conservative bound', () => {
+    const userText = 'hello'
+    // bound = every UTF-8 byte of the rendered input as an input token plus
+    // maxTokens as output (SPEC 0267 §3.3), rounded like the gateway does.
+    const boundCost = (
+      pricing: { inputPer1kUsd: number; outputPer1kUsd: number },
+      maxTokens: number
+    ) =>
+      Math.round(
+        ((Buffer.byteLength(INSTRUCTION_A) + Buffer.byteLength(userText)) /
+          1000) *
+          pricing.inputPer1kUsd *
+          1_000_000 +
+          (maxTokens / 1000) * pricing.outputPer1kUsd * 1_000_000
+      ) / 1_000_000
+
+    async function run(profileOverrides: Partial<ModelProfile>) {
+      const store = new InMemoryCostBudgetStore()
+      const events: ModelGatewayEvent[] = []
+      const meter = new TokenMeter()
+      const g = gateway(
+        registry(),
+        'local',
+        [],
+        {
+          budget: { store, limits: { tenant: 100 } },
+          meter,
+          onEvent: (event) => events.push(event)
+        },
+        { usage: undefined as never },
+        profileOverrides
+      )
+      const result = await g.generate(
+        request({
+          input: {
+            system: INSTRUCTION_A,
+            messages: [{ role: 'user', content: userText }]
+          }
+        })
+      )
+      return { result, store, events, meter }
+    }
+
+    it('charges the bound, above the reservation, once', async () => {
+      const pricing = { inputPer1kUsd: 1, outputPer1kUsd: 2 }
+      const { result, store } = await run({
+        pricing,
+        maxTokens: 100,
+        estimatedCostUsd: 0.001
       })
-    )
-    expect((result as { usageStatus?: string }).usageStatus).toBe('unreported')
-    expect(store.consumed(`tenant:${TENANT}`)).toBeGreaterThanOrEqual(0.5)
+      const bound = boundCost(pricing, 100)
+      expect(result.usageStatus).toBe('unreported')
+      expect(result.costUsd).toBeCloseTo(bound, 6)
+      expect(result.usage.inputTokens).toBe(
+        Buffer.byteLength(INSTRUCTION_A) + Buffer.byteLength(userText)
+      )
+      expect(result.usage.outputTokens).toBe(100)
+      // reservation 0.001 + settle of the difference = the bound, exactly once
+      expect(store.consumed(`tenant:${TENANT}`)).toBeCloseTo(bound, 6)
+    })
+
+    it('never charges less than the reservation when the bound is smaller', async () => {
+      const { result, store } = await run({
+        pricing: { inputPer1kUsd: 0.000001, outputPer1kUsd: 0.000001 },
+        maxTokens: 10,
+        estimatedCostUsd: 0.5
+      })
+      expect(result.usageStatus).toBe('unreported')
+      expect(result.costUsd).toBeCloseTo(0.5, 6)
+      expect(store.consumed(`tenant:${TENANT}`)).toBeCloseTo(0.5, 6)
+    })
+
+    it('counts the call apart in the meter and flags the completed event', async () => {
+      const { events, meter } = await run({
+        pricing: { inputPer1kUsd: 1, outputPer1kUsd: 2 }
+      })
+      expect(meter.unreportedRequests).toBe(1)
+      expect(meter.snapshot()).toMatchObject({
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0
+      })
+      const completed = events.find((e) => e.type === 'model.call.completed')
+      expect(completed?.detail).toContain('usage_unreported')
+    })
   })
 
   const structured = {

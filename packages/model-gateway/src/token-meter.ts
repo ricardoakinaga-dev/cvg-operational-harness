@@ -81,9 +81,14 @@ export class TokenMeter {
     return this.snapshot()
   }
 
-  /** Convenience: records the usage of a gateway `ModelResult`. */
+  /**
+   * Convenience: records the usage of a gateway `ModelResult`. A result whose
+   * `usageStatus` is `unreported` carries an accounting bound, not a
+   * measurement (SPEC 0267 §3.3): it is counted apart and adds no tokens.
+   */
   recordModelResult(result: {
     readonly usage: ProviderUsage
+    readonly usageStatus?: 'reported' | 'unreported'
   }): TokenMeterSnapshot {
     if (
       !result ||
@@ -93,6 +98,10 @@ export class TokenMeter {
       throw new TokenMeterError(
         'TokenMeter.recordModelResult requires a result with measured usage'
       )
+    }
+    if (result.usageStatus === 'unreported') {
+      this.recordUnreported()
+      return this.snapshot()
     }
     return this.record(result.usage)
   }
