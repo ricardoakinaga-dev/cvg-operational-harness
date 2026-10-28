@@ -160,6 +160,7 @@ import {
   clearOperatorSessionCookie,
   createInMemoryOperatorSessionStore,
   parseOperatorSessionCookie,
+  type OperatorCookiePolicy,
   type OperatorSessionRecord,
   type OperatorSessionStore,
   serializeOperatorSessionCookie
@@ -491,7 +492,26 @@ export function buildServer(options: BuildServerOptions = {}) {
             options.persistence.pool
           )
         : new InMemoryControlPlaneStore())
-  const httpSecurity = normalizeHttpSecurityOptions(options.httpSecurity)
+  // SPEC0259 §4.2: credentialed CORS only for the OIDC console origin.
+  const httpSecurity = normalizeHttpSecurityOptions({
+    ...options.httpSecurity,
+    credentialedOrigin: options.operatorLogin?.consoleOrigin ?? null
+  })
+  // SPEC0259 §4.3: `__Host-` cookies only with the OIDC login over HTTPS; the
+  // authority that writes the pending cookie must use the same profile.
+  const operatorCookiePolicy: OperatorCookiePolicy =
+    options.operatorLogin && httpSecurity.enforceHttps
+      ? { profile: 'host-prefixed' }
+      : { profile: 'legacy', secure: httpSecurity.enforceHttps }
+  if (
+    options.operatorLogin &&
+    options.operatorLogin.authority.cookieProfile !==
+      operatorCookiePolicy.profile
+  ) {
+    throw new Error(
+      'OIDC login cookie profile does not match the server cookie profile'
+    )
+  }
   const requestMetrics =
     options.requestMetrics ?? new ControlledRequestMetrics()
   const requestMetricsEnabled =
@@ -541,15 +561,19 @@ export function buildServer(options: BuildServerOptions = {}) {
       fail('not_found', 'Route not found', createCorrelationId())
     )
   })
-  app.addHook('onRequest', async (request, reply) => {
-    const targetFailure = classifyHttpRequestTarget(request.raw.url)
-    if (!targetFailure) return
+  // Named: SPEC0259 §4.2 pins the HTTP hook right after this one.
+  app.addHook(
+    'onRequest',
+    async function requestTargetOnRequest(request, reply) {
+      const targetFailure = classifyHttpRequestTarget(request.raw.url)
+      if (!targetFailure) return
 
-    reply.code(targetFailure.statusCode)
-    return reply.send(
-      fail(targetFailure.code, targetFailure.message, createCorrelationId())
-    )
-  })
+      reply.code(targetFailure.statusCode)
+      return reply.send(
+        fail(targetFailure.code, targetFailure.message, createCorrelationId())
+      )
+    }
+  )
   installHttpSecurityHooks(app, httpSecurity)
   installResponseCorrelationHook(app)
   if (options.operatorLogin) {
@@ -561,7 +585,7 @@ export function buildServer(options: BuildServerOptions = {}) {
   if (identityMode === 'trusted' && options.operatorSessionStore) {
     installOperatorSessionHook({
       app,
-      enforceHttps: httpSecurity.enforceHttps,
+      cookiePolicy: operatorCookiePolicy,
       operatorSessionStore: options.operatorSessionStore,
       sessionIdentityByHeaders,
       sessionRecordByHeaders,
@@ -963,7 +987,8 @@ export function buildServer(options: BuildServerOptions = {}) {
       // family in the same transaction that creates the new session, so a
       // failure in either step changes nothing (AUD-0603 F01/F02).
       const presentedSessionId = parseOperatorSessionCookie(
-        request.headers.cookie
+        request.headers.cookie,
+        operatorCookiePolicy
       )
       const retireLineage = !rotate && presentedSessionId !== null
       const next = { identity, expiresAt: Number(claims.exp) * 1000 }
@@ -993,7 +1018,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       // Set-Cookie only after the durable change committed.
       reply.header(
         'set-cookie',
-        serializeOperatorSessionCookie(record, httpSecurity.enforceHttps)
+        serializeOperatorSessionCookie(record, operatorCookiePolicy)
       )
       return ok(
         {
@@ -1005,7 +1030,7 @@ export function buildServer(options: BuildServerOptions = {}) {
     } catch (error) {
       reply.header(
         'set-cookie',
-        clearOperatorSessionCookie(httpSecurity.enforceHttps)
+        clearOperatorSessionCookie(operatorCookiePolicy)
       )
       const safeError = toSafeError(error)
       reply.code(statusCodeForError(safeError.code))
@@ -1017,7 +1042,10 @@ export function buildServer(options: BuildServerOptions = {}) {
     const correlationId = createCorrelationId()
     reply.header('cache-control', 'no-store')
     try {
-      const sessionId = parseOperatorSessionCookie(request.headers.cookie)
+      const sessionId = parseOperatorSessionCookie(
+        request.headers.cookie,
+        operatorCookiePolicy
+      )
       if (sessionId && options.operatorSessionStore) {
         await options.operatorSessionStore.revoke(sessionId)
       }
@@ -1025,7 +1053,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       // revocation keeps it so the operator can retry (AUD-0601 F03).
       reply.header(
         'set-cookie',
-        clearOperatorSessionCookie(httpSecurity.enforceHttps)
+        clearOperatorSessionCookie(operatorCookiePolicy)
       )
       return ok({ loggedOut: true }, correlationId)
     } catch {
@@ -1044,7 +1072,7 @@ export function buildServer(options: BuildServerOptions = {}) {
       sessionStore: options.operatorSessionStore,
       caseAuthority,
       rateLimiter,
-      secureCookies: httpSecurity.enforceHttps,
+      cookiePolicy: operatorCookiePolicy,
       log: (entry) => {
         safeTelemetry(() =>
           telemetry.log(entry.status === 'ok' ? 'info' : 'warn', entry.event, {
@@ -1063,6 +1091,17 @@ export function buildServer(options: BuildServerOptions = {}) {
           ...(entry.reasonCode ? { errorCode: entry.reasonCode } : {})
         })
       }
+    })
+  }
+  if (options.operatorLogin) {
+    // SPEC0259 §4.4 (J7): in the OIDC mode every /v1/** answer is
+    // `private, no-store`, including hook, error-handler and 303 answers.
+    // Registered after the `onSend` hooks that set the plain `no-store`.
+    app.addHook('onSend', async (request, reply, payload) => {
+      if (request.url.startsWith('/v1/')) {
+        reply.header('cache-control', 'private, no-store')
+      }
+      return payload
     })
   }
 

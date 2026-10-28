@@ -1,0 +1,89 @@
+{
+  "task": "UP91-025-OIDC-B-20261023",
+  "round": "code-review-r1",
+  "reviewer": "crítico de código independente, contexto novo",
+  "spec": "docs/02_spec/0259_oidc_console_distinct_hosts.md",
+  "specRevision": "r3",
+  "specSha256": "ad0282a096d9f9ed21c9294ddbe4f51d913823022c31411cc5ea642b55b4778a",
+  "base": "f06a6613",
+  "head": "f558d998",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "M1",
+      "where": "apps/api/src/oidc-routes.ts:492-498 (teste em apps/api/src/__tests__/oidc-console-hosts-api.test.ts:1155-1166)",
+      "issue": "A saída padrão do callback remove todo Set-Cookie e sempre pousa em #cvg-login=indisponivel. Ela não apaga o pendente, embora toda exceção que chega ali nasça no passo 2 ou depois. Ela também não mapeia a classe 4xx para #cvg-login=negado.",
+      "spec": "§4.5, último item (regra de rebase com a U04): 'indisponivel se 5xx, negado se 4xx; o pendente segue a I8 da A'. I8 da SPEC0254 (0254:78): o pendente é apagado em toda resposta a partir do passo 2, exceto com o store de state fora.",
+      "fix": "No catch, manter a remoção de Set-Cookie e repor a limpeza do pendente, calculada antes dos passos ou pela função única do cookie pendente com o perfil. Mapear erro com statusCode ou status entre 400 e 499 para negado e o resto para indisponivel. Na Q5, injetar a falha por outra costura que não o clearPendingCookie, com um erro genérico e um de classe 4xx, e conferir o Location, o pendente limpo (Max-Age=0, Secure, nome do perfil) e nenhum cookie operacional."
+    },
+    {
+      "id": "M2",
+      "where": "tests/e2e-oidc-hosts/oidc-hosts.spec.ts:911-932",
+      "issue": "A Q9i3 confere só o status 303 do callback, a identidade da vítima e a contagem do token sem mudança. Os caminhos de indisponibilidade que não leem cookie (limite do callback, erro do limitador, store de state fora) produzem os mesmos fatos, e o controle de material vivo também passa neles. O 'negado' exigido não é provado; o comentário em :921 o afirma sem asserção.",
+      "spec": "§9 Q9i3: 'o callback com o code do atacante dá negado'. Abertura da Q9i: 'Nenhuma pode passar vazia'.",
+      "fix": "Conferir a categoria do pouso no callback da i3: pelo Location do 303 lido na resposta de redirecionamento, ou pela borda registrando só a categoria fixa do fragmento. No mínimo, conferir que o __Host-cvg_oidc_pending da vítima sumiu de context.cookies() depois do callback, junto com o token sem mudança. Depois, rodar a Q9 de novo."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "where": "tests/e2e-oidc-hosts/oidc-hosts.spec.ts:589-599; tests/support/oidc-hosts/edge.ts:175-186",
+      "note": "O 403 da Q9e vem da borda, que acrescenta ACAO e ACAC. Sugestão: acrescentar um 403 real legível no navegador, com fetch credenciado de POST /v1/tasks por um Supervisor a partir do console, e registrar o desvio (c) com a exploração da matriz de papéis."
+    },
+    {
+      "id": "O2",
+      "where": "apps/web/src/App.tsx:239, :283, :335-337",
+      "note": "landingRef nunca é zerado. Um 401 posterior (por exemplo, depois de 'Tentar novamente') mostra de novo o texto de um pouso antigo. Sugestão: zerar depois do primeiro uso."
+    },
+    {
+      "id": "O3",
+      "where": "apps/web/src/App.tsx:430-452",
+      "note": "Depois de falha do start (rede, 429 ou 5xx), o estado não muda e o foco não volta ao botão 'Entrar', que esteve desativado. Sugestão: devolver o foco e conferir na Q6."
+    },
+    {
+      "id": "O4",
+      "where": "tests/oidc-hosts-support.test.ts:150-175; tests/e2e-oidc-hosts/oidc-hosts.spec.ts:1138-1145",
+      "note": "A Q10 não varre products/ nem scripts/ e não confere lockfile sem mudança. O leak check não confere secrets > 0 nem tem canário positivo."
+    },
+    {
+      "id": "O5",
+      "where": "scripts/oidc-hosts-browser-proof-contract.mjs:1",
+      "note": "O comentário ainda cita certification/oidc-hosts-browser-proof.json, mas o runner grava em certification/logs/. Sugestão: alinhar e registrar o desvio (b) no relatório do BUILD e na promoção do contrato."
+    },
+    {
+      "id": "O6",
+      "where": "docs/04_audit/evidence/UP91-025-OIDC-B-20261023/build/mutants/mutants.json (N6)",
+      "note": "A morte do N6 no navegador vem de um auxiliar (setCookieValue nulo), não do desfecho de cookie tossing. A morte pela Q3 é a que vale; sugestão: anotar isso no relatório."
+    },
+    {
+      "id": "O7",
+      "where": "tests/e2e-oidc-hosts/oidc-hosts.spec.ts:911-920",
+      "note": "Na i3, o controle 'e não __Host-cvg_oidc_pending' da i2 não se aplica, porque o pendente vivo da vítima viaja no callback. O teste adapta corretamente; sugestão: registrar a adaptação."
+    }
+  ],
+  "declaredDeviations": {
+    "a_e2e_dir": "aceito",
+    "b_report_path_certification_logs": "aceito, com O5",
+    "c_q9e_403_from_edge": "aceito, com O1 e registro no relatório",
+    "d_ci_bar_test_gate_count_skip_sha": "aceito (sha do SKIP-PG-041 conferido contra HEAD)",
+    "e_spec0107_addendum": "aceito como pendência do lead",
+    "f_node_modules_other_worktree": "aceito para evidência local, registrando o sha do lockfile"
+  },
+  "rebaseRulesU04": {
+    "hookOrder": "cumprida e testada (Q2)",
+    "singleCookieFunctionWithProfile": "cumprida (perfil obrigatório no tipo)",
+    "defaultExit": "parcial (M1)"
+  },
+  "checksRun": [
+    "sha256 da SPEC conferido",
+    "vitest focal: 7 arquivos, 183 testes verdes (API Q1-Q5, rotas, guardas, console Q6, painel, suporte Q8/Q10, contrato do relatório)",
+    "vitest apps/web mais as suítes de API tocadas: 179 verdes, 16 pulados (PG sem banco)",
+    "tests/ci-bar-contract.test.js: 8 de 8 verdes",
+    "baseline dos mutantes igual a HEAD nos 10 arquivos-fonte; 28 de 28 mutados, restaurados e mortos pela prova citada"
+  ],
+  "notChecked": [
+    "execução integral de npm run test:e2e:oidc-hosts e o relatório certification/logs/oidc-hosts-browser-proof.json (ausente neste worktree)",
+    "test:postgres, rem21-014, critical-flows, Playwright padrão, cobertura, coverage:critical, mutation guard, lint, typecheck, prettier, skip:governance, docs:check-links, npm audit e o gate novo no CI",
+    "relatório do BUILD (ainda não existe)"
+  ]
+}

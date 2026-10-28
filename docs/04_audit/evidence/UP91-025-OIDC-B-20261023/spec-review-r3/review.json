@@ -1,0 +1,114 @@
+{
+  "spec": "docs/02_spec/0259_oidc_console_distinct_hosts.md",
+  "specRevision": "r3",
+  "specSha256": "ad0282a096d9f9ed21c9294ddbe4f51d913823022c31411cc5ea642b55b4778a",
+  "corrections": {
+    "path": "docs/04_audit/evidence/UP91-025-OIDC-B-20261023/spec-review-r2/corrections.md",
+    "sha256": "46d79470f88aff06835fdcc883cd814722171a64a4e30f1ed4f6631af0823f2e"
+  },
+  "scope": "só o delta r2→r3 (terceira rodada, segunda de retrabalho)",
+  "base": "9a56a9c94",
+  "task": "UP91-025-OIDC-B-20261023",
+  "reviewer": "Claude Code (crítico independente da r1 e da r2; não autor da SPEC nem das correções)",
+  "at": "2026-10-23",
+  "verdict": "APPROVE",
+  "r2Status": {
+    "M1": "fechado: captura no POST ao /authorize com route.fetch({maxRedirects:0}) e route.fulfill (Playwright 1.59.1: client/network.js:255-258, client/fetch.js:135-194, server/fetch.js:122-123 e :282), controle de material vivo dentro de 50 s (code de 60 s), vagas reservadas; o N10 morre no desfecho e no controle; a i3 refaz a captura e o controle"
+  },
+  "mandatory": [],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "Dizer como o route.fetch (Node do Playwright, não Chromium) confia no IdP: contexto do atacante com ignoreHTTPSErrors (server/fetch.js:132-133) ou HTTP cru com ca da CA efêmera; nunca NODE_EXTRA_CA_CERTS global. Sem isso, a captura falha por TLS (prova vermelha, não falsa)."
+    },
+    {
+      "id": "O2",
+      "title": "Medir os 5 s até a borda encaminhar à API, ou subir D com W = 60 + D. A conta só precisa da latência entre a soltura e a checagem do limitador; medir até a resposta inclui troca de token e PG e pode reprovar sem motivo."
+    },
+    {
+      "id": "O3",
+      "title": "O sintoma do N28 na Q9h (400 em vez de 403) só aparece se a role logada tiver task:update; senão, requireIdentity dá 403 antes do parse (server.ts:1821-1827). Fixar a role, ou dizer que o N28 é morto só pelo teste da A."
+    },
+    {
+      "id": "O4",
+      "title": "Texto da regra de ordem da §4.2: na R4, a guarda da U04 é preHandler (§5), não onRequest. Sem efeito, porque preHandler roda depois dos onRequest."
+    },
+    {
+      "id": "O5",
+      "title": "Saída padrão da §4.5: exceção inesperada no callback vai ao error handler global e sai como 500 JSON; opcionalmente mapear o error handler da rota para #cvg-login=indisponivel."
+    },
+    {
+      "id": "O6",
+      "title": "J8: em falha de rede no logout, a API pode ter revogado; escrever 'pode manter' em vez de 'mantém'."
+    }
+  ],
+  "points": {
+    "1_captureAndLiveControl": "funciona no Playwright 1.59.1 pela leitura do código; o N10 morre; a i3 também; falta a confiança TLS do route.fetch (O1)",
+    "2_pacing": "determinístico: a janela ancorada [a, a+60) só conta solturas em [a−D, a+60), que mede 65 s com D = 5 s, menos que 70 s; sonda com o rate-limit.ts real deu 0/3000 para starts e callbacks, e o controle da r2 deu 522/3000",
+    "3_pb14": "correta e completa: a SPEC0262 é R4 (65a0863e…bedeb) às 13:38:03 UTC; a §7 é literal; os três acoplamentos conferem (§6.2, §6.2, §5/§3); start e callback ficam fora da guarda da U04",
+    "4_rest": "O2, O4–O8 e as duas divergências aceitos, sem regressão; nenhum contrato, aceite ou corte novo"
+  },
+  "premises": [
+    {
+      "id": "PB1",
+      "decider": "usuário"
+    },
+    {
+      "id": "PB3",
+      "decider": "usuário"
+    },
+    {
+      "id": "PB14",
+      "decider": "usuário",
+      "note": "citar o hash vigente da SPEC0262 na hora da pergunta"
+    },
+    {
+      "id": "PB6",
+      "decider": "dono do CI (Codex)"
+    },
+    {
+      "id": "PB2,PB4,PB5,PB7-PB13",
+      "decider": "default técnico"
+    },
+    {
+      "id": "H15",
+      "status": "falsa",
+      "note": "route.fetch herda a confiança TLS do Chromium (O1)"
+    },
+    {
+      "id": "H16",
+      "status": "conservadora demais",
+      "note": "a latência até a resposta é a que importa para o limitador (O2)"
+    }
+  ],
+  "probes": {
+    "dir": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/u08-critic/",
+    "files": {
+      "probe-pacer-r3.mts": "1ada906914103e52230d633d02b94d37f0ec40264c3e7aedfc8a4d50293828c7",
+      "probe-pacer-r3.out.txt": "914ea0158207f3422ab26dc57d6c19ce9457797aa56576026c8e84296b131ca1"
+    },
+    "playwright": {
+      "version": "1.59.1",
+      "lib/client/network.js": "f4af0d2bc3bf0c57a55965480702e3d7e1fa750c444afce117631f97b337e1db",
+      "lib/client/fetch.js": "40d62064b3671a87db3ea89c00c72d9038d12ebfd0fc2ea2f00f4817746805b2",
+      "lib/server/fetch.js": "4763a8d6e07088d702b667f6ed9c54eb0a92328032df6ff4d8fc806e1db53f04"
+    },
+    "spec0262": {
+      "revision": "R4",
+      "sha256": "65a0863e9974c97bf10551a0582433e6cac05e1d4a0c27ef8fa49a0372bfedeb",
+      "checkedAtUtc": "13:38:03"
+    }
+  },
+  "notDone": [
+    "navegador real",
+    "Docker",
+    "PG",
+    "porta",
+    "install",
+    "testes do repositório",
+    "commit",
+    "push",
+    "lockfile",
+    "CLOSE-CI-LOCAL"
+  ]
+}

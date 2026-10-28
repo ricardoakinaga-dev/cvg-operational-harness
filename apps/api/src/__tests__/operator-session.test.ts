@@ -298,7 +298,8 @@ describe('REM21-005 trusted operator session API', () => {
   it('rejects duplicate session cookies instead of selecting an attacker-controlled value', () => {
     expect(
       parseOperatorSessionCookie(
-        'cvg_operator_session=opsess_first;cvg_operator_session=opsess_second'
+        'cvg_operator_session=opsess_first;cvg_operator_session=opsess_second',
+        { profile: 'legacy', secure: false }
       )
     ).toBeNull()
   })

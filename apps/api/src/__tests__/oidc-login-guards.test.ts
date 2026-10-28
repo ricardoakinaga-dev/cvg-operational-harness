@@ -33,6 +33,7 @@ afterEach(async () => {
 function stubAuthority() {
   return {
     issuer: 'https://idp.synthetic.test',
+    cookieProfile: 'legacy' as const,
     start: vi.fn(),
     readCallback: vi.fn(),
     complete: vi.fn(),
@@ -290,7 +291,7 @@ describe('SPEC0254 O8 — CSRF by exact Origin in the OIDC mode', () => {
         if (!('origin' in origin) || origin.origin === SIBLING) {
           // Answered by the CSRF hook itself (the others by the HTTP hook).
           expect(response.json().error.message).toBe('Origin is not allowed')
-          expect(response.headers['cache-control']).toBe('no-store')
+          expect(response.headers['cache-control']).toBe('private, no-store')
         }
       }
       expect(effects(g.app)).toEqual(before)
@@ -405,7 +406,7 @@ describe('SPEC0254 O8 — HMAC tokens are disabled in the OIDC mode (I6, D10)', 
             'Bootstrap tokens are disabled'
           )
           expect(response.headers['set-cookie']).toBeUndefined()
-          expect(response.headers['cache-control']).toBe('no-store')
+          expect(response.headers['cache-control']).toBe('private, no-store')
         }
       const alive = await g.app.inject({
         method: 'GET',
