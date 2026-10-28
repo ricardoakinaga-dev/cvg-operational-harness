@@ -232,3 +232,10 @@ Limites residuais, aceitos e registrados:
   então isso não acontece dentro do próprio processo.
 - Um hardlink criado dentro do workspace para um arquivo de fora continua
   legível, como antes. Recusar `nlink > 1` fica como follow-up AUD0625-F03b.
+
+Confirmação da revisão (D9, `CONFIRMATION.md`): **APPROVE** em `0ddea872`.
+O P3 opcional 1 foi aplicado: a recusa de `fs.write` sobre symlink final
+entrou na rodada de contagem de descritores, que agora mata o mutante sem
+`closeQuietly` nesse ramo. O P3 opcional 2 fica aceito como limite: o teto
+`maxBytes + 1` dentro do laço de leitura só é exercido quando o arquivo cresce
+depois do `fstat` e não tem teste determinístico.

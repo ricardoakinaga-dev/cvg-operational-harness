@@ -368,6 +368,7 @@ describe('AUD0625 SPEC0270 review AUD0625-REVIEW-0270-D9 follow-ups', () => {
     mkdirSync(join(root, 'sub'))
     writeFileSync(join(root, 'sub', 'file.txt'), 'SYNTHETIC')
     symlinkSync(join(root, 'sub'), join(root, 'alias'))
+    symlinkSync(join(root, 'sub', 'file.txt'), join(root, 'link.txt'))
     const handle = context(workspaceHandle(root))
     const all = Object.fromEntries(
       createFsTools({ workspaceRoot: root }).map((t) => [t.id, t])
@@ -382,6 +383,7 @@ describe('AUD0625 SPEC0270 review AUD0625-REVIEW-0270-D9 follow-ups', () => {
       ['fs.write', { path: 'sub/out.txt', content: 'X', intent: 'probe' }],
       ['fs.write', { path: 'alias/out.txt', content: 'X', intent: 'probe' }],
       ['fs.write', { path: 'missing/out.txt', content: 'X', intent: 'probe' }],
+      ['fs.write', { path: 'link.txt', content: 'X', intent: 'probe' }],
       [
         'fs.edit',
         { path: 'sub/file.txt', find: 'SYN', replace: 'syn', intent: 'probe' }
