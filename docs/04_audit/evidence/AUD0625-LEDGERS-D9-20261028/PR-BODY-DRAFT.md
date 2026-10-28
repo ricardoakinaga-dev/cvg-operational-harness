@@ -52,14 +52,14 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 - **Testes antigos ajustados:** `pdsh-012-fs-tools` só passa a enviar uma concessão `WORKSPACE`.
 - **Limites aceitos, com acompanhamento F03b:** `fsync` síncrono, hardlink para fora, raiz aberta pelo nome.
 
-### 5. SPEC 0272, decisão de aprovação (F08) — **SHA final pendente**
+### 5. SPEC 0272, decisão de aprovação (F08)
 
 - **Achado:** se o sistema caía entre decidir a aprovação e registrar o evento, e a execução já avançava, o evento nunca mais era registrado.
 - **SPEC e recibo:** 0272, sha256 `78b43491d82858257673c88351e8d1f1d908ce2331654028f32fe19f0b7e3477`; recibo `human-decisions-3` (`8e667305…`), opção A.
 - **O que mudou:** a recuperação aceita as aprovações já avançadas (`RESERVED`, `EXECUTING`, `EXECUTED`) sem retomar a execução, e o worker passa a procurá-las; o evento recuperado leva `recovered: true`.
-- **SHAs:** SPEC `2078711a`; BUILD `65cb22f0` (sessão 07); correção da revisão `f250bf72`; o SHA final entra quando a sessão 07 terminar N1/N2.
-- **Testes:** PostgreSQL 16.15 descartável 11/11; `vitest` de agent-core, worker e api 1.006 passam; a suíte completa teve 7.109 passando e um tempo esgotado por carga em um arquivo não tocado.
-- **Revisão independente (minha):** primeira rodada REVISE pequeno (`5fee567b`): o seletor ampliado tinha dois P2, uma linha irrecuperável travava as seguintes e o custo crescia com o histórico (41 ms → 249 ms com 100 mil aprovações). A sessão 07 corrigiu (isolamento por linha, piso de 30 s, teto de 24 h configurável, pool de teste que interpreta o SQL) e a confirmação deu **APPROVE em `f250bf72`** (`33997910`; as minhas 10 mutações morrem 10/10). Duas observações novas estão em correção: N1 (o modo backfill pode travar com 25 linhas sem envelope) e N2 (erro de infraestrutura engolido por linha); a passada PostgreSQL está em curso e o plano da consulta ainda não foi medido.
+- **SHAs:** SPEC `2078711a`; BUILD `65cb22f0` (sessão 07); correções da revisão `f250bf72` e `94725d37` (**SHA final**).
+- **Testes:** PostgreSQL 16.15 descartável 16/16 (eram 11/11) com `EXPLAIN` (anti-join pelo índice `uq_audit_approval_decision`, 7,7 ms com 10 mil linhas); `vitest` focado de agent-core e worker 36 passam; a suíte completa da sessão 07 teve 7.109 testes passando e um tempo esgotado por carga em um arquivo não tocado. Dois testes antigos da migration 0021 (`CREATE INDEX CONCURRENTLY`) estouraram 120 s uma vez sob carga e passaram isolados e em duas execuções completas seguintes.
+- **Revisão independente (minha):** primeira rodada REVISE pequeno (`5fee567b`): o seletor ampliado tinha dois P2 (uma linha irrecuperável travava as seguintes; custo crescente). A sessão 07 corrigiu (isolamento por linha, piso de 30 s, teto de 24 h configurável, pool de teste que interpreta o SQL): **APPROVE em `f250bf72`** (`33997910`). As duas observações novas (N1: o backfill travava com 25 linhas sem envelope; N2: erro de infraestrutura engolido por linha) foram corrigidas em `94725d37`: o SQL exclui e conta as linhas sem envelope, e erros de conexão derrubam o tick. **Confirmação final: APPROVE** (`48d7a963`), com uma ressalva P3: os erros do próprio cliente `pg` sem código (`Connection terminated unexpectedly`) ainda são isolados por linha; sugeri isolar só os erros de dado e relançar o resto.
 - **Testes antigos ajustados:** o teste de caracterização "decision mismatch" foi trocado por "não retoma e marca recuperado"; o controle do seletor acompanha o novo SQL.
 
 ### 6. SPEC 0273, exames (F12b)
@@ -89,7 +89,7 @@ Sempre: achado → SPEC e recibo → o que mudou → SHAs locais → testes (Nod
 - **Imagem com base Debian 13 (F09):** Codex AUD0625, PR próprio, vai antes. API, worker e TLS passam em `6494d2f63`; heartbeat e inventário estão em curso; **ainda não qualificada**.
 - **F01, F02, F05; SPECs 0257, 0258, 0262, 0263; F13, F18, F19:** Codex.
 - **F15 (SPEC 0271):** adiada, dono DF; só afeta bancos com eventos de atendimento anteriores à migration 0021.
-- **Acompanhamentos:** F12c (429 sem espera), F06b (oráculo da SPEC 0232 aceitar o `system`), F03b (hardlink), F08b (correções da revisão da 0272, dono DF/07).
+- **Acompanhamentos:** F12c (429 sem espera), F06b (oráculo da SPEC 0232 aceitar o `system`), F03b (hardlink), F08b (`FAILED`/`CANCELLED`/`EXPIRED` depois de `APPROVED`, dono DF), F08c opcional (índice `(tenant_id, updated_at)` em `operational_executions`, sugerido pelo `EXPLAIN`).
 - **Achado 9104:** `tests/claude100/reference-port/controller.test.js` falha também na `main` local, sem relação com a onda; dono Codex.
 - **Servidor (U10), IdP (U09) e piloto (U23):** Ricardo e hospital.
 

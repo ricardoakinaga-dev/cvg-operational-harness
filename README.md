@@ -9,10 +9,10 @@ the legacy product being isolated under `legacy/`.
 Em 28/10/2026 a `main` está em `8429019b` (PR #29, OIDC do console, fatia B1)
 e a produção continua `NO_GO`. A [auditoria 0625](docs/04_audit/0625_repository_score_audit_2026-10-28.md)
 deu média 72 e prontidão 45 e abriu as frentes de remediação F01–F20. As SPECs
-0267, 0268, 0270 e 0273 estão implementadas e revisadas em branches locais, a 0269
-também; a 0272 espera o SHA final depois da correção da revisão. A imagem com base
-Debian 13 está com o Codex (API, worker e TLS passam; ainda não qualificada). A
-publicação é a da onda: primeiro o PR da imagem, depois um PR único da onda AUD0625.
+0267, 0268, 0270, 0272 (SHA final `94725d37`) e 0273 estão implementadas e revisadas em
+branches locais, a 0269 também. A imagem com base Debian 13 está com o Codex (API,
+worker e TLS passam; ainda não qualificada). A publicação é a da onda: primeiro o PR da
+imagem, depois um PR único da onda AUD0625.
 Donos, estados e os recibos das decisões do Ricardo estão no
 [estado de execução](docs/99_runtime_state.md), no
 [log](docs/20_master_execution_log.md) e no [backlog](docs/30_backlog_master.md).
