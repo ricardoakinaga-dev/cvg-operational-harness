@@ -3,6 +3,7 @@ import { createCorrelationId, fail, type OperatorIdentity } from '@cvg/shared'
 import {
   clearOperatorSessionCookie,
   parseOperatorSessionCookie,
+  type OperatorCookiePolicy,
   type OperatorSessionRecord,
   type OperatorSessionStore
 } from './operator-session.ts'
@@ -20,7 +21,8 @@ const loginPaths = new Set(['/v1/auth/oidc/start', '/v1/auth/oidc/callback'])
 
 export interface OperatorSessionHookOptions {
   app: FastifyInstance
-  enforceHttps: boolean
+  /** SPEC0259 §4.3: names, reads and clears the operational cookie. */
+  cookiePolicy: OperatorCookiePolicy
   operatorSessionStore: OperatorSessionStore
   sessionIdentityByHeaders: WeakMap<object, OperatorIdentity | null>
   sessionRecordByHeaders: WeakMap<object, OperatorSessionRecord>
@@ -37,7 +39,7 @@ export function installOperatorSessionHook(
 ): void {
   const {
     app,
-    enforceHttps,
+    cookiePolicy,
     operatorSessionStore,
     sessionIdentityByHeaders,
     sessionRecordByHeaders,
@@ -49,7 +51,10 @@ export function installOperatorSessionHook(
     // A stale browser cookie must not turn public health probes into auth failures.
     if (sessionIndependentProbePaths.has(rawPath ?? '')) return
     if (loginPaths.has(rawPath ?? '')) return
-    const sessionId = parseOperatorSessionCookie(request.headers.cookie)
+    const sessionId = parseOperatorSessionCookie(
+      request.headers.cookie,
+      cookiePolicy
+    )
     if (!sessionId) return
 
     let record: OperatorSessionRecord | null = null
@@ -80,7 +85,7 @@ export function installOperatorSessionHook(
     reply
       .code(401)
       .header('cache-control', 'no-store')
-      .header('set-cookie', clearOperatorSessionCookie(enforceHttps))
+      .header('set-cookie', clearOperatorSessionCookie(cookiePolicy))
     return reply.send(
       fail(
         'unauthorized',

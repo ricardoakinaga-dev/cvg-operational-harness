@@ -150,6 +150,52 @@ function decodeFormComponent(value: string): string {
   return decodeURIComponent(value.replaceAll('+', ' '))
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+}
+
+/**
+ * SPEC0259 §4.10 — the browser login page of the synthetic IdP: a labeled
+ * form that posts to the same authorization URL, without any script.
+ */
+function loginPage(
+  target: URL,
+  status: number,
+  error?: string
+): SyntheticResponse {
+  const action = escapeHtml(`${target.pathname}${target.search}`)
+  const body = [
+    '<!doctype html>',
+    '<html lang="pt-BR">',
+    '<head><meta charset="utf-8"><title>IdP sintético — entrar</title></head>',
+    '<body>',
+    '<main>',
+    '<h1>IdP sintético</h1>',
+    ...(error ? [`<p role="alert">${escapeHtml(error)}</p>`] : []),
+    `<form method="post" action="${action}">`,
+    '<p><label for="username">Usuário</label> <input id="username" name="username" autocomplete="username" required></p>',
+    '<p><label for="password">Senha</label> <input id="password" name="password" type="password" autocomplete="current-password" required></p>',
+    '<p><label for="totp">Código de verificação</label> <input id="totp" name="totp" inputmode="numeric" autocomplete="one-time-code" required></p>',
+    '<p><button type="submit">Entrar</button></p>',
+    '</form>',
+    '</main>',
+    '</body>',
+    '</html>'
+  ].join('\n')
+  return {
+    status,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store'
+    },
+    body
+  }
+}
+
 export class SyntheticOidcIssuer {
   issuer: string
   readonly clientId: string
@@ -350,7 +396,7 @@ export class SyntheticOidcIssuer {
     const challenge = query.get('code_challenge')
     const redirectUri = query.get('redirect_uri')
     if (
-      method !== 'POST' ||
+      (method !== 'POST' && method !== 'GET') ||
       query.get('client_id') !== this.clientId ||
       redirectUri !== this.redirectUri ||
       query.get('response_type') !== 'code' ||
@@ -365,6 +411,8 @@ export class SyntheticOidcIssuer {
     this.secrets.add(state)
     this.secrets.add(nonce)
     this.secrets.add(challenge)
+    // SPEC0259 §4.10: the browser first gets the login page (same checks).
+    if (method === 'GET') return loginPage(target, 200)
     const location = new URL(redirectUri)
     if (this.controls.authorizeError) {
       location.searchParams.set('error', 'access_denied')
@@ -381,7 +429,8 @@ export class SyntheticOidcIssuer {
         (drift) => syntheticTotp(user.totpSecret, now + drift) === totp
       )
     if (!user || form.get('password') !== user.password || !validTotp) {
-      return json(401, { error: 'access_denied' })
+      // The page comes back without a code (SPEC0259 §4.10).
+      return loginPage(target, 401, 'Código inválido')
     }
     const code = randomBytes(32).toString('base64url')
     this.secrets.add(code)
@@ -511,69 +560,78 @@ export class SyntheticOidcIssuer {
    * temporary directory removed on close. Without `openssl` this throws: the
    * test fails instead of skipping (D5).
    */
-  async listenHttps(): Promise<SyntheticHttpsEndpoint> {
+  async listenHttps(
+    shared?: SyntheticSharedTls
+  ): Promise<SyntheticHttpsEndpoint> {
     const directory = mkdtempSync(join(tmpdir(), 'cvg-synthetic-idp-'))
     try {
       const file = (name: string) => join(directory, name)
       const openssl = (args: string[]) =>
         execFileSync('openssl', args, { stdio: 'pipe' })
-      openssl([
-        'req',
-        '-x509',
-        '-newkey',
-        'rsa:2048',
-        '-nodes',
-        '-keyout',
-        file('ca.key'),
-        '-out',
-        file('ca.crt'),
-        '-days',
-        '1',
-        '-subj',
-        '/CN=CVG synthetic test CA',
-        '-addext',
-        'basicConstraints=critical,CA:TRUE',
-        '-addext',
-        'keyUsage=critical,keyCertSign,cRLSign'
-      ])
-      openssl([
-        'req',
-        '-newkey',
-        'rsa:2048',
-        '-nodes',
-        '-keyout',
-        file('leaf.key'),
-        '-out',
-        file('leaf.csr'),
-        '-subj',
-        '/CN=localhost'
-      ])
-      writeFileSync(
-        file('leaf.ext'),
-        [
-          'subjectAltName=DNS:localhost,IP:127.0.0.1',
-          'basicConstraints=CA:FALSE',
-          'keyUsage=digitalSignature,keyEncipherment',
-          'extendedKeyUsage=serverAuth'
-        ].join('\n')
-      )
-      openssl([
-        'x509',
-        '-req',
-        '-in',
-        file('leaf.csr'),
-        '-CA',
-        file('ca.crt'),
-        '-CAkey',
-        file('ca.key'),
-        '-CAcreateserial',
-        '-out',
-        file('leaf.crt'),
-        '-days',
-        '1',
-        '-extfile',
-        file('leaf.ext')
-      ])
+      if (shared) {
+        // SPEC0259 §4.10: a leaf issued by the CA shared with the test edge.
+        writeFileSync(file('ca.crt'), shared.ca)
+        writeFileSync(file('leaf.key'), shared.key)
+        writeFileSync(file('leaf.crt'), shared.cert)
+      } else {
+        openssl([
+          'req',
+          '-x509',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-keyout',
+          file('ca.key'),
+          '-out',
+          file('ca.crt'),
+          '-days',
+          '1',
+          '-subj',
+          '/CN=CVG synthetic test CA',
+          '-addext',
+          'basicConstraints=critical,CA:TRUE',
+          '-addext',
+          'keyUsage=critical,keyCertSign,cRLSign'
+        ])
+        openssl([
+          'req',
+          '-newkey',
+          'rsa:2048',
+          '-nodes',
+          '-keyout',
+          file('leaf.key'),
+          '-out',
+          file('leaf.csr'),
+          '-subj',
+          '/CN=localhost'
+        ])
+        writeFileSync(
+          file('leaf.ext'),
+          [
+            'subjectAltName=DNS:localhost,IP:127.0.0.1',
+            'basicConstraints=CA:FALSE',
+            'keyUsage=digitalSignature,keyEncipherment',
+            'extendedKeyUsage=serverAuth'
+          ].join('\n')
+        )
+        openssl([
+          'x509',
+          '-req',
+          '-in',
+          file('leaf.csr'),
+          '-CA',
+          file('ca.crt'),
+          '-CAkey',
+          file('ca.key'),
+          '-CAcreateserial',
+          '-out',
+          file('leaf.crt'),
+          '-days',
+          '1',
+          '-extfile',
+          file('leaf.ext')
+        ])
+      }
       const ca = readFileSync(file('ca.crt'))
       const server = createServer(
         {
@@ -675,6 +733,13 @@ export class SyntheticOidcIssuer {
       throw error
     }
   }
+}
+
+/** SPEC0259 §4.10: leaf (SAN localhost) and CA shared with the test edge. */
+export interface SyntheticSharedTls {
+  readonly ca: Buffer
+  readonly key: Buffer
+  readonly cert: Buffer
 }
 
 export interface SyntheticHttpsEndpoint {

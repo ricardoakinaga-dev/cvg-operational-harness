@@ -5,8 +5,14 @@ import {
   randomBytes,
   timingSafeEqual
 } from 'node:crypto'
+import {
+  readExactCookieValues,
+  type OperatorCookieProfile
+} from './operator-session.ts'
 
 const COOKIE_NAME = 'cvg_oidc_pending'
+/** SPEC0259 §4.3: the pending cookie of the HTTPS OIDC profile. */
+export const HOST_OIDC_PENDING_COOKIE = '__Host-cvg_oidc_pending'
 const LOGIN_AGE_MS = 5 * 60 * 1_000
 const MAX_REPLICA_CLOCK_SKEW_MS = 30_000
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
@@ -23,7 +29,16 @@ export interface OidcLoginTransactionOptions {
   cookieKey: Buffer
   /** Reserve once and atomically consume across all API replicas. */
   stateStore: OidcLoginStateStore
+  /**
+   * SPEC0259 §4.3: names, serializes, clears and reads the pending cookie.
+   * Required, without a default, so no path can forget it.
+   */
+  cookieProfile: OperatorCookieProfile
   now?: () => number
+}
+
+export function oidcPendingCookieName(profile: OperatorCookieProfile): string {
+  return profile === 'host-prefixed' ? HOST_OIDC_PENDING_COOKIE : COOKIE_NAME
 }
 
 export interface OidcLoginStateStore {
@@ -125,7 +140,7 @@ export async function startOidcLogin(
   }
   return {
     authorizationUrl: authorizationEndpoint.href,
-    setCookie: cookieHeader(sealed, redirectUri.protocol === 'https:', 300)
+    setCookie: cookieHeader(options, redirectUri, sealed, 300)
   }
 }
 
@@ -136,7 +151,10 @@ export async function readOidcLoginCallback(
   options: OidcLoginTransactionOptions
 ): Promise<PendingOidcLogin> {
   validateOptions(options)
-  const sealed = readCookie(cookieHeaderValue)
+  const sealed = readCookie(
+    cookieHeaderValue,
+    oidcPendingCookieName(options.cookieProfile)
+  )
   if (
     !sealed ||
     typeof returnedState !== 'string' ||
@@ -206,7 +224,7 @@ export function clearOidcLoginCookie(
   options: OidcLoginTransactionOptions
 ): string {
   const { redirectUri } = validateOptions(options)
-  return cookieHeader('', redirectUri.protocol === 'https:', 0)
+  return cookieHeader(options, redirectUri, '', 0)
 }
 
 function validateOptions(options: OidcLoginTransactionOptions): {
@@ -219,7 +237,9 @@ function validateOptions(options: OidcLoginTransactionOptions): {
     typeof options.stateStore?.reserve !== 'function' ||
     typeof options.stateStore?.consume !== 'function' ||
     !options.clientId ||
-    options.clientId.length > 256
+    options.clientId.length > 256 ||
+    (options.cookieProfile !== 'host-prefixed' &&
+      options.cookieProfile !== 'legacy')
   ) {
     throw new Error('OIDC login configuration is invalid')
   }
@@ -230,7 +250,10 @@ function validateOptions(options: OidcLoginTransactionOptions): {
     issuer.origin !== authorizationEndpoint.origin ||
     authorizationEndpoint.search ||
     redirectUri.search ||
-    !redirectUri.pathname.endsWith('/callback')
+    !redirectUri.pathname.endsWith('/callback') ||
+    // `__Host-` cookies exist only over HTTPS.
+    (options.cookieProfile === 'host-prefixed' &&
+      redirectUri.protocol !== 'https:')
   ) {
     throw new Error('OIDC login configuration is invalid')
   }
@@ -271,22 +294,25 @@ function stateDigest(state: string): string {
   return createHash('sha256').update(state, 'ascii').digest('hex')
 }
 
-function readCookie(value: unknown): string | null {
+function readCookie(value: unknown, name: string): string | null {
   if (typeof value !== 'string' || value.length > 8192) return null
-  let found: string | null = null
-  for (const segment of value.split(';')) {
-    const [name, ...rest] = segment.trim().split('=')
-    if (name !== COOKIE_NAME) continue
-    const candidate = rest.join('=')
-    if (found !== null || !SEALED_PATTERN.test(candidate)) return null
-    found = candidate
-  }
-  return found
+  // SPEC0259 §4.3 (M1): exact name, only SP/HTAB trimmed; duplicates fail.
+  const candidates = readExactCookieValues(value, name)
+  if (candidates.length !== 1) return null
+  return SEALED_PATTERN.test(candidates[0]!) ? candidates[0]! : null
 }
 
-function cookieHeader(value: string, secure: boolean, maxAge: number): string {
+function cookieHeader(
+  options: OidcLoginTransactionOptions,
+  redirectUri: URL,
+  value: string,
+  maxAge: number
+): string {
+  const secure =
+    options.cookieProfile === 'host-prefixed' ||
+    redirectUri.protocol === 'https:'
   return [
-    `${COOKIE_NAME}=${value}`,
+    `${oidcPendingCookieName(options.cookieProfile)}=${value}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',

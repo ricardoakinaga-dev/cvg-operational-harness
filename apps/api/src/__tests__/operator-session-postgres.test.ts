@@ -129,7 +129,10 @@ describe('opaque operator session IDs', () => {
     for (const sessionId of ids) {
       expect(sessionId).toMatch(/^opsess_[A-Za-z0-9_-]{43}$/)
       expect(
-        parseOperatorSessionCookie(`cvg_operator_session=${sessionId}`)
+        parseOperatorSessionCookie(`cvg_operator_session=${sessionId}`, {
+          profile: 'legacy',
+          secure: false
+        })
       ).toBe(sessionId)
     }
   })
@@ -510,7 +513,8 @@ describe('PostgreSQL OIDC login state boundary', () => {
           clientId: 'cvg-local-operator',
           redirectUri: 'http://127.0.0.1:3000/v1/auth/oidc/callback',
           cookieKey: Buffer.alloc(32, 21),
-          stateStore: stateA
+          stateStore: stateA,
+          cookieProfile: 'legacy' as const
         }
         const started = await startOidcLogin(options)
         const state = new URL(started.authorizationUrl).searchParams.get(

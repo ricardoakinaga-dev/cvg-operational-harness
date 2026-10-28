@@ -1,0 +1,243 @@
+{
+  "spec": "docs/02_spec/0259_oidc_console_distinct_hosts.md",
+  "specRevision": "r1",
+  "specSha256": "199886616da9904154096c318e1666e5bd99f65861a777aba5849720444e96c1",
+  "recon": {
+    "path": "docs/04_audit/evidence/UP91-025-OIDC-B-20261023/recon.md",
+    "sha256": "f2c4af629ad07ce40d616bb07a0d1c1c716a7524fdc98d4c74c27f2cc7c0c869"
+  },
+  "base": "9a56a9c94",
+  "task": "UP91-025-OIDC-B-20261023",
+  "unit": "U08 (0399)",
+  "reviewer": "Claude Code (crítico independente, contexto novo; não autor da SPEC nem do recon)",
+  "at": "2026-10-23",
+  "verdict": "REVISE",
+  "mandatory": [
+    {
+      "id": "M1",
+      "title": "Nome __Host- sem regra de comparação exata; os parsers da fatia A aparam espaço Unicode e aceitariam \\xA0__Host-… plantado por origem irmã",
+      "evidence": "SPEC0259 :121 e :131 prometem que só o nome __Host- autentica e que a irmã não planta cookie, sem definir a comparação; Q3 (:322), Q9i (:342), N9/N10 (:360-361) não cobrem. oidc-login-transaction.ts:278 (segment.trim()), operator-session.ts:97 (rawName?.trim()). Sonda probe-cookie-name-trim.cjs (Node 22.23.2, socket cru): byte 0xA0 chega como U+00A0; a leitura no formato da A devolveu o pendente e a sessão sintéticos do atacante; comparação exata (só SP/HTAB) devolveu null. '\\u00a0x'.trim()==='x'. Lado do Chromium não provado (navegador fora do escopo).",
+      "fix": "§4.3: nome cortado no primeiro '=', aparar só SP e HTAB, comparação byte a byte com __Host-cvg_operator_session/__Host-cvg_oidc_pending em hook, GET /v1/session, logout, previousSessionId e pendente (a guarda de CSRF pode ser mais larga). Q3: negativos com \\xA0 e \\uFEFF antes do nome (latin1) tratados como sem cookie; mutante N27. S0 ou Q9i: registrar o comportamento do Chromium para \\xA0__Host-…; Domain=cvg.test e para o cookie sem nome =__Host-…"
+    },
+    {
+      "id": "M2",
+      "title": "Q9i sem controle positivo (prova de cookie tossing e login CSRF pode passar vazia) e sem o caso 'quando já há' exigido pela SPEC0150",
+      "evidence": "SPEC0259 :342 (Q9i) e :389 (aceite 9) só afirmam o desfecho negativo, que é o mesmo se o cookie legado nunca for gravado ou enviado. SPEC0150 :147-150 exige a tentativa 'quando não há cookie da API e quando já há'; a Q9i roda só em contexto novo, e o desvio não está na §14.1. PR302 probe.mjs:197-204 e PR301 proof.json só provaram a recusa do __Host-, sem controle de cookie sem prefixo com Domain.",
+      "fix": "Q9i: (a) na mesma resposta da irmã, gravar cookie de controle sem prefixo com Domain=cvg.test e exigir que apareça em context.cookies() (.cvg.test) e chegue ao host da API; (b) antes de exigir #cvg-login=negado, exigir cvg_oidc_pending em context.cookies() e no log de nomes da borda no pedido do callback; (c) repetir as tentativas com a vítima já tendo __Host-cvg_operator_session válido e pendente vivo: os __Host- continuam os da API e a identidade continua a da vítima."
+    }
+  ],
+  "optional": [
+    {
+      "id": "O1",
+      "title": "PB3 com justificativa imprecisa: __Host- no HMAC com HTTPS não exige origem de console; o custo real é trocar o nome no C8 e ajustar testes. Corrigir antes de levar ao usuário. Também dizer que a PB11 estreita para o modo OIDC o private, no-store de 0150:72-77 (impacto baixo: HMAC já põe no-store, ex. case-routes.ts:574)."
+    },
+    {
+      "id": "O2",
+      "title": "Tabela da §4.5 sem o 503 do erro do limitador no passo 1 (pendente intocado, oidc-routes.ts:339-342) e sem o 429 do limitador global (server.ts:617-651, JSON). Registrar a mudança de 4xx para 3xx nas métricas."
+    },
+    {
+      "id": "O3",
+      "title": "Q5/N14: incluir Host, X-Forwarded-Host e Origin entre as entradas que não mudam o Location."
+    },
+    {
+      "id": "O4",
+      "title": "Q9g com exp de 5 s pode ficar instável sem retry (o primeiro GET /v1/session já dá 401 e a tela mostra primeira visita). Subir para 20–30 s e exigir 200 antes, ou avançar o relógio do console. Retirar 'relógio do IdP controlado': a API checa exp/auth_time com o relógio real."
+    },
+    {
+      "id": "O5",
+      "title": "Tornar incondicional o X-Forwarded-For sintético por contexto (§4.11 diz 'se precisar'), para a matriz não depender da velocidade."
+    },
+    {
+      "id": "O6",
+      "title": "Fixar a Q8 (Docker) no runner test:e2e:oidc-hosts ou em script próprio, fora do test:core, da cobertura e do certify."
+    },
+    {
+      "id": "O7",
+      "title": "NGINX: --read-only exige --tmpfs /tmp (Dockerfile:4-5); 'em toda resposta' exige add_header … always (senão o 404 de /v1/ sai sem CSP); Q8 deve conferir cabeçalhos no 404 e no-store em / e num caminho de SPA."
+    },
+    {
+      "id": "O8",
+      "title": "Conjunto de escrita sem vitest.config.mts: a raiz define as constantes do console (vitest.config.mts:71-78); as três novas precisam entrar lá, senão os testes atuais dão ReferenceError. Arquivo compartilhado, claim."
+    },
+    {
+      "id": "O9",
+      "title": "Perfil OIDC deve recusar build com NODE_ENV=test (__CVG_WEB_MODE__ vira 'test', vite.config.mts:13-15; App.tsx:98-99). DB3 deve usar o prefixo __CVG_OPERATOR_BOOTSTRAP_TOKEN (cobre _PROVIDER__, session.ts:32,75)."
+    },
+    {
+      "id": "O10",
+      "title": "Q10 'histórico de navegação': a authorizationUrl do IdP (state, nonce, code_challenge) fica no histórico; é a exceção da I9. Declarar a exceção e o método (CDP Page.getNavigationHistory)."
+    },
+    {
+      "id": "O11",
+      "title": "GET /v1/session 403 e start 400/403 → configuration_error são inalcançáveis no navegador (403 de origem negada sai sem ACAO; outra origem permitida sem ACAC → status 0). Registrar que configuração errada aparece como 'indisponível', ou cobrir na Q9."
+    },
+    {
+      "id": "O12",
+      "title": "Mutantes: N24 não é morto pela Q9b (sucesso sem fragmento); usar a Q9m. N19 'o cookie some' não ocorre (HttpOnly); o texto da tela mata."
+    },
+    {
+      "id": "O13",
+      "title": "J10 x §4.8: o texto de 403 nos painéis vale em todos os perfis, e o logout 503 'continua na tela' muda App.tsx:308-318. Dizer o perfil de cada mudança."
+    },
+    {
+      "id": "O14",
+      "title": "S0: qualquer das quatro confirmações que falhar para o BUILD, inclusive o Lax em POST→302→GET, que a PR301/302 nunca provaram."
+    },
+    {
+      "id": "O15",
+      "title": "Q9h: exercer a guarda de CSRF com mutação vinda da segunda origem permitida (ACAO sem ACAC passa o hook HTTP) → 403 e zero tasks. Q3: dois __Host-cvg_operator_session crus falham fechados. Q9c: o cookie do primeiro login dá 401 depois do segundo (0150:149-150)."
+    }
+  ],
+  "premises": [
+    {
+      "id": "PB1",
+      "decider": "usuário",
+      "note": "Justificativa confere (Dockerfile:16; oidc-config.ts:284-286). Mantém a produção contra 0150 itens 1 e 6 até a B2."
+    },
+    {
+      "id": "PB2",
+      "decider": "default técnico seguro",
+      "note": "Pré-autorizada pela D8 (0254:458). Cookies, chamadas ao token e logs da A preservados; destino fixo. Faltam O2 e O3."
+    },
+    {
+      "id": "PB3",
+      "decider": "usuário (depois de corrigir a justificativa, O1)",
+      "note": "Aceita resíduo no caminho C8: cookie legado plantável por irmã e sem CSRF por Origin."
+    },
+    {
+      "id": "PB4",
+      "decider": "default técnico",
+      "note": "Coerente com UP91-043."
+    },
+    {
+      "id": "PB5",
+      "decider": "default técnico (segue a PB1)",
+      "note": "A imagem web do candidato ainda faz proxy de /v1/ (deploy/nginx.web.conf:8-13). Desvio de 0150:151-155 declarado."
+    },
+    {
+      "id": "PB6",
+      "decider": "dono do CI (Codex), não o usuário",
+      "note": "Fallback declarado; a U08 só fecha com o gate."
+    },
+    {
+      "id": "PB7",
+      "decider": "default técnico",
+      "note": "Igual a 0150:42-44."
+    },
+    {
+      "id": "PB8",
+      "decider": "default técnico",
+      "note": "Igual a 0150:99-101."
+    },
+    {
+      "id": "PB9",
+      "decider": "default técnico",
+      "note": "PR301/PR302 (Chromium 147): *.example.test é mesmo site. O S0 reconfirma."
+    },
+    {
+      "id": "PB10",
+      "decider": "default técnico",
+      "note": "Se cair no ignoreHTTPSErrors, registrar que TLS não foi provado."
+    },
+    {
+      "id": "PB11",
+      "decider": "default técnico",
+      "note": "Aperto; private é redundante com no-store. Declarar que estreita a 0150 para o modo OIDC (O1)."
+    },
+    {
+      "id": "PB12",
+      "decider": "default técnico seguro",
+      "note": "No modo trusted, o console só envia content-type (client.ts:86-90); start e logout são pedidos simples."
+    },
+    {
+      "id": "PB13",
+      "decider": "default técnico",
+      "note": "A API prende o endpoint de autorização à origem do issuer (oidc-login-transaction.ts:229-236)."
+    },
+    {
+      "id": "PB14",
+      "decider": "usuário (decisão leve)",
+      "note": "Muda a dependência U08→U04 do cartão 0399; a recon do Codex já aceita o resíduo; ordem de merge com o Codex."
+    },
+    {
+      "id": "H1",
+      "decider": "ok",
+      "note": ".test é registro desconhecido e vira site cvg.test; apoiado por PR301/PR302."
+    },
+    {
+      "id": "H2",
+      "decider": "S0",
+      "note": "Lax em POST→302→GET a partir de outro site nunca foi provado; o S0 cobre (O14)."
+    },
+    {
+      "id": "H3",
+      "decider": "S0",
+      "note": "Strict gravado por navegação iniciada em outro site e usado no fetch depois; o S0 cobre e para se falhar."
+    },
+    {
+      "id": "H4",
+      "decider": "confirmada",
+      "note": "Cabeçalhos do onRequest sobrevivem a 404, 429 e error handler no Fastify 5.12.7 (sonda)."
+    },
+    {
+      "id": "H5",
+      "decider": "não provada",
+      "note": "Chromium com nome de cookie com 0xA0: ver M1."
+    },
+    {
+      "id": "H6",
+      "decider": "não provada",
+      "note": "Chromium aceita Domain=cvg.test da irmã para cookie sem prefixo: ver M2."
+    },
+    {
+      "id": "H7",
+      "decider": "risco",
+      "note": "vite build do teste pode herdar NODE_ENV=test: O9."
+    },
+    {
+      "id": "H8",
+      "decider": "falsa",
+      "note": "Relógio do IdP controlado não convive com as checagens da API: O4."
+    },
+    {
+      "id": "H9",
+      "decider": "falsa",
+      "note": "Constantes novas sem mexer em vitest.config.mts: O8."
+    },
+    {
+      "id": "H10",
+      "decider": "confirmada",
+      "note": "O IdP sintético responde 302 ao POST (synthetic-oidc-issuer.ts:372,399)."
+    }
+  ],
+  "executorQuestions": {
+    "q1CrossSiteNavigation": "OK; Q9c é o detector; S0 cobre a cadeia POST→302→GET; falta a regra de parada completa (O14).",
+    "q2CorsAllStatuses": "OK pelo desenho; provado por sonda no Fastify 5.12.7.",
+    "q3LoginCsrfLegacyPending": "Regra certa; furos em M1 e M2.",
+    "q4D8To303": "Nenhum efeito da A afrouxado; destino fixo; lacunas O2 e O3.",
+    "q5Pb1Pb3VsApproved": "Contradizem 0150/0254:307, mas estão declaradas; PB3 precisa de justificativa correta (O1); 'quando já há' é desvio não declarado (M2).",
+    "q6StabilityLeakage": "Sem vazamento para runtime ou bundle; estabilidade em O4, O5 e O6; O9 fecha o atalho NODE_ENV=test."
+  },
+  "probes": {
+    "dir": "/mnt/dados/tmp/ricardo/claude-1000/-home-ricardo--rea-de-trabalho-cvg-operational-harness/d9ef2deb-79ba-4d9f-9adb-2a72f0539942/scratchpad/u08-critic/",
+    "node": "v22.23.2",
+    "nodeModules": "symlink para /mnt/dados/cvg-work/cvg-d9ef-first-release-20261023/node_modules (fastify 5.12.7)",
+    "files": [
+      "probe-fastify-hooks.cjs",
+      "probe-cookie-name-trim.cjs",
+      "probe-apiurl.cjs"
+    ]
+  },
+  "notDone": [
+    "navegador real",
+    "Docker",
+    "PG",
+    "porta de serviço",
+    "npm install",
+    "testes do repositório",
+    "commit",
+    "push",
+    "lockfile",
+    "ambiente CLOSE-CI-LOCAL"
+  ]
+}

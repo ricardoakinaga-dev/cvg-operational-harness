@@ -17,6 +17,7 @@ const options: OidcLoginTransactionOptions = {
   clientId: 'cvg-local-operator',
   redirectUri: 'http://127.0.0.1:3000/v1/auth/oidc/callback',
   cookieKey: Buffer.alloc(32, 7),
+  cookieProfile: 'legacy',
   stateStore: {
     async reserve(digest, expiresAt) {
       if (states.has(digest)) return false

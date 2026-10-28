@@ -288,16 +288,15 @@ function assertNoLeaks(h: Harness) {
   expect(findLeaks(texts, [material.pendingCookieKey])).toEqual([])
 }
 
-const LOGIN_FAILED = {
-  success: false,
-  data: null,
-  error: { code: 'unauthorized', message: 'Operator login failed' }
-}
+// SPEC0259 §4.5: the callback lands on the console with a fixed fragment.
+const LANDED_NEGADO = `${CONSOLE}/#cvg-login=negado`
+const LANDED_INDISPONIVEL = `${CONSOLE}/#cvg-login=indisponivel`
 
-function withoutCorrelation(response: Inject) {
-  const body = { ...(response.json() as Record<string, unknown>) }
-  delete body.meta
-  return body
+function expectLanding(response: Inject, location: string) {
+  expect(response.statusCode).toBe(303)
+  expect(response.headers.location).toBe(location)
+  expect(response.body).toBe('')
+  expect(response.headers['cache-control']).toBe('private, no-store')
 }
 
 describe('SPEC0254 O3 — OIDC login happy path in process', () => {
@@ -307,7 +306,7 @@ describe('SPEC0254 O3 — OIDC login happy path in process', () => {
       groups: ['synthetic-a-supervisor', 'synthetic-unrelated']
     })
     const flow = await begin(h, user)
-    expect(flow.start.headers['cache-control']).toBe('no-store')
+    expect(flow.start.headers['cache-control']).toBe('private, no-store')
     const pendingHeader = setCookies(flow.start.headers['set-cookie'])[0]!
     expect(pendingHeader).toContain('HttpOnly; SameSite=Lax; Max-Age=300')
     const authorization = new URL(flow.authorizationUrl)
@@ -317,7 +316,7 @@ describe('SPEC0254 O3 — OIDC login happy path in process', () => {
     const done = await callback(h, flow.callbackPath, flow.pending)
     expect(done.statusCode).toBe(303)
     expect(done.headers.location).toBe(`${CONSOLE}/`)
-    expect(done.headers['cache-control']).toBe('no-store')
+    expect(done.headers['cache-control']).toBe('private, no-store')
     expect(done.body).toBe('')
     expect(clearsPending(done)).toBe(true)
     const operational = setCookies(done.headers['set-cookie']).find((cookie) =>
@@ -456,7 +455,7 @@ describe('SPEC0254 O4 — POST /v1/auth/oidc/start', () => {
         })
         expect(response.statusCode).toBe(403)
         expect(response.json().error.code).toBe('forbidden')
-        expect(response.headers['cache-control']).toBe('no-store')
+        expect(response.headers['cache-control']).toBe('private, no-store')
         expect(touchesOperationalCookie(response)).toBe(false)
         expect(setCookies(response.headers['set-cookie'])).toEqual([])
       }
@@ -495,7 +494,7 @@ describe('SPEC0254 O4 — POST /v1/auth/oidc/start', () => {
     const limited = await h.start()
     expect(limited.statusCode).toBe(429)
     expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0)
-    expect(limited.headers['cache-control']).toBe('no-store')
+    expect(limited.headers['cache-control']).toBe('private, no-store')
     expect(h.stateStore.reserved).toBe(10)
   })
 
@@ -567,9 +566,7 @@ describe('SPEC0254 O5 — GET /v1/auth/oidc/callback refusals', () => {
     response: Inject,
     input: { tokenCalls: number; sessionsBefore: number; operatorId?: string }
   ) {
-    expect(response.statusCode).toBe(401)
-    expect(withoutCorrelation(response)).toEqual(LOGIN_FAILED)
-    expect(response.headers['cache-control']).toBe('no-store')
+    expectLanding(response, LANDED_NEGADO)
     expect(clearsPending(response)).toBe(true)
     expect(touchesOperationalCookie(response)).toBe(false)
     expect(h.idp.calls.token).toBe(input.tokenCalls)
@@ -837,15 +834,14 @@ describe('SPEC0254 O5 — GET /v1/auth/oidc/callback refusals', () => {
     ['JWKS unreachable (fresh configuration)', { jwksDown: true }],
     ['IdP unreachable', { down: true }]
   ])(
-    'answers 503 for %s, clearing only the pending cookie',
+    'lands %s on #cvg-login=indisponivel, clearing only the pending cookie',
     async (_name, controls) => {
       const h = await harness()
       const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
       const flow = await begin(h, user)
       Object.assign(h.idp.controls, controls)
       const response = await callback(h, flow.callbackPath, flow.pending)
-      expect(response.statusCode).toBe(503)
-      expect(response.json().error.code).toBe('configuration_error')
+      expectLanding(response, LANDED_INDISPONIVEL)
       expect(clearsPending(response)).toBe(true)
       expect(touchesOperationalCookie(response)).toBe(false)
       expect(h.sessions.created).toBe(0)
@@ -862,7 +858,7 @@ describe('SPEC0254 O5 — GET /v1/auth/oidc/callback refusals', () => {
     const flow = await begin(h, user)
     h.stateStore.unavailable = true
     const response = await callback(h, flow.callbackPath, flow.pending)
-    expect(response.statusCode).toBe(503)
+    expectLanding(response, LANDED_INDISPONIVEL)
     expect(setCookies(response.headers['set-cookie'])).toEqual([])
     expect(h.idp.calls.token).toBe(0)
     h.stateStore.unavailable = false
@@ -877,7 +873,7 @@ describe('SPEC0254 O5 — GET /v1/auth/oidc/callback refusals', () => {
       await callback(h, '/v1/auth/oidc/callback')
     }
     const limited = await callback(h, '/v1/auth/oidc/callback')
-    expect(limited.statusCode).toBe(429)
+    expectLanding(limited, LANDED_INDISPONIVEL)
     expect(setCookies(limited.headers['set-cookie'])).toEqual([])
   })
 
@@ -914,7 +910,7 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
     expect(principalAudits(h)).toHaveLength(1)
   })
 
-  it('answers 503 without a session after two principal conflicts in a row', async () => {
+  it('lands on indisponivel without a session after two principal conflicts in a row', async () => {
     const h = await harness()
     const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
     const flow = await begin(h, user)
@@ -927,13 +923,13 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
         )
       )
     const response = await callback(h, flow.callbackPath, flow.pending)
-    expect(response.statusCode).toBe(503)
+    expectLanding(response, LANDED_INDISPONIVEL)
     expect(write).toHaveBeenCalledTimes(2)
     expect(h.sessions.created).toBe(0)
     expect(clearsPending(response)).toBe(true)
   })
 
-  it('answers 503 without a session when the principal write fails', async () => {
+  it('lands on indisponivel without a session when the principal write fails', async () => {
     const h = await harness()
     const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
     const flow = await begin(h, user)
@@ -944,17 +940,17 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
       new CaseAuthorityError('case_authority_unavailable', 'unavailable')
     )
     const response = await callback(h, flow.callbackPath, flow.pending)
-    expect(response.statusCode).toBe(503)
+    expectLanding(response, LANDED_INDISPONIVEL)
     expect(h.sessions.created).toBe(0)
   })
 
-  it('answers 503 and keeps the operational cookie when the session store fails', async () => {
+  it('lands on indisponivel and keeps the operational cookie when the session store fails', async () => {
     const h = await harness()
     const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
     const flow = await begin(h, user)
     h.sessions.failCreate = true
     const response = await callback(h, flow.callbackPath, flow.pending)
-    expect(response.statusCode).toBe(503)
+    expectLanding(response, LANDED_INDISPONIVEL)
     expect(touchesOperationalCookie(response)).toBe(false)
     expect(clearsPending(response)).toBe(true)
     // The principal is current before the session (I2).
@@ -978,17 +974,17 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
     const moved = h.idp.addUser({ groups: ['synthetic-a-disabled'] })
     const movedId = expectedOperatorId(ISSUER, moved.sub)
     const refused = await begin(h, moved)
-    expect(
-      (await callback(h, refused.callbackPath, refused.pending)).statusCode
-    ).toBe(401)
+    expectLanding(
+      await callback(h, refused.callbackPath, refused.pending),
+      LANDED_NEGADO
+    )
     expect(await principal(h, movedId)).toBeNull()
 
     // P4 on an existing principal: same subject, now only in the disabled group.
     ;(user as { groups: unknown }).groups = ['synthetic-a-disabled']
     const flow = await begin(h, user)
     const response = await callback(h, flow.callbackPath, flow.pending)
-    expect(response.statusCode).toBe(401)
-    expect(withoutCorrelation(response)).toEqual(LOGIN_FAILED)
+    expectLanding(response, LANDED_NEGADO)
     expect(await principal(h, operatorId)).toMatchObject({
       active: false,
       role: 'Operator',
@@ -1014,7 +1010,7 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
     ;(user as { groups: unknown }).groups = ['synthetic-a-supervisor']
     const flow = await begin(h, user)
     const response = await callback(h, flow.callbackPath, flow.pending)
-    expect(response.statusCode).toBe(401)
+    expectLanding(response, LANDED_NEGADO)
     expect(await principal(h, operatorId)).toMatchObject({
       role: 'Operator',
       revision: 1
