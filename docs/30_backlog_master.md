@@ -1,18 +1,23 @@
 # 28/10/2026 — triagem dos achados 0625 e frentes abertas
 
-- **AUD-SCORE-20261028 (Codex):** entrega da auditoria `COMPLETED`; remediação não executada pelo Codex. Triagem proposta no [handoff](08_runtime/handoffs/aud_score_20261028.md): F01–F05 deduplicados nas lanes de kernel/PAR-X/FS/shell; F06/F10/F11 em UP91-013/modelos; F07/F08/F15 em UP91-018/persistência; F09 na frente de imagem; F12 nos canais; F13 na carteira PISO; F14 na direção PAR/C100; F16 em identidade/revogação; F17 no frontend; F19 em SRV/U13–U16; F20 em U01/HISO-008/documentação. F18 é fronteira interna não suportada, não bypass pela API pública. Nenhum cartão pai encerrado pelo relatório 0625.
-- **Frentes abertas e donos (28/10):**
-  - 0267, F06/F10/F11 (D9, Claude Sonnet): SPEC `PROPOSED_FOR_HUMAN_T3_REVIEW` e testes de caracterização no commit local `cb787dc4`; aguarda T3.
-  - 0268, F12 (sessão 07, Claude Sonnet): SPEC e testes `it.fails` no commit local `8f22e350`; aguarda T3.
-  - 0269, F17 (sessão 07): T2 implementado localmente, sem push.
-  - 0270, F03/F04 (Claude DF, Opus): em discovery; precisa de revisão humana T3 antes do BUILD.
-  - 0271, F15 (sessão 07): rascunho, só análise estática.
-  - 0272, F08 (sessão 07): em discovery.
-  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258), U06 (0263) e F09 (imagem Debian 13): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
-  - Follow-up AUD0625-F12b: `exam-egress.ts` devolve 503.
+- **AUD-SCORE-20261028 (Codex):** entrega da auditoria `COMPLETED`. Triagem proposta no [handoff](08_runtime/handoffs/aud_score_20261028.md): F01–F05 deduplicados nas lanes de kernel/PAR-X/FS/shell; F06/F10/F11 em UP91-013/modelos; F07/F08/F15 em UP91-018/persistência; F09 na frente de imagem; F12 nos canais; F13 na carteira PISO; F14 na direção PAR/C100; F16 em identidade/revogação; F17 no frontend; F19 em SRV/U13–U16; F20 em U01/HISO-008/documentação. F18 é fronteira interna não suportada, não bypass pela API pública. Nenhum cartão pai encerrado pelo relatório 0625.
+- **Frentes e donos (28/10):**
+  - 0267, F06/F10/F11 (D9, Claude Sonnet): `IMPLEMENTED_LOCAL`, commit `d6d92958`; SPEC aprovada para BUILD T3 local em [human-decisions-2](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-2.json).
+  - 0268, F12 (sessão 07, Claude Sonnet): `IMPLEMENTED_LOCAL`, commit `ba965eab`.
+  - 0269, F17 (sessão 07): implementada (T2).
+  - 0270, F03/F04 (Claude DF, Opus): `IMPLEMENTED_LOCAL`, commit `3f2693cb`.
+  - 0272, F08 (sessão 07): aprovada a opção A em [human-decisions-3](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-3.json); em BUILD.
+  - 0271, F15: adiado por delegação, dono DF, `DRAFT_DISCOVERY`. Só afeta bancos com eventos de atendimento anteriores à migration 0021; a produção é instalação nova.
+  - Imagem Debian 13 (F09): Codex da AUD0625, fato 8494, branch `codex/aud0625-debian13-20261028`.
+  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258) e U06 (0263): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
+  - Follow-ups: AUD0625-F06b (estender o oráculo da SPEC0232 para aceitar o `system`; hoje há um wrapper de teste, sem dono nesta onda) e AUD0625-F12b (`exam-egress.ts` devolve 503).
+  - Publicação ([human-decisions-3](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-3.json)): push, PR e merge squash com os 5 checks verdes estão autorizados, sem deploy, servidor, dado real nem produção. Ordem: primeiro o PR da imagem; depois um PR único da onda AUD0625 a partir de `claude/aud0625-integration`.
   - Produção continua `NO_GO`; nenhuma frente acima libera release.
-- **Decisões do Ricardo de 28/10:** recibo em [human-decisions.json](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json). U08 só fecha depois do U04; OIDC em produção depende da fatia C (PR #29, `8429019b`).
-- **Regras do Ricardo:** bloqueio vai antes ao Codex pelo GBrain; consultar o GBrain antes de cada tarefa e registrar depois.
+- **Segue com o Codex:** F01/F02/F05 (contenção do sandbox, PAR-X), 0257/0258/0262/0263 (U03–U06), F13 (carteira PISO), F18 (fronteira interna) e F19 (SRV/U13–U16), além da imagem Debian 13.
+- **É do Ricardo e do hospital:** servidor (U10), IdP (U09) e piloto (U23); nenhum agente os executa.
+- Decisões do Ricardo em 28/10 ([1](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json), [2](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-2.json), [3](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-3.json)): BUILD local e sintético aprovado para a base Debian 13 (SPEC R2 `d2fa73d2…`), 0257 R2, 0262 R5, 0263 R2, 0258 R1 e 0267/0268/0270; SPEC 0272 com a opção A; publicação autorizada na ordem acima. F03/F04 foram à sessão DF (SPEC 0270). Fora do que aprovam: 0264, 0265, K08 SPEC3, deploy, servidor, dado real e produção.
+- Regras novas do Ricardo: o que um agente não conseguir executar (push, comando bloqueado) vai primeiro ao Codex por "TAREFA PARA O CODEX" no GBrain, e só sobra para ele o que nenhum agente consiga; antes de cada tarefa consultar o GBrain e, ao terminar, registrar agente, task, resultado, caminhos/SHA, evidências, pendências e próxima ação.
+- Produção `NO_GO`.
 
 # 23/10/2026 — release e CI
 
