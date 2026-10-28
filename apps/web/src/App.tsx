@@ -125,6 +125,10 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
   const [conversations, setConversations] = useState<
     PanelState<ConversationView[]>
   >(loading([]))
+  const [conversationPageInfo, setConversationPageInfo] =
+    useState<ListPageInfo | null>(null)
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] =
+    useState(false)
   const [messages, setMessages] = useState<PanelState<TimelineItem[]>>(
     loading([])
   )
@@ -395,6 +399,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
 
     let active = true
     setConversations(loading([]))
+    setConversationPageInfo(null)
+    setIsLoadingMoreConversations(false)
     setMessages(loading([]))
     setApprovals(loading([]))
     setTasks(loading([]))
@@ -422,6 +428,7 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
         if (!active || !isCurrentIdentity(scope)) return
         const firstConversation = page.items[0] ?? null
         setConversations(loaded(page.items))
+        setConversationPageInfo(page.pageInfo)
         setSelectedConversationId(firstConversation?.id ?? null)
         setSelectedSessionId(firstConversation?.openSessionId ?? null)
         if (!firstConversation) {
@@ -672,11 +679,61 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
       })
   }
 
-  const openApprovalCase = (sessionId: string) => {
-    const conversation = conversations.data.find(
-      (item) => item.openSessionId === sessionId
-    )
+  /**
+   * SPEC 0269 — appends the next conversation page. Returns the grown list and
+   * the page info, or null when the view changed or the request failed.
+   */
+  const fetchMoreConversations = async (
+    loadedItems: ConversationView[],
+    pageInfo: ListPageInfo
+  ): Promise<{ items: ConversationView[]; pageInfo: ListPageInfo } | null> => {
+    const identity = currentOperatorIdentity()
+    const scope = viewScopeToken
+    if (!identity) return null
+    try {
+      const page = await apiClient.listConversations(identity, {
+        limit: pageInfo.limit,
+        offset: pageInfo.offset + pageInfo.limit
+      })
+      if (!isCurrentViewScope(scope)) return null
+      const known = new Set(loadedItems.map((item) => item.id))
+      const items = [
+        ...loadedItems,
+        ...page.items.filter((item) => !known.has(item.id))
+      ]
+      setConversations(loaded(items))
+      setConversationPageInfo(page.pageInfo)
+      return { items, pageInfo: page.pageInfo }
+    } catch {
+      return null
+    }
+  }
+
+  const loadMoreConversations = async () => {
+    if (!conversationPageInfo?.hasNextPage || isLoadingMoreConversations) return
+    const scope = viewScopeToken
+    setIsLoadingMoreConversations(true)
+    try {
+      await fetchMoreConversations(conversations.data, conversationPageInfo)
+    } finally {
+      if (isCurrentViewScope(scope)) setIsLoadingMoreConversations(false)
+    }
+  }
+
+  const openApprovalCase = async (sessionId: string) => {
+    let items = conversations.data
+    let pageInfo = conversationPageInfo
+    let conversation = items.find((item) => item.openSessionId === sessionId)
+    // The case may sit past the loaded pages: keep paging until it appears.
+    while (!conversation && pageInfo?.hasNextPage) {
+      const next = await fetchMoreConversations(items, pageInfo)
+      if (!next) break
+      items = next.items
+      pageInfo = next.pageInfo
+      conversation = items.find((item) => item.openSessionId === sessionId)
+    }
     if (conversation) selectConversation(conversation)
+    else setApprovalMessage('Caso não encontrado entre as conversas.')
   }
 
   const refreshAudit = async (scope = viewScopeToken) => {
@@ -1143,6 +1200,9 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           error={conversations.error ?? messages.error}
           isLoading={conversations.isLoading}
           isTimelineLoading={!conversations.isLoading && messages.isLoading}
+          pageInfo={conversationPageInfo}
+          isLoadingMore={isLoadingMoreConversations}
+          onLoadMore={() => void loadMoreConversations()}
           onSelectConversation={selectConversation}
         />
         <ApprovalsPanel
@@ -1164,7 +1224,8 @@ export function App({ identityMode, sessionBootstrap }: AppProps = {}) {
           openableSessionIds={conversations.data.flatMap((conversation) =>
             conversation.openSessionId ? [conversation.openSessionId] : []
           )}
-          onOpenCase={openApprovalCase}
+          searchUnloadedCases={conversationPageInfo?.hasNextPage ?? false}
+          onOpenCase={(sessionId) => void openApprovalCase(sessionId)}
           actionId={approvalActionId}
           error={approvals.error}
           isLoading={approvals.isLoading}

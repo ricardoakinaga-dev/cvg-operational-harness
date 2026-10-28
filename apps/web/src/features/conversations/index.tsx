@@ -1,3 +1,5 @@
+import type { PageControlsInfo } from '../page-controls.tsx'
+
 export interface ConversationsPanelProps {
   conversations: Array<{
     id: string
@@ -12,6 +14,10 @@ export interface ConversationsPanelProps {
   error?: string | null
   isLoading?: boolean
   isTimelineLoading?: boolean
+  /** SPEC 0269 — the list is paged; more conversations may still be unloaded. */
+  pageInfo?: PageControlsInfo | null
+  isLoadingMore?: boolean
+  onLoadMore?: () => void
   onSelectConversation: (
     conversation: ConversationsPanelProps['conversations'][number]
   ) => void
@@ -24,6 +30,9 @@ export function ConversationsPanel({
   error = null,
   isLoading = false,
   isTimelineLoading = false,
+  pageInfo = null,
+  isLoadingMore = false,
+  onLoadMore,
   onSelectConversation
 }: ConversationsPanelProps) {
   return (
@@ -67,6 +76,21 @@ export function ConversationsPanel({
               </button>
             ))
           : null}
+        {!isLoading && !error && pageInfo?.hasNextPage ? (
+          <nav className="actions" aria-label="Paginação de conversas">
+            <span>
+              {conversations.length} de {pageInfo.total}
+            </span>
+            <button
+              type="button"
+              aria-label="Carregar mais conversas"
+              disabled={isLoadingMore}
+              onClick={() => onLoadMore?.()}
+            >
+              Carregar mais
+            </button>
+          </nav>
+        ) : null}
         {!isLoading && !error && conversations.length > 0 ? (
           <div className="timeline" aria-label="Timeline selecionada">
             {isTimelineLoading ? (
