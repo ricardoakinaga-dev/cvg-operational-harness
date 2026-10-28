@@ -9,7 +9,7 @@ the legacy product being isolated under `legacy/`.
 Em 28/10/2026 a `main` está em `8429019b` (PR #29, OIDC do console, fatia B1)
 e a produção continua `NO_GO`. A [auditoria 0625](docs/04_audit/0625_repository_score_audit_2026-10-28.md)
 deu média 72 e prontidão 45 e abriu as frentes de remediação F01–F20. As SPECs
-0267, 0268, 0270, 0272 (SHA final `b90f2484`) e 0273 estão implementadas e revisadas em
+0267, 0268, 0270, 0272 (SHA final `e5c1c732`) e 0273 estão implementadas e revisadas em
 branches locais, a 0269 também. A imagem com base Debian 13 está com o Codex (API,
 worker e TLS passam; ainda não qualificada). A publicação é a da onda: primeiro o PR da
 imagem, depois um PR único da onda AUD0625.
