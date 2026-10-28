@@ -59,6 +59,7 @@ export class KernelHost {
   }
   readonly #guards: { plugin: string; fn: ToolGuard }[] = []
   readonly #disposers: Disposer[] = []
+  #disposal: Promise<void> | undefined
   #sealed = false
 
   private constructor() {}
@@ -126,15 +127,21 @@ export class KernelHost {
   }
 
   /** Unwinds registrations in reverse order and waits for each to finish. */
-  public async dispose(): Promise<void> {
-    while (this.#disposers.length > 0) {
-      const dispose = this.#disposers.pop()
-      try {
-        await dispose?.()
-      } catch {
-        // One failing disposer must not leave the remaining ones running.
+  public dispose(): Promise<void> {
+    // Publish the shared task before invoking callbacks, including callbacks
+    // that trigger another dispose call. Every caller waits for the same LIFO
+    // sequence instead of draining the stack concurrently.
+    this.#disposal ??= Promise.resolve().then(async () => {
+      while (this.#disposers.length > 0) {
+        const dispose = this.#disposers.pop()
+        try {
+          await dispose?.()
+        } catch {
+          // One failing disposer must not leave the remaining ones running.
+        }
       }
-    }
+    })
+    return this.#disposal
   }
 
   static order(plugins: readonly KernelPlugin[]): KernelPlugin[] {
