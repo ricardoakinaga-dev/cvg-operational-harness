@@ -255,26 +255,28 @@ describe('PDSH-016 exam egress (SPEC 0201)', () => {
     )
   })
 
-  it('marks the journal FAILED when the provider rejects (non-2xx)', async () => {
+  // SPEC 0273 §3.4: a 503 is no longer the example of a rejection (it is
+  // UNCERTAIN, see aud0625-f12b-exam-egress-uncertain.test.ts); a 4xx is.
+  it('marks the journal FAILED when the provider definitively rejects (4xx)', async () => {
     const root = workspace()
     writeFileSync(join(root, 'report.pdf'), 'exam-bytes')
     const journal = new InMemoryChannelEffectJournal()
     const tool = createExamUploadTool({
       ...baseOptions(root),
       effectJournal: journal,
-      fetchImpl: async () => new Response('nope', { status: 503 })
+      fetchImpl: async () => new Response('nope', { status: 400 })
     })
     const result = await tool.execute(
       {
         path: 'report.pdf',
         url: 'https://exams.example.com/u',
         intent: 'send report',
-        operationKey: 'op-upload-503'
+        operationKey: 'op-upload-400'
       },
       context
     )
     expect(result.status).toBe('FAILED')
-    expect((await journal.find(identity('op-upload-503')))?.state).toBe(
+    expect((await journal.find(identity('op-upload-400')))?.state).toBe(
       'FAILED'
     )
   })
