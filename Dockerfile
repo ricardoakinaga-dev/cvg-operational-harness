@@ -30,7 +30,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force \
 # this image (worker: `node apps/worker/dist/main.js`). Application files stay
 # owned by root, so the `cvg` account cannot rewrite them even without
 # --read-only.
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:3ee00291cf386ec52a552e6a858d555debd74776eb4bfa53fa3df2cd6677515e AS runtime
 ENV NODE_ENV=production
 COPY --from=prod-deps /usr/local/bin/node /usr/local/bin/node
 COPY --from=prod-deps /tmp/passwd /etc/passwd
