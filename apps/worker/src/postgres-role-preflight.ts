@@ -3,6 +3,7 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
   CVG_TENANT_CONTEXT_SETTING,
   readPostgresMigrationSql,
+  TENANT_READ_INSERT_TABLES,
   TENANT_SCHEMA_INVENTORY,
   TENANT_SCHEMA_TABLES,
   type PostgresPoolLike,
@@ -251,6 +252,7 @@ export async function assertPostgresWorkerPreflight(
     })
 
     const tablePrivileges = await client.query<{
+      relname: string
       can_select: boolean
       can_insert: boolean
       can_update: boolean
@@ -259,7 +261,8 @@ export async function assertPostgresWorkerPreflight(
       can_trigger: boolean
       can_references: boolean
     }>(
-      `SELECT has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
+      `SELECT table_name AS relname,
+              has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'SELECT') AS can_select,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'INSERT') AS can_insert,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'UPDATE') AS can_update,
               has_table_privilege(current_user, format('%I.%I', current_schema(), table_name), 'DELETE') AS can_delete,
@@ -275,7 +278,10 @@ export async function assertPostgresWorkerPreflight(
         (privileges) =>
           !privileges.can_select ||
           !privileges.can_insert ||
-          !privileges.can_update ||
+          // SPEC 0257: append-only tables must NOT grant UPDATE.
+          (TENANT_READ_INSERT_TABLES.has(privileges.relname)
+            ? privileges.can_update
+            : !privileges.can_update) ||
           privileges.can_delete ||
           privileges.can_truncate ||
           privileges.can_trigger ||

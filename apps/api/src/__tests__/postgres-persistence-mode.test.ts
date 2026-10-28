@@ -355,7 +355,8 @@ describe('api PostgreSQL persistence mode', () => {
       '0026_rate_limit_key_hardening',
       '0027_worker_operations',
       // SPEC0176: the case assignment schema is part of the verified set.
-      '0029_case_assignment_authorization'
+      '0029_case_assignment_authorization',
+      '0030_api_creation_receipts'
     ] as const
     const rows: Array<{
       version: string
