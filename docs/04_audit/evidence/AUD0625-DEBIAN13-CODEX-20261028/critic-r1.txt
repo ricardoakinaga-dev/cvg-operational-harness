@@ -1,0 +1,27 @@
+**BLOCKED_QUALIFICATION.** O delta de fonte merece **APPROVE_SCOPED_SOURCE**, mas C4–C7 não permitem qualificar a candidata. Nenhum release concedido.
+
+`6494d2f63` sobre `8429019b` altera exatamente duas linhas: [Dockerfile:33](/mnt/dados/cvg-work/aud0625-debian13-codex-20261028/candidate/Dockerfile:33) e [contrato:44](/mnt/dados/cvg-work/aud0625-debian13-codex-20261028/candidate/tests/runtime-image-contract.test.js:44). Pin Node, lock, build/web e demais controles permanecem intactos. Não encontrei defeito obrigatório nessas alterações.
+
+Os hashes completos da SPEC `d2fa73d2…` e do recibo humano `14ea8563…` conferem. A atualização de baseline após PR29 consta da atribuição fornecida e do claim local, linhas 8574–8579; não consegui recuperar diretamente o fato GBrain8494.
+
+Evidências abaixo relativas a `/mnt/dados/cvg-work/aud0625-debian13-codex-20261028/`:
+
+| Critério | Parecer |
+|---|---|
+| C1 | Negativo antigo reproduzido: `old-base-trivy.json` contém CVE-2026-84782, libssl3 `3.0.20-1~deb12u2`, correção `3.0.22-1~deb12u2`, HIGH; execução exit1. Não reconferi o job histórico original. |
+| C2 | Assinatura registrada exit0, identidade/issuer oficiais e digest correto. Hashes do index e manifest amd64 conferem. SSL corrigido ligado à camada `810e2b40…`. |
+| C3 | Atendido no delta inspecionado: somente os dois paths autorizados. |
+| C4 | **Bloqueado.** Build exit0/517,312s, mas probes falharam no setup `docker create`; aplicação não observada. |
+| C5 | Cobertura e resultados positivos sustentados; **mesmo DB incluindo o negativo antigo ainda não comprovado integralmente**. |
+| C6 | **Incompleto.** Contrato focal 3/3; tipos/lint precedem a falha de formato. npmtest integral, PostgreSQL, E2E e gates globais atuais continuam pendentes. |
+| C7 | Pacote de integração completo não demonstrado nos inputs examinados; rollback vulnerável e CI/atestação atuais continuam obrigatórios. |
+
+Faltas obrigatórias para qualificação:
+
+- **Maior lacuna — execução no novo runtime.** [api-probe.json:35](/mnt/dados/cvg-work/aud0625-debian13-codex-20261028/api-probe.json:35), worker, heartbeat e TLS registram timeout de criação, sem resultado da aplicação. Faltam Node ABI/imports, comparação Node/OpenSSL/FIPS/default CA, fingerprints/diff das CAs de sistema e legibilidade pelo UID10001, TLS positivo/negativos fechados, API e heartbeat real. O inventário do archive declara corretamente que não prova esses comportamentos.
+- **Cadeia temporal do DB incompleta.** [trivy-db-pre.json:12](/mnt/dados/cvg-work/aud0625-debian13-codex-20261028/trivy-db-pre.json:12) informa que o selo começa após scans preliminares. PRE/POST iguais sustentam os scans finais/informativo; não vinculam criptograficamente o negativo antigo ao mesmo DB. `--skip-db-update` e cache comum são indícios, insuficientes para essa conclusão forte.
+- **Não declarar gates globais verdes.** [light-gates.log:9](/mnt/dados/cvg-work/aud0625-debian13-codex-20261028/light-gates.log:9) registra erro de parser do Dockerfile. Isso é falha de invocação, não defeito demonstrado no Dockerfile. O teste focal posterior não substitui a barra integral.
+
+O scanner final identifica Debian13.7, 14 pacotes OS e 122 registros Node; fastify/pg/zod aparecem. Reconstruindo `Epoch/Version/Release`, o inventário OS confere, inclusive libssl3t64 `3.5.7-1~deb13u3`. Policy e informativo não apresentam vulnerabilidades. Isso sustenta componentes e cobertura, sem fechar integração ou C5 integralmente.
+
+**Confiança alta** no delta mínimo e no bloqueio; **moderada** na cadeia histórica/DB. Sem testes, serviços, Docker, filhos ou escritas nesta revisão. Nenhum parecer anterior desta migração foi consultado; a leitura de coordenação expôs resumos históricos de outras frentes. Ledgers e GBrain não foram escritos, conforme o limite somente leitura.
