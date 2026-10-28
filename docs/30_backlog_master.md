@@ -1,18 +1,28 @@
 # 28/10/2026 — triagem dos achados 0625 e frentes abertas
 
-- **AUD-SCORE-20261028 (Codex):** entrega da auditoria `COMPLETED`; remediação não executada pelo Codex. Triagem proposta no [handoff](08_runtime/handoffs/aud_score_20261028.md): F01–F05 deduplicados nas lanes de kernel/PAR-X/FS/shell; F06/F10/F11 em UP91-013/modelos; F07/F08/F15 em UP91-018/persistência; F09 na frente de imagem; F12 nos canais; F13 na carteira PISO; F14 na direção PAR/C100; F16 em identidade/revogação; F17 no frontend; F19 em SRV/U13–U16; F20 em U01/HISO-008/documentação. F18 é fronteira interna não suportada, não bypass pela API pública. Nenhum cartão pai encerrado pelo relatório 0625.
-- **Frentes abertas e donos (28/10):**
-  - 0267, F06/F10/F11 (D9, Claude Sonnet): SPEC `PROPOSED_FOR_HUMAN_T3_REVIEW` e testes de caracterização no commit local `cb787dc4`; aguarda T3.
-  - 0268, F12 (sessão 07, Claude Sonnet): SPEC e testes `it.fails` no commit local `8f22e350`; aguarda T3.
-  - 0269, F17 (sessão 07): T2 implementado localmente, sem push.
-  - 0270, F03/F04 (Claude DF, Opus): em discovery; precisa de revisão humana T3 antes do BUILD.
-  - 0271, F15 (sessão 07): rascunho, só análise estática.
-  - 0272, F08 (sessão 07): em discovery.
-  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258), U06 (0263) e F09 (imagem Debian 13): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
-  - Follow-up AUD0625-F12b: `exam-egress.ts` devolve 503.
+- **AUD-SCORE-20261028 (Codex):** entrega da auditoria `COMPLETED`. Triagem proposta no [handoff](08_runtime/handoffs/aud_score_20261028.md): F01–F05 deduplicados nas lanes de kernel/PAR-X/FS/shell; F06/F10/F11 em UP91-013/modelos; F07/F08/F15 em UP91-018/persistência; F09 na frente de imagem; F12 nos canais; F13 na carteira PISO; F14 na direção PAR/C100; F16 em identidade/revogação; F17 no frontend; F19 em SRV/U13–U16; F20 em U01/HISO-008/documentação. F18 é fronteira interna não suportada, não bypass pela API pública. Nenhum cartão pai encerrado pelo relatório 0625.
+- **Frentes e donos (28/10):**
+  - 0267, F06/F10/F11 (D9, Claude Sonnet): `IMPLEMENTED_LOCAL`, BUILD `d6d92958`, correções da revisão em `91b6777e`. Aprovada para BUILD T3 local em [human-decisions-2](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-2.json). Revisão independente (sessão 07): `APPROVE_WITH_FINDINGS`; R1–R6 corrigidos, R7–R9 registrados.
+  - 0268, F12 (sessão 07, Claude Sonnet): BUILD `ba965eab`; acompanhamento em `b1b5995f` (resposta 2xx com corpo grande fica `UNCERTAIN`; 3xx com corpo grande continua `FAILED`). Revisões (D9 e 07): `APPROVE`.
+  - 0269, F17 (sessão 07): implementada (T2); testes e correções dentro do acompanhamento `b1b5995f`.
+  - 0270, F03/F04 (Claude DF, Opus): `IMPLEMENTED_LOCAL`, BUILD `3f2693cb`, correções da revisão até `d79baa0d`. Revisão independente (D9): `APPROVE`.
+  - 0272, F08 (sessão 07): opção A aprovada em [human-decisions-3](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-3.json); BUILD `65cb22f0`, correções da revisão `f250bf72`, `94725d37`, `b90f2484` e `e5c1c732` (**SHA final**). Passada PostgreSQL 16/16 com `EXPLAIN` (anti-join pelo índice `uq_audit_approval_decision`). Revisão (D9): `APPROVE` em `f250bf72` e confirmação `APPROVE` em `94725d37` e confirmação final `APPROVE` em `b90f2484`. A ressalva N2 (erros do cliente `pg` sem código isolados por linha) foi corrigida em `b90f2484`, confirmação D9 `APPROVE`: só `ApprovalReconciliationDataError` é isolado e o resto derruba o tick. F08d corrigido em `e5c1c732`, confirmação D9 `APPROVE`: `invalid_action` e `conflict` de `OperationalExecutionError` e `not_found` de `ApprovalError` são isolados por linha; `lease_lost` e o resto derrubam o tick. Observação (custo conhecido): `not_found` e `validation_failed` de `OperationalExecutionError` no resume ainda derrubam o tick.
+  - 0273, F12b (D9, Claude Sonnet): BUILD `d9a35aa9`; `exam.upload` com 5xx depois do envio fica `UNCERTAIN`. Aprovada em [human-decisions-4](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-4.json). Revisão independente (DF): `APPROVE`, sem achados.
+  - Política de links da integração: `ba041eeb` (as 16 entradas do `report-review.md` do Codex não contam como as 20 movimentações históricas do HISO).
+  - 0271, F15: adiado por delegação, dono DF, `DRAFT_DISCOVERY`. Só afeta bancos com eventos de atendimento anteriores à migration 0021; a produção é instalação nova.
+  - Imagem Debian 13 (F09): Codex da AUD0625 (fato 8494, branch `codex/aud0625-debian13-20261028`). API, worker e TLS passam em `6494d2f63`; heartbeat e inventário em curso; **ainda não qualificada**.
+  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258) e U06 (0263): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
+  - Achado 9104: `tests/claude100/reference-port/controller.test.js` falha também na `main` local, sem relação com a onda; dono Codex.
+  - Ocorrência (passada PG da 0272): dois testes antigos da migration 0021 (`CREATE INDEX CONCURRENTLY`) estouraram 120 s uma vez sob carga; passaram isolados e em duas execuções completas seguintes. Não reproduzido.
+  - Regra de carga (8980): sem `npm test` completo nem `test:postgres` em paralelo; só `vitest` focado com `--maxWorkers=2`. A suíte completa da onda roda uma vez, pelo DF, na integração, com a carga abaixo de ~12.
+  - Acompanhamentos: AUD0625-F06b (estender o oráculo da SPEC0232 para aceitar o `system`; hoje há um adaptador de teste), AUD0625-F12c (429 sem espera nem teto), AUD0625-F03b (hardlink), AUD0625-F08b (`FAILED`/`CANCELLED`/`EXPIRED` depois de `APPROVED`, dono DF). Opcional: AUD0625-F08c (índice `(tenant_id, updated_at)` em `operational_executions`, sugerido pelo `EXPLAIN`); F08d (corrigido em `e5c1c732`).
+  - Publicação ([human-decisions-3](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-3.json)): push, PR e merge squash com os 5 checks verdes estão autorizados, sem deploy, servidor, dado real nem produção. Ordem: primeiro o PR da imagem; depois um PR único da onda AUD0625 a partir de `claude/aud0625-integration`.
   - Produção continua `NO_GO`; nenhuma frente acima libera release.
-- **Decisões do Ricardo de 28/10:** recibo em [human-decisions.json](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json). U08 só fecha depois do U04; OIDC em produção depende da fatia C (PR #29, `8429019b`).
-- **Regras do Ricardo:** bloqueio vai antes ao Codex pelo GBrain; consultar o GBrain antes de cada tarefa e registrar depois.
+- **Segue com o Codex:** F01/F02/F05 (contenção do sandbox, PAR-X), 0257/0258/0262/0263 (U03–U06), F13 (carteira PISO), F18 (fronteira interna) e F19 (SRV/U13–U16), além da imagem Debian 13.
+- **É do Ricardo e do hospital:** servidor (U10), IdP (U09) e piloto (U23); nenhum agente os executa.
+- Decisões do Ricardo em 28/10 ([1](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json), [2](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-2.json), [3](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-3.json), [4](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-4.json)): BUILD local e sintético aprovado para a base Debian 13 (SPEC R2 `d2fa73d2…`), 0257 R2, 0262 R5, 0263 R2, 0258 R1, 0267/0268/0270 e 0273; SPEC 0272 com a opção A; publicação autorizada na ordem acima. F03/F04 foram à sessão DF (SPEC 0270). Fora do que aprovam: 0264, 0265, K08 SPEC3, deploy, servidor, dado real e produção.
+- Regras novas do Ricardo: o que um agente não conseguir executar (push, comando bloqueado) vai primeiro ao Codex por "TAREFA PARA O CODEX" no GBrain, e só sobra para ele o que nenhum agente consiga; antes de cada tarefa consultar o GBrain e, ao terminar, registrar agente, task, resultado, caminhos/SHA, evidências, pendências e próxima ação.
+- Produção `NO_GO`.
 
 # 23/10/2026 — release e CI
 
