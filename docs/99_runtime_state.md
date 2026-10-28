@@ -1,3 +1,32 @@
+# AUD-SCORE-20261028 — auditoria 0625 entregue (Codex) — 28/10/2026
+
+- `status`: `COMPLETED` somente para a entrega da auditoria; programa e frentes próprias continuam com seus estados. Produção `NO_GO`. Delta proposto pelo Codex em [handoff](08_runtime/handoffs/aud_score_20261028.md), incorporado sem mudar o sentido.
+- `last_completed_action`: [relatório 0625](04_audit/0625_repository_score_audit_2026-10-28.md), 27 notas, média 72, prontidão 45, 2.897 regressões + 21 sondas sintéticas; CI 35 gates/56 hashes de `61e5cf8f` conferidos, scan posterior HIGH/FAIL separado. F01–F04 (sandbox/FS/processos) reproduzidos; controles aprovados não compensam falha obrigatória. [Evidências](04_audit/evidence/AUD-SCORE-20261028/test-summary.json).
+- `next_action`: reconciliar F01–F05 com os titulares PAR-X/sandbox e escolher a correção com task/SPEC/gate; não assumir claims ou candidatas alheias nem conceder release.
+
+# Merge do PR #29 e decisões do Ricardo — 28/10/2026 (Claude Code, sessão DF)
+
+- `status`: PR #29 (U08, login OIDC do console em hosts HTTPS distintos) integrado; `main` em `8429019b`. Produção `NO_GO`.
+- `last_completed_action`:
+  - Squash `8429019b36f150828bfccef0080fdeff4a635fed` às 19:43:27Z, com match-head `b667ad6f`. O U08 só fecha depois do U04; OIDC em produção depende da fatia C.
+  - O Ricardo decidiu em 28/10 ([recibo](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json)): aprovou o BUILD local e sintético da troca da base para distroless Debian 13 (SPEC R2 `d2fa73d2…`) e de 0257 R2, 0262 R5 (depois da 0257), 0263 R2 e 0258 R1; F03/F04 passam à sessão DF (SPEC 0270). Não cobrem push, PR, merge, 0264, 0265, K08 SPEC3 nem produção.
+  - Regras novas: o que um agente não conseguir executar (push, comando bloqueado) vai primeiro ao Codex por "TAREFA PARA O CODEX" no GBrain, e só sobra ao Ricardo o que nenhum agente consiga; antes de cada tarefa consultar o GBrain e, ao terminar, registrar agente, task, resultado, caminhos/SHA, evidências, pendências e próxima ação.
+- `next_action`: o image-scan obrigatório reprova qualquer PR até a base Debian 13 (BUILD do Codex); por isso nenhum PR abre antes.
+
+# Frentes AUD0625 abertas — 28/10/2026
+
+- `status`: frentes da remediação da auditoria 0625 e seus donos. Estados são os do GBrain em 28/10; nenhum aceite, push ou release.
+- `open_fronts`:
+  - 0267, F06/F10/F11 (D9, Claude Sonnet): SPEC `PROPOSED_FOR_HUMAN_T3_REVIEW` e testes de caracterização no commit local `cb787dc4`; aguarda T3.
+  - 0268, F12 (sessão 07, Claude Sonnet): SPEC e testes `it.fails` no commit local `8f22e350`; aguarda T3.
+  - 0269, F17 (sessão 07): T2 implementado localmente, sem push.
+  - 0270, F03/F04 (Claude DF, Opus): em discovery; precisa de revisão humana T3 antes do BUILD.
+  - 0271, F15 (sessão 07): rascunho, só análise estática.
+  - 0272, F08 (sessão 07): em discovery.
+  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258), U06 (0263) e F09 (imagem Debian 13): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
+  - Follow-up AUD0625-F12b: `exam-egress.ts` devolve 503.
+  - Produção continua `NO_GO`; nenhuma frente acima libera release.
+
 # RELEASE-CI-0253 — primeira publicação real no GHCR privado — 23/10/2026 (Claude Code)
 
 - `status: DONE` para a publicação da SPEC0253. Fica fora: deploy, verificação no destino e rollback, que são da UP91-035 e da 0393.

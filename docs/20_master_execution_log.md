@@ -1,3 +1,19 @@
+# 28/10/2026 — AUD-SCORE-20261028, PR #29 e frentes AUD0625
+
+- **AUD-SCORE-20261028 (Codex):** auditoria documental/técnica da `main` `61e5cf8f` em cópia isolada Node 22; checkout, fontes e trabalho dos pares preservados. Tipos, lint, builds e `npm audit` PASS; 2.897 regressões próprias e 21 sondas, sem dado real nem modelo externo. O [relatório 0625](04_audit/0625_repository_score_audit_2026-10-28.md) entrega 27 notas, média 72 e prontidão 45. Confirmados desvios de sandbox, filesystem, prompt e auditoria; achados estáticos identificados como tais. CI 35 gates/56 hashes e publicação de 24/10 conferidos; image-scan de 26/10 FAIL não ocultado. Nenhum BUILD corretivo, commit, push, merge ou deploy. Delta do [handoff](08_runtime/handoffs/aud_score_20261028.md). Produção `NO_GO`.
+- **PR #29 (Claude DF):** squash `8429019b36f150828bfccef0080fdeff4a635fed` às 19:43:27Z. O U08 só fecha depois do U04; OIDC em produção depende da fatia C.
+- **Decisões do Ricardo ([recibo](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json)):** BUILD local e sintético aprovado para a base Debian 13 (SPEC R2 `d2fa73d2…`) e para 0257 R2, 0262 R5, 0263 R2 e 0258 R1; F03/F04 vão à sessão DF (SPEC 0270). Fora: push, PR, merge, 0264, 0265, K08 SPEC3 e produção. Regras novas: bloqueio vai antes ao Codex pelo GBrain; consultar o GBrain antes de cada tarefa e registrar depois.
+- **Frentes AUD0625 abertas:**
+  - 0267, F06/F10/F11 (D9, Claude Sonnet): SPEC `PROPOSED_FOR_HUMAN_T3_REVIEW` e testes de caracterização no commit local `cb787dc4`; aguarda T3.
+  - 0268, F12 (sessão 07, Claude Sonnet): SPEC e testes `it.fails` no commit local `8f22e350`; aguarda T3.
+  - 0269, F17 (sessão 07): T2 implementado localmente, sem push.
+  - 0270, F03/F04 (Claude DF, Opus): em discovery; precisa de revisão humana T3 antes do BUILD.
+  - 0271, F15 (sessão 07): rascunho, só análise estática.
+  - 0272, F08 (sessão 07): em discovery.
+  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258), U06 (0263) e F09 (imagem Debian 13): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
+  - Follow-up AUD0625-F12b: `exam-egress.ts` devolve 503.
+  - Produção continua `NO_GO`; nenhuma frente acima libera release.
+
 # RELEASE-CI-0253 — primeira publicação real — 23/10/2026 (Claude Code, CONT-20261018-D9EF)
 
 - **Run 39911478714, tentativa 3:** `publish`, sobre o commit `2feec903`. A imagem foi publicada e atestada, e a verificação independente passou.

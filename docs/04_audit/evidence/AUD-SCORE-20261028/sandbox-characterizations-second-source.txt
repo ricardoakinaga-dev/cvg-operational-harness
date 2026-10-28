@@ -1,0 +1,65 @@
+// @vitest-environment node
+import { describe, it, expect } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, renameSync, symlinkSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createCapabilityRegistry, createOperationalHarness } from '../packages/harness/src/index.ts'
+import { createFsTools } from '../packages/sandbox/src/fs-tools.ts'
+import { runContained } from '../packages/sandbox/src/run.ts'
+import { InMemoryApprovalEngine, RecordingAuditSink, RecordingTelemetrySink, ScriptedPolicyEngine, phase3AgentProfile, phase3RuntimeInput } from '../packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+
+const definition = (sandbox: string, execute: any) => ({ id: 'synthetic.audit.sandbox', version: '1.0.0', description: 'Synthetic probe only', inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, risk: 'LOW', sideEffect: 'READ', sandbox, idempotent: true, requiresApproval: false, execute })
+const registration = (sandbox: string, execute: any) => { const { execute: _e, ...d } = definition(sandbox, execute); return { descriptor: { ...d, origin: 'core', providerId: 'synthetic', providerVersion: '1.0.0' }, implementation: { validateInput: () => true, execute, validateOutput: () => true } } }
+function harness(mode: 'tools' | 'capabilities', execute: any) {
+  const tool = definition('WORKSPACE', execute)
+  return createOperationalHarness({ modelGateway: { complete: async () => ({ text: 'unused', provider: 'synthetic', model: 'synthetic', inputTokens: 0, outputTokens: 0, costUsd: 0 }) }, policy: new ScriptedPolicyEngine(), approvals: new InMemoryApprovalEngine(), audit: new RecordingAuditSink(), telemetry: new RecordingTelemetrySink(), ...(mode === 'tools' ? { tools: { list: () => [tool], resolve: () => tool } } : { capabilities: createCapabilityRegistry([registration('WORKSPACE', execute)] as any) }), orchestrator: { decideNextStep: async () => ({ action: 'CALL_TOOL', toolInvocation: { toolId: tool.id, toolVersion: '1.0.0', input: {}, operationKey: 'audit-sandbox-op' } }) } } as any)
+}
+describe('AUD0625 sandbox characterizations; synthetic owned files only', () => {
+  for (const mode of ['tools', 'capabilities'] as const) {
+    it(`${mode} path without a sandbox gate`, async () => {
+      let calls = 0
+      const h = harness(mode, async () => { calls++; return { status: 'SUCCEEDED', output: {} } })
+      const input = phase3RuntimeInput({ runtimeProfile: 'single_pass', agent: phase3AgentProfile({ tools: ['synthetic.audit.sandbox'] }) })
+      const result = await h.execute(input)
+      expect(result.stopReason).toBe(mode === 'tools' ? 'UNSAFE_REQUEST' : 'COMPLETED')
+      expect(calls).toBe(mode === 'tools' ? 0 : 1)
+    })
+  }
+  it('normalization removes sandbox from both descriptor and fingerprint', () => {
+    const execute = async () => ({ status: 'SUCCEEDED', output: {} })
+    const a = createCapabilityRegistry([registration('WORKSPACE', execute)] as any)
+    const b = createCapabilityRegistry([registration('PROCESS', execute)] as any)
+    expect(a.listDescriptors()[0]).not.toHaveProperty('sandbox')
+    expect(a.compositionFingerprint()).toBe(b.compositionFingerprint())
+  })
+  it('FS reads configured workspace B despite a handle granting workspace A', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'audit0625-fs-'))
+    try {
+      const a = join(base, 'A'), b = join(base, 'B'); mkdirSync(a); mkdirSync(b); writeFileSync(join(b, 'sentinel.txt'), 'SYNTHETIC-B')
+      const tool = createFsTools({ workspaceRoot: b }).find(t => t.id === 'fs.read')!
+      const result = await tool.execute({ path: 'sentinel.txt' }, { tenantId: 't', agentId: 'a', correlationId: 'c', traceId: 't', sandboxHandle: { mode: 'WORKSPACE', workspaceRoot: a, allowNetwork: false, allowSubprocess: false } } as any)
+      expect(result).toMatchObject({ status: 'SUCCEEDED', output: { content: 'SYNTHETIC-B' } })
+    } finally { rmSync(base, { recursive: true, force: true }) }
+  })
+  it('directory swap during journal await redirects a write outside the configured root', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'audit0625-swap-'))
+    try {
+      const root = join(base, 'workspace'), outside = join(base, 'synthetic-outside'); mkdirSync(root); mkdirSync(outside); mkdirSync(join(root, 'sub'))
+      const tool = createFsTools({ workspaceRoot: root, requireWriteJournal: true, writeJournal: { record: async () => { renameSync(join(root, 'sub'), join(root, 'original-sub')); symlinkSync(outside, join(root, 'sub')) } } }).find(t => t.id === 'fs.write')!
+      const result = await tool.execute({ path: 'sub/sentinel.txt', content: 'SYNTHETIC-ESCAPE', intent: 'controlled audit probe' }, { tenantId: 't', agentId: 'a', correlationId: 'c', traceId: 't', operationKey: 'op' } as any)
+      expect(result.status).toBe('SUCCEEDED')
+      expect(readFileSync(join(outside, 'sentinel.txt'), 'utf8')).toBe('SYNTHETIC-ESCAPE')
+    } finally { rmSync(base, { recursive: true, force: true }) }
+  })
+  it('PROCESS can read its synthetic outside-workspace sentinel and inherited synthetic env', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'audit0625-process-')); const key = 'CVG_AUDIT0625_SYNTHETIC_ENV'
+    const previous = process.env[key]
+    try {
+      const workspace = join(base, 'workspace'); mkdirSync(workspace); const sentinel = join(base, 'outside.txt'); writeFileSync(sentinel, 'SYNTHETIC-OUTSIDE')
+      process.env[key] = 'SYNTHETIC-ENV'
+      const result = await runContained({ argv: ['/home/ricardo/.nvm/versions/node/v22.23.2/bin/node', '-e', 'process.stdout.write(require("node:fs").readFileSync(process.argv[1],"utf8")+":"+process.env.CVG_AUDIT0625_SYNTHETIC_ENV)', sentinel], handle: { mode: 'PROCESS', workspaceRoot: workspace, allowNetwork: false, allowSubprocess: true }, timeoutMs: 2000 })
+      expect(result.exitCode, result.stderr).toBe(0)
+      expect(result.stdout).toBe('SYNTHETIC-OUTSIDE:SYNTHETIC-ENV')
+    } finally { if (previous === undefined) delete process.env[key]; else process.env[key] = previous; rmSync(base, { recursive: true, force: true }) }
+  })
+})

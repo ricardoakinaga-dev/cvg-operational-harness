@@ -1,3 +1,19 @@
+# 28/10/2026 — triagem dos achados 0625 e frentes abertas
+
+- **AUD-SCORE-20261028 (Codex):** entrega da auditoria `COMPLETED`; remediação não executada pelo Codex. Triagem proposta no [handoff](08_runtime/handoffs/aud_score_20261028.md): F01–F05 deduplicados nas lanes de kernel/PAR-X/FS/shell; F06/F10/F11 em UP91-013/modelos; F07/F08/F15 em UP91-018/persistência; F09 na frente de imagem; F12 nos canais; F13 na carteira PISO; F14 na direção PAR/C100; F16 em identidade/revogação; F17 no frontend; F19 em SRV/U13–U16; F20 em U01/HISO-008/documentação. F18 é fronteira interna não suportada, não bypass pela API pública. Nenhum cartão pai encerrado pelo relatório 0625.
+- **Frentes abertas e donos (28/10):**
+  - 0267, F06/F10/F11 (D9, Claude Sonnet): SPEC `PROPOSED_FOR_HUMAN_T3_REVIEW` e testes de caracterização no commit local `cb787dc4`; aguarda T3.
+  - 0268, F12 (sessão 07, Claude Sonnet): SPEC e testes `it.fails` no commit local `8f22e350`; aguarda T3.
+  - 0269, F17 (sessão 07): T2 implementado localmente, sem push.
+  - 0270, F03/F04 (Claude DF, Opus): em discovery; precisa de revisão humana T3 antes do BUILD.
+  - 0271, F15 (sessão 07): rascunho, só análise estática.
+  - 0272, F08 (sessão 07): em discovery.
+  - F01/F02/F05, F07 (0257), U04 (0262), U05 (0258), U06 (0263) e F09 (imagem Debian 13): Codex, com as TAREFAS PARA O CODEX publicadas no GBrain (fatos 8308 e 8309).
+  - Follow-up AUD0625-F12b: `exam-egress.ts` devolve 503.
+  - Produção continua `NO_GO`; nenhuma frente acima libera release.
+- **Decisões do Ricardo de 28/10:** recibo em [human-decisions.json](04_audit/evidence/USER-DECISIONS-20261028/human-decisions.json). U08 só fecha depois do U04; OIDC em produção depende da fatia C (PR #29, `8429019b`).
+- **Regras do Ricardo:** bloqueio vai antes ao Codex pelo GBrain; consultar o GBrain antes de cada tarefa e registrar depois.
+
 # 23/10/2026 — release e CI
 
 - **RELEASE-CI-0253:** a primeira publicação real foi concluída e avança a [UP91-035](03_build/0367_program_backlog_reaudit_2026-09-30.md#up91-035). Ficam abertos o deploy por digest, a verificação no destino e o rollback.

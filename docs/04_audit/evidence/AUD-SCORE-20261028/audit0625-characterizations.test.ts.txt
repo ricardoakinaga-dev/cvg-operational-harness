@@ -1,0 +1,49 @@
+// @vitest-environment node
+import { describe, it, expect, vi } from 'vitest'
+import { buildServer } from '../apps/api/src/server.ts'
+import { grantCase } from '../apps/api/src/__tests__/case-authorization-fixtures.ts'
+import { fetchWithSsrfGuard } from '@cvg/shared'
+
+const tenant = 'tenant_00000000-0000-4000-8000-000000000001'
+const supervisor = {'x-operator-id':'supervisor.audit.synthetic','x-operator-role':'Supervisor','x-tenant-id':tenant}
+async function fixture() {
+ const app = buildServer({requireAuthenticatedMutations:true})
+ const seeded = await app.inject({method:'POST',url:'/v1/webhooks/channels/whatsapp/messages',headers:{'x-tenant-id':tenant},payload:{externalMessageId:crypto.randomUUID(),senderRef:'synthetic-audit-source',body:'Synthetic audit only',receivedAt:new Date().toISOString()}})
+ expect(seeded.statusCode).toBe(200)
+ return {app,sessionId:seeded.json().data.sessionId,conversationId:seeded.json().data.conversationId}
+}
+describe('AUD-SCORE current residual characterization',()=>{
+ for(const kind of ['task','approval'] as const) {
+  for(const failAudit of [false,true]) {
+   it(`${kind}: audit failure=${failAudit}; characterization, not product approval`,async()=>{
+    const {app,sessionId,conversationId}=await fixture()
+    try {
+     if(kind==='task') await grantCase(app,{kind:'core_conversation',resourceId:conversationId,operatorId:'operator.audit.synthetic'})
+     const headers=kind==='task'?{'x-operator-id':'operator.audit.synthetic','x-operator-role':'Operator','x-tenant-id':tenant}:supervisor
+     const db=app.persistence.memoryDb!
+     const beforeTasks=db.state.tasks.length;const beforeApprovals=db.state.approvals.length;const beforeAudit=db.state.auditEvents.length
+     if(failAudit) vi.spyOn(app.persistence.audit,'append').mockImplementation(()=>{throw new Error('synthetic audit unavailable')})
+     const payload=kind==='task'?{sessionId,title:'Synthetic audit marker',description:'Synthetic only',priority:'medium',source:'audit',idempotencyKey:crypto.randomUUID()}:{sessionId,proposedAction:'synthetic_review',summary:'Synthetic audit marker',riskLevel:'low'}
+     const response=await app.inject({method:'POST',url:kind==='task'?'/v1/tasks':'/v1/approvals',headers,payload})
+     expect(response.statusCode).toBe(failAudit?500:200)
+     expect(db.state.tasks.length-beforeTasks).toBe(kind==='task'?1:0)
+     expect(db.state.approvals.length-beforeApprovals).toBe(kind==='approval'?1:0)
+     expect(db.state.auditEvents.length-beforeAudit).toBe(failAudit?0:1)
+    } finally {vi.restoreAllMocks();await app.close()}
+   })
+  }
+ }
+ it('DNS guard remains pending after cancellation until lookup settles',async()=>{
+  const controller=new AbortController();let release!:(value:string[])=>void;let settled=false
+  const lookup=new Promise<string[]>(resolve=>{release=resolve})
+  const operation=fetchWithSsrfGuard(async (_url,init)=>{if((init.signal as AbortSignal).aborted)throw new Error('aborted after DNS');return new Response('{}')},'https://synthetic.audit.invalid/',{signal:controller.signal},{},{dnsLookup:()=>lookup})
+  const observed=operation.then(()=>{settled=true},()=>{settled=true})
+  controller.abort();await new Promise(resolve=>setTimeout(resolve,80));expect(settled).toBe(false)
+  release(['8.8.8.8']);await observed;expect(settled).toBe(true)
+ })
+ it('DNS good control completes without any real network',async()=>{
+  let calls=0
+  const response=await fetchWithSsrfGuard(async()=>{calls++;return new Response('{}')},'https://synthetic.audit.invalid/',{}, {},{dnsLookup:async()=>['8.8.8.8']})
+  expect(response.status).toBe(200);expect(calls).toBe(1)
+ })
+})

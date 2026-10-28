@@ -4,7 +4,17 @@ CVG Operational Harness is a governed runtime foundation for reusable
 operational AI agents across the CVG ecosystem. The Esmeralda V2 secretary is
 the legacy product being isolated under `legacy/`.
 
-## Estado atual — 17/10/2026 — harness e consumidor
+## Estado atual — 28/10/2026 — harness e consumidor
+
+Em 28/10/2026 a `main` está em `8429019b` (PR #29, OIDC do console, fatia B1)
+e a produção continua `NO_GO`. A [auditoria 0625](docs/04_audit/0625_repository_score_audit_2026-10-28.md)
+deu média 72 e prontidão 45 e abriu as frentes de remediação F01–F20; donos,
+estados e o recibo das decisões do Ricardo estão no
+[estado de execução](docs/99_runtime_state.md), no
+[log](docs/20_master_execution_log.md) e no [backlog](docs/30_backlog_master.md).
+O image-scan obrigatório reprova PRs até a troca da base para Debian 13.
+
+### Direção vigente (17/10/2026)
 
 A direção vigente é a [ADR-010](docs/architecture/adrs/ADR-010-harness-product-isolation.md):
 este repositório mantém o Operational Harness; o Assistente de Plantão é um
