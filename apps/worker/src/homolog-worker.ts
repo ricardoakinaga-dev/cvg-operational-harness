@@ -18,7 +18,10 @@ import { Pool } from 'pg'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import { createShutdownController } from '@cvg/shared'
 import { sweepExpiredApprovals } from '@cvg/agent-runtime'
-import { reconcileApprovalDecision } from '@cvg/agent-core'
+import {
+  ApprovalReconciliationDataError,
+  reconcileApprovalDecision
+} from '@cvg/agent-core'
 import {
   TenantScopedPostgresRuntimeRepository,
   withTenantContext,
@@ -213,24 +216,6 @@ export const INCOMPLETE_ENVELOPE_COUNT_SQL = `SELECT count(*)::integer AS incomp
        ${stuckDecisionsFrom('$1', '$2')}
           AND NOT (${ENVELOPE_COMPLETE})`
 
-const INFRA_ERROR_CODES = new Set([
-  'ECONNRESET',
-  'ECONNREFUSED',
-  'ETIMEDOUT',
-  'EPIPE',
-  'ENOTFOUND',
-  '57P01',
-  '57P02',
-  '57P03'
-])
-
-/** Connection and server-shutdown failures: the whole tick must fail. */
-export function isInfrastructureError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code
-  if (typeof code !== 'string') return false
-  return INFRA_ERROR_CODES.has(code) || code.startsWith('08')
-}
-
 export interface StuckDecisionOptions {
   limit?: number
   window?: StuckDecisionWindow
@@ -335,9 +320,10 @@ export async function reconcileStuckApprovalDecisions(
       )
       reconciled += 1
     } catch (error) {
-      // A broken connection or a server shutdown is not a bad row: the whole
-      // tick fails so worker.homolog_sweep_failed fires.
-      if (isInfrastructureError(error)) throw error
+      // Only the row's own data problems are isolated. Anything else (a
+      // connection that dropped, a server shutdown, pg-pool errors that carry
+      // no code) fails the whole tick so worker.homolog_sweep_failed fires.
+      if (!(error instanceof ApprovalReconciliationDataError)) throw error
       onRowFailed({
         approvalId: row.approval_id,
         reason: error instanceof Error ? error.message : 'unknown'
