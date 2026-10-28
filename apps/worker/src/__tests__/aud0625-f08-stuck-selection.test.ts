@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { ApprovalError } from '@cvg/approval-engine'
+import { OperationalExecutionError } from '@cvg/harness'
 import { TenantIdSchema } from '@cvg/platform'
 import {
   parseReconcileWindow,
@@ -33,7 +35,9 @@ interface Fixture {
   /** The approval authority answers a status that disagrees with the row. */
   authorityStatus?: string
   /** The approval authority throws (data or infrastructure failure). */
-  authorityError?: { message: string; code?: string }
+  authorityError?: { message: string; code?: string } | Error
+  /** The store rejects the resume with this error (store.resolveApproval). */
+  resumeError?: Error
 }
 
 function envelopeFor(row: Fixture) {
@@ -156,6 +160,7 @@ function harness(rows: Fixture[]) {
     approvalAuthority: {
       get: async (_tenant: string, approvalId: string) => {
         const row = byId.get(approvalId)!
+        if (row.authorityError instanceof Error) throw row.authorityError
         if (row.authorityError) {
           throw Object.assign(new Error(row.authorityError.message), {
             code: row.authorityError.code
@@ -177,6 +182,10 @@ function harness(rows: Fixture[]) {
     },
     store: {
       resolveApproval: async (input: { executionId: string }) => {
+        const failing = rows.find(
+          (row) => `exec_${row.approvalId}` === input.executionId
+        )?.resumeError
+        if (failing) throw failing
         resumed.push(input.executionId)
         return { id: input.executionId, state: 'QUEUED' }
       }
@@ -461,6 +470,101 @@ describe('F08: seletor do worker para decisões sem evento (pool que interpreta 
     ])
     await backfill.tick({ window: { minAgeSeconds: 30, maxAgeSeconds: null } })
     expect(backfill.incompleteCounts).toEqual([2])
+  })
+})
+
+describe('F08d: erros tipados de domínio por linha (tipo e code, nunca a mensagem)', () => {
+  const executionError = (
+    code: ConstructorParameters<typeof OperationalExecutionError>[0]
+  ) => new OperationalExecutionError(code, 'qualquer texto')
+
+  it.each([
+    [
+      'OperationalExecutionError invalid_action (resolveApproval)',
+      { resumeError: executionError('invalid_action') }
+    ],
+    [
+      'OperationalExecutionError conflict (resolveApproval)',
+      { resumeError: executionError('conflict') }
+    ],
+    [
+      'ApprovalError not_found (approvalAuthority.get)',
+      { authorityError: new ApprovalError('not_found', 'qualquer texto') }
+    ]
+  ])('isola %s e reconcilia a linha seguinte', async (_name, failure) => {
+    const h = harness([
+      { approvalId: 'bad', status: 'APPROVED', ageMs: 40 * MIN, ...failure },
+      { approvalId: 'good', status: 'APPROVED', ageMs: 20 * MIN }
+    ])
+    expect(await h.tick({})).toBe(1)
+    expect(h.appended).toEqual(['good'])
+    expect(h.failed).toHaveLength(1)
+    expect(h.failed[0]?.approvalId).toBe('bad')
+  })
+
+  it('a mesma linha fica na frente a cada tick e mesmo assim não bloqueia as seguintes', async () => {
+    const h = harness([
+      {
+        approvalId: 'bad',
+        status: 'APPROVED',
+        ageMs: 40 * MIN,
+        resumeError: executionError('invalid_action')
+      },
+      { approvalId: 'good', status: 'APPROVED', ageMs: 20 * MIN }
+    ])
+    expect(await h.tick({})).toBe(1)
+    expect(await h.tick({})).toBe(1)
+    expect(h.failed.map((failure) => failure.approvalId)).toEqual([
+      'bad',
+      'bad'
+    ])
+  })
+
+  it('a decisão é por code: outros codes do mesmo tipo de erro derrubam o tick', async () => {
+    for (const code of [
+      'lease_lost',
+      'validation_failed',
+      'not_found'
+    ] as const) {
+      const h = harness([
+        {
+          approvalId: 'bad',
+          status: 'APPROVED',
+          ageMs: 40 * MIN,
+          resumeError: executionError(code)
+        },
+        { approvalId: 'good', status: 'APPROVED', ageMs: 20 * MIN }
+      ])
+      await expect(h.tick({})).rejects.toMatchObject({ code })
+      expect(h.failed).toEqual([])
+    }
+  })
+
+  it('ApprovalError com outro code derruba o tick', async () => {
+    const h = harness([
+      {
+        approvalId: 'bad',
+        status: 'APPROVED',
+        ageMs: 40 * MIN,
+        authorityError: new ApprovalError('invalid_state', 'qualquer texto')
+      }
+    ])
+    await expect(h.tick({})).rejects.toMatchObject({ code: 'invalid_state' })
+  })
+
+  it('um Error comum com a mesma mensagem e code de domínio não é confundido com o tipo', async () => {
+    const plain = Object.assign(new Error('qualquer texto'), {
+      code: 'invalid_action'
+    })
+    const h = harness([
+      {
+        approvalId: 'bad',
+        status: 'APPROVED',
+        ageMs: 40 * MIN,
+        resumeError: plain
+      }
+    ])
+    await expect(h.tick({})).rejects.toBe(plain)
   })
 })
 
