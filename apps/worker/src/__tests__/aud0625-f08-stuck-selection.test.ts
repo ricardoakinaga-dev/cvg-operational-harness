@@ -3,8 +3,7 @@ import { TenantIdSchema } from '@cvg/platform'
 import { reconcileStuckApprovalDecisions } from '../homolog-worker.ts'
 
 // AUD0625 F08 / SPEC 0272 — the worker's selector is checked through the SQL
-// it sends to a fake pool (no PostgreSQL is run). `it.fails` states the target
-// and passes only because the defect exists.
+// it sends to a fake pool (the PostgreSQL campaign lives in the *.postgres test).
 
 const tenantId = TenantIdSchema.parse(
   'tenant_00000000-0000-4000-8000-000000000f08'
@@ -31,19 +30,18 @@ async function selectorSql(): Promise<string> {
 }
 
 describe('F08: seletor do worker para decisões sem evento', () => {
-  it.fails(
-    'alvo: considera aprovações que já avançaram (RESERVED/EXECUTING/EXECUTED)',
-    async () => {
-      const sql = await selectorSql()
-      for (const status of ['RESERVED', 'EXECUTING', 'EXECUTED']) {
-        expect(sql).toContain(`'${status}'`)
-      }
-    }
-  )
-
-  it('controle: busca APPROVED/REJECTED sem evento correspondente', async () => {
+  it('alvo: considera aprovações que já avançaram (RESERVED/EXECUTING/EXECUTED)', async () => {
     const sql = await selectorSql()
-    expect(sql).toContain("a.status IN ('APPROVED', 'REJECTED')")
+    for (const status of ['RESERVED', 'EXECUTING', 'EXECUTED']) {
+      expect(sql).toContain(`'${status}'`)
+    }
+  })
+
+  it('controle: continua buscando APPROVED/REJECTED sem evento correspondente', async () => {
+    const sql = await selectorSql()
+    expect(sql).toContain("a.status = 'REJECTED' THEN 'REJECTED'")
+    expect(sql).toContain("'APPROVED'")
+    expect(sql).toContain("'REJECTED'")
     expect(sql).toContain("audit.type = 'approval_decision'")
     expect(sql).toContain("audit.payload->>'approvalId' = a.approval_id")
   })

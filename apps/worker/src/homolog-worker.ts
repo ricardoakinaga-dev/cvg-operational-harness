@@ -120,7 +120,8 @@ export async function assertHomologHealthPreflight(
 
 /**
  * Recovery tick for approvals decided while their execution stayed waiting
- * (crash between decision and resume/audit). Every step is idempotent, so
+ * (crash between decision and resume/audit), including approvals whose
+ * execution already advanced past APPROVED (SPEC 0272). Every step is idempotent, so
  * the tick converges without risking a second effect.
  */
 export async function reconcileStuckApprovalDecisions(
@@ -136,12 +137,12 @@ export async function reconcileStuckApprovalDecisions(
       decision: string
     }>(
       `SELECT e.id AS execution_id, e.approval_id,
-               CASE WHEN a.status = 'APPROVED' THEN 'APPROVED' ELSE 'REJECTED' END AS decision
+               CASE WHEN a.status = 'REJECTED' THEN 'REJECTED' ELSE 'APPROVED' END AS decision
        FROM operational_executions AS e
        INNER JOIN runtime_approvals AS a
          ON a.tenant_id = e.tenant_id AND a.approval_id = e.approval_id
        WHERE e.tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
-          AND a.status IN ('APPROVED', 'REJECTED')
+          AND a.status IN ('APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED', 'REJECTED')
           AND NOT EXISTS (
             SELECT 1
             FROM audit_events AS audit
@@ -149,7 +150,7 @@ export async function reconcileStuckApprovalDecisions(
               AND audit.type = 'approval_decision'
               AND audit.payload->>'approvalId' = a.approval_id
               AND audit.payload->>'decision' =
-                CASE WHEN a.status = 'APPROVED' THEN 'approved' ELSE 'rejected' END
+                CASE WHEN a.status = 'REJECTED' THEN 'rejected' ELSE 'approved' END
           )
        ORDER BY e.updated_at ASC
        LIMIT $1`,

@@ -5,9 +5,8 @@ import {
   type ReconciliationApproval
 } from '../approval-reconciliation.ts'
 
-// AUD0625 F08 / SPEC 0272. The `it.fails` cases state the target behaviour and
-// pass today only because the defect exists: once the recovery is fixed vitest
-// reports them and the marker must be removed.
+// AUD0625 F08 / SPEC 0272 (approved for local T3 BUILD, option A): the decision
+// event is recovered from the immutable envelope after the execution advanced.
 
 const TENANT = 'tenant_f08_synthetic'
 const EXECUTION = 'execution_f08_1'
@@ -79,29 +78,31 @@ describe('F08: o evento de decisão é recuperável depois que a execução avan
   describe.each(['RESERVED', 'EXECUTING', 'EXECUTED'])(
     'aprovação já em %s',
     (status) => {
-      it.fails(
-        'alvo: crash entre resume e append, execução avança, reconciliação grava o evento uma vez',
-        async () => {
-          const w = world(decided)
-          w.crashNextAppend()
-          await expect(run(w)).rejects.toThrow('crash before')
-          expect(w.events.size).toBe(0)
-
-          w.advanceTo(status)
-          await run(w)
-          expect(w.events.size).toBe(1)
-          expect([...w.events.values()][0]?.payload).toMatchObject({
-            approvalId: decided.approvalId,
-            decision: 'approved',
-            commandKey: decided.decisionCommandKey
-          })
-        }
-      )
-
-      it('caracterização: hoje a reconciliação rejeita por "decision mismatch" e o evento fica ausente', async () => {
-        const w = world({ ...decided, status })
-        await expect(run(w)).rejects.toThrow('decision mismatch')
+      it('alvo: crash entre resume e append, execução avança, reconciliação grava o evento uma vez', async () => {
+        const w = world(decided)
+        w.crashNextAppend()
+        await expect(run(w)).rejects.toThrow('crash before')
         expect(w.events.size).toBe(0)
+
+        w.advanceTo(status)
+        await run(w)
+        expect(w.events.size).toBe(1)
+        expect([...w.events.values()][0]?.payload).toMatchObject({
+          approvalId: decided.approvalId,
+          decision: 'approved',
+          commandKey: decided.decisionCommandKey
+        })
+      })
+
+      it('não retoma de novo uma execução que já avançou e marca o evento recuperado', async () => {
+        const w = world({ ...decided, status })
+        const report = await run(w)
+        expect(w.resolves()).toBe(0)
+        expect(report.steps).toContain('execution:skipped_advanced')
+        expect([...w.events.values()][0]?.payload).toMatchObject({
+          recovered: true,
+          observedApprovalStatus: status
+        })
       })
 
       it('controle: o estado posterior nunca autoriza a decisão contrária', async () => {

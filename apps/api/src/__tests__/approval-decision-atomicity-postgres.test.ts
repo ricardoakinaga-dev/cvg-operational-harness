@@ -604,4 +604,115 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
       }
     }
   )
+
+  for (const advancedStatus of ['RESERVED', 'EXECUTING', 'EXECUTED']) {
+    itWithPostgres(
+      `AUD0625 F08: worker records the decision event after the approval advanced to ${advancedStatus} (SPEC 0272)`,
+      async () => {
+        const setup = await setupDatabase()
+        const triggerName = `reject_audit_f08_${Date.now()}`
+        const functionName = `${triggerName}_fn`
+        let triggerInstalled = false
+        try {
+          const store = new PostgresOperationalExecutionStore(
+            setup.pool as unknown as PostgresPoolLike
+          )
+          const authority = new PostgresApprovalAuthority(
+            setup.pool as unknown as PostgresPoolLike
+          )
+          const { executionId, approvalId } = await waitingFixture(
+            store,
+            authority,
+            `pg-f08-${advancedStatus}-${Date.now()}`
+          )
+          await setup.pool.query(`
+            CREATE FUNCTION ${functionName}() RETURNS trigger
+            LANGUAGE plpgsql AS $$
+            BEGIN
+              IF NEW.type = 'approval_decision' THEN
+                RAISE EXCEPTION 'injected approval audit failure';
+              END IF;
+              RETURN NEW;
+            END;
+            $$
+          `)
+          await setup.pool.query(
+            `CREATE TRIGGER ${triggerName}
+               BEFORE INSERT ON audit_events
+               FOR EACH ROW EXECUTE FUNCTION ${functionName}()`
+          )
+          triggerInstalled = true
+
+          const app = buildServer({
+            persistence: { kind: 'postgres', client: setup.pool as never },
+            operationalExecution: store as never,
+            operationalApprovalAuthority: authority as never
+          })
+          await grantExecution(app, executionId)
+          const first = await app.inject({
+            method: 'POST',
+            url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,
+            headers: decisionHeaders('pg-f08-command-1'),
+            payload: { decision: 'approved', note: 'f08 reason' }
+          })
+          await app.close()
+          expect(first.statusCode).toBe(500)
+          expect(await countDecisionEvents(setup.pool, approvalId)).toBe(0)
+
+          await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
+          await setup.pool.query(`DROP FUNCTION ${functionName}()`)
+          triggerInstalled = false
+
+          // The execution advanced after the crash: the approval left APPROVED.
+          await setup.pool.query(
+            `UPDATE runtime_approvals SET status = $2 WHERE approval_id = $1`,
+            [approvalId, advancedStatus]
+          )
+          const stateBefore = (await store.get(tenantA, executionId))?.state
+
+          const runtime = {
+            approvalAuthority: authority,
+            store,
+            pool: setup.pool
+          } as never
+          const ticks = await Promise.all([
+            reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime),
+            reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+          ])
+          expect(ticks.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(1)
+          await expect(
+            reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime)
+          ).resolves.toBe(0)
+          expect(await countDecisionEvents(setup.pool, approvalId)).toBe(1)
+          expect((await store.get(tenantA, executionId))?.state).toBe(
+            stateBefore
+          )
+
+          const event = await setup.pool.query<{
+            payload: Record<string, unknown>
+          }>(
+            `SELECT payload FROM audit_events
+              WHERE type = 'approval_decision' AND payload->>'approvalId' = $1`,
+            [approvalId]
+          )
+          expect(event.rows[0]?.payload).toMatchObject({
+            decision: 'approved',
+            commandKey: 'pg-f08-command-1',
+            recovered: true,
+            observedApprovalStatus: advancedStatus
+          })
+        } finally {
+          if (triggerInstalled) {
+            await setup.pool
+              .query(`DROP TRIGGER ${triggerName} ON audit_events`)
+              .catch(() => undefined)
+            await setup.pool
+              .query(`DROP FUNCTION ${functionName}()`)
+              .catch(() => undefined)
+          }
+          await teardownDatabase(setup)
+        }
+      }
+    )
+  }
 })
