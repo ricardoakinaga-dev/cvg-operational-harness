@@ -12,6 +12,7 @@ import type {
   ProviderResult
 } from '../contracts.ts'
 import { ModelProviderError } from '../errors.ts'
+import { verifyPromptBinding } from '../prompt-binding.ts'
 import {
   networkError,
   providerHttpError,
@@ -106,6 +107,10 @@ export class OllamaProvider implements ModelProvider {
   }
 
   async execute(request: ProviderRequest): Promise<ProviderResult> {
+    const bindingError = verifyPromptBinding(request)
+    if (bindingError !== undefined) {
+      throw new ModelProviderError(this.id, 'invalid_request', bindingError)
+    }
     const endpoint = `${this.#baseUrl}/api/chat`
     const signal = combineTimeoutSignal(request.signal, request.timeoutMs)
     const messages = [
@@ -206,10 +211,16 @@ export class OllamaProvider implements ModelProvider {
     const text = parsed.data.message?.content ?? parsed.data.response ?? ''
     return {
       text,
-      usage: {
-        inputTokens: parsed.data.prompt_eval_count ?? 0,
-        outputTokens: parsed.data.eval_count ?? 0
-      },
+      // SPEC 0267 §3.3: absent counters are unknown, never zero.
+      ...(parsed.data.prompt_eval_count !== undefined &&
+      parsed.data.eval_count !== undefined
+        ? {
+            usage: {
+              inputTokens: parsed.data.prompt_eval_count,
+              outputTokens: parsed.data.eval_count
+            }
+          }
+        : {}),
       providerId: this.id,
       model: this.#model,
       externalCall: false

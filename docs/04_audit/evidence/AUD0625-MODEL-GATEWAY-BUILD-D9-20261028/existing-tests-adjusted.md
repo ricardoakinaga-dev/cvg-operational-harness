@@ -1,0 +1,7 @@
+# Testes pré-existentes cuja expectativa mudou (SPEC 0267)
+
+Nenhum foi enfraquecido; cada um muda por causa do contrato novo.
+
+1. `packages/model-gateway/src/__tests__/gateway-hardening.test.ts` — "accepts a request class narrower than the approved prompt class": o prompt passou de CLINICAL para CONFIDENTIAL. Motivo (F10, Q1): a classe do prompt agora governa a rota e CLINICAL é `NO_MODEL`, então um prompt CLINICAL com pedido INTERNAL deixou de alcançar qualquer provider (era o defeito). A intenção do teste, "pedido mais estreito que o prompt é aceito", continua verificada com uma classe que permite o provider local.
+2. `packages/model-gateway/src/__tests__/local-http-providers.test.ts` — dois testes (OpenAI-compatible "defaults usage to zero…" e Ollama "…legacy response field and zero usage"): agora esperam `usage` indefinido e foram renomeados ("leaves absent usage unreported…"). Motivo (F11): contador ausente é desconhecido, nunca zero. Os controles de uso reportado e de zero reportado continuam iguais.
+3. `tests/model-fault-server.test.ts` (SPEC0232) — 6 casos MF01/MF02 pelo caminho do gateway: o oráculo do servidor fixa um corpo de uma única mensagem `user`, e o gateway agora injeta o texto aprovado como `system` (F06, Q3). Os casos testam mapeamento de erro e uso, então o provider real é envolvido por `withoutGovernedSystem`, que repassa só as mensagens dinâmicas. O servidor de falhas e o oráculo não foram tocados. Alternativa que deixo para decisão: estender o oráculo para aceitar o corpo com `system`.

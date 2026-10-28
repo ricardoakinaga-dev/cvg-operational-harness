@@ -3,6 +3,8 @@ import type {
   ProviderRequest,
   ProviderResult
 } from '../contracts.ts'
+import { ModelProviderError } from '../errors.ts'
+import { verifyPromptBinding } from '../prompt-binding.ts'
 
 export interface DeterministicProviderOptions {
   id?: string
@@ -48,6 +50,10 @@ export class DeterministicModelProvider implements ModelProvider {
     }
     if (request.signal.aborted) {
       throw abortError()
+    }
+    const bindingError = verifyPromptBinding(request)
+    if (bindingError !== undefined) {
+      throw new ModelProviderError(this.id, 'invalid_request', bindingError)
     }
     return this.#respond(request)
   }

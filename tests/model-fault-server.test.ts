@@ -24,6 +24,7 @@ import { PromptRegistry } from '../packages/model-gateway/src/prompt-registry.ts
 import { OpenAICompatibleProvider } from '../packages/model-gateway/src/providers/openai-compatible.ts'
 import type {
   ModelGatewayEvent,
+  ModelProvider,
   ProviderRequest
 } from '../packages/model-gateway/src/contracts.ts'
 
@@ -90,6 +91,26 @@ function providerRequest(plan: FaultPlan, timeoutMs = 300): ProviderRequest {
     timeoutMs
   }
 }
+/**
+ * SPEC 0267: the gateway now renders the approved instruction as `system`,
+ * while this SPEC0232 oracle pins an exact single-user-message request body.
+ * The gateway-path cases here assert error/usage mapping, so the real
+ * provider is wrapped to forward only the dynamic messages; the governed
+ * binding itself is covered in the model-gateway package tests.
+ */
+function withoutGovernedSystem(inner: ModelProvider): ModelProvider {
+  return {
+    id: inner.id,
+    location: inner.location,
+    models: inner.models,
+    execute: (request) => {
+      const { promptBinding, input, ...rest } = request
+      void promptBinding
+      return inner.execute({ ...rest, input: { messages: input.messages } })
+    }
+  }
+}
+
 function gateway(server: ModelFaultServer, plan: FaultPlan) {
   const prompts = new PromptRegistry()
   const prompt = prompts.register({
@@ -104,7 +125,7 @@ function gateway(server: ModelFaultServer, plan: FaultPlan) {
   })
   const events: ModelGatewayEvent[] = []
   const engine = new ModelGateway({
-    providers: [provider(server)],
+    providers: [withoutGovernedSystem(provider(server))],
     prompts,
     onEvent: (event) => events.push(event),
     profiles: {

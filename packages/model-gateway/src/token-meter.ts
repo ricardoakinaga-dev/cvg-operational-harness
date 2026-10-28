@@ -52,6 +52,19 @@ export class TokenMeter {
   #requests = 0
   #inputTokens = 0
   #outputTokens = 0
+  #unreportedRequests = 0
+
+  /**
+   * SPEC 0267 §3.3: a call whose provider reported no counters. Counted
+   * apart; no token is added to the measured sums.
+   */
+  recordUnreported(): void {
+    this.#unreportedRequests = assertSum(this.#unreportedRequests, 1)
+  }
+
+  get unreportedRequests(): number {
+    return this.#unreportedRequests
+  }
 
   record(usage: ProviderUsage): TokenMeterSnapshot {
     if (!isValidProviderUsage(usage)) {
