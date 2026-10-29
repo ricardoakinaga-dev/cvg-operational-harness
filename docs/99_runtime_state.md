@@ -1,3 +1,42 @@
+# Segunda onda AUD0625 — 29/10/2026 (Claude Code, sessão DF)
+
+- `status`: integrada localmente; nenhuma frente concede produção.
+- Branch `claude/aud0625-wave2`, local e sem push, sobre o PR #32 (`6628d684`). O PR só abre depois do merge do #32. Produção `NO_GO`.
+- Decisões do Ricardo:
+  - [human-decisions-5](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-5.json): SPEC 0274.
+  - [human-decisions-6](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-6.json): sandbox F01/F02/F05 do Codex e BUILD isolado da 0263.
+  - [human-decisions-7](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-7.json): 0278 e 0279, D1 = sim nas duas.
+- Frentes:
+  - 0257, F07 (sessão 07):
+    - fatias 1–3 até `426399fb`;
+    - correção dos testes PG de perfil legado em `f8903e3f`: o cliente compartilhado responde 503 antes de escrever, como manda a SPEC §2;
+    - BUILD-RESULT `0fa18209`.
+
+    Revisão D9: a fatia 1 recebeu `REVISE` (O1, grants dos testes PG) e foi confirmada depois; as fatias 2–3 tiveram `APPROVE`. Os P3 de teste foram fechados pela D9 em `d984580c`.
+
+  - 0258, U05 (D9): BUILD `31fd2bfb`, revisão DF `APPROVE`. Não fecha U05/HISO-005.
+  - 0263, U06 (DF): BUILD isolado `7a7d0d28`, P3 em `92a1be60`, revisão D9 `APPROVE`. O aceite final depende de HISO-005/006.
+  - 0274, F08b (BUILD D9, SPEC DF): `7ef71bee`, revisão DF `APPROVE`, PG 24/24.
+  - F06b (D9, T2 só teste): nota 0232b e `469b38ef`; servidor de falhas 57/57.
+  - Sandbox (Codex AUD0625): F01/0277 `e6a701ca`, F05/0276 `3e1602f4`, F02/0275 `f4e799b8`, mais docs `5f310fef`. Revisões D9 `APPROVE` em `dba0602c`, `0e52a96c` e `4b95bb56`. F05 global, K08 e X01 seguem abertos. A versão do `shell.run` passa a `v1:<digest do perfil>`, então o fingerprint de composição muda por perfil.
+  - 0278, F03b, e 0279, F08e (DF): fase 1 em `abbe84e0` e BUILD em `879b4e03`. Mutações 10/10 e PG 13/13. A revisão D9 está em curso; as duas só entram na onda com `APPROVE`.
+  - CI: os jobs do `verify.yml` foram fixados em `ubuntu-24.04` (`6628d684`), porque o `ubuntu-latest` passou a ser o 26.04 e o Playwright 1.59.1 não instala lá.
+  - 0262, U04/F16 (sessão 07): BUILD em 5 fatias, para a onda seguinte.
+
+- Gates na integração, com Node 22:
+  - typecheck 0 e docs:check-links OK;
+  - os 3 logs vazios do F02 catalogados em `45c6b653`;
+  - vitest focado de sandbox, harness e aud0625: 763/763;
+  - API, web e persistence memória: 1033 passam e 2 estouram o prazo com a carga em 12,9; isolados passam.
+- Acompanhamentos:
+  - F02, P3-1: tirar o `launch.close()` do `finally` não quebra teste e vaza 10 FD por lançamento.
+  - F02, P3-2: recusar handle com `allowNetwork` é redundante com o `--unshare-net`; o mutante sobrevive.
+  - F12c: 429 sem espera nem teto.
+  - F08c, opcional.
+  - 0257: O1 (o resolve falha depois de um 2xx e o próximo clique reusa a chave) e O2 (JSON corrompido no sessionStorage).
+  - F13, F18 e F19 continuam com o Codex.
+- `next_action`: com os 5 checks verdes, merge do #31 e depois do #32; atualizar `claude/aud0625-wave2` com a `main`, juntar a 0278/0279 se a D9 aprovar, rodar os gates e abrir o PR da segunda onda.
+
 # AUD-SCORE-20261028 — auditoria 0625 entregue (Codex) — 28/10/2026
 
 - `status`: `COMPLETED` somente para a entrega da auditoria; programa e frentes próprias continuam com seus estados. Produção `NO_GO`. Delta proposto pelo Codex em [handoff](08_runtime/handoffs/aud_score_20261028.md), incorporado sem mudar o sentido.
