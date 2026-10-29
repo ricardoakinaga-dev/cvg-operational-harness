@@ -2,6 +2,8 @@
  * SPEC 0257 R2 over HTTP on the memory composition: AC02, AC06 (server side),
  * AC11 (no atomic port => 503 before any write). Synthetic data only.
  */
+import { request as httpRequest } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import { buildServer } from '../server.ts'
 
@@ -135,6 +137,41 @@ describe('POST /v1/approvals Idempotency-Key (SPEC 0257 §2)', () => {
       expect(response.statusCode).toBe(200)
     }
     expect(await approvalCount(app)).toBe(2)
+  })
+})
+
+describe('raw duplicated Idempotency-Key header (SPEC 0257 §2)', () => {
+  it('two header lines are a 400 even when each value is valid', async () => {
+    const app = buildServer()
+    const sessionId = await sessionOf(app)
+    await app.listen({ port: 0, host: '127.0.0.1' })
+    try {
+      const { port } = app.server.address() as AddressInfo
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: '127.0.0.1',
+            port,
+            method: 'POST',
+            path: '/v1/approvals',
+            headers: {
+              'content-type': 'application/json',
+              'idempotency-key': ['dup-key-00000001', 'dup-key-00000002']
+            }
+          },
+          (res) => {
+            res.resume()
+            resolve(res.statusCode ?? 0)
+          }
+        )
+        req.on('error', reject)
+        req.end(JSON.stringify(approvalBody(sessionId)))
+      })
+      expect(status).toBe(400)
+      expect(await approvalCount(app)).toBe(0)
+    } finally {
+      await app.close()
+    }
   })
 })
 
