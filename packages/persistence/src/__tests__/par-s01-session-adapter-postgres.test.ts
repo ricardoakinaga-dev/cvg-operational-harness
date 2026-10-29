@@ -1,4 +1,5 @@
 // @vitest-environment node
+/* eslint-disable @typescript-eslint/no-explicit-any -- forged driver rows in negative tests */
 import { randomBytes } from 'node:crypto'
 import { Client, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -773,6 +774,441 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
       await expect(second).rejects.toMatchObject({ name: 'AbortError' })
       await expect(first).resolves.toBeDefined()
       await w.close()
+    })
+
+    const forgedPool = (
+      hook: (
+        sql: string,
+        result: { rows: any[]; rowCount: number | null }
+      ) => unknown
+    ) => {
+      const log: string[] = []
+      const pool = {
+        connect: async () => {
+          const c = await readPool.connect()
+          return {
+            query: async (sql: string, v?: unknown[]) => {
+              log.push(sql)
+              const r = await c.query(sql, v)
+              return (hook(sql, r as never) ?? r) as never
+            },
+            release: (e?: Error) => c.release(e)
+          }
+        }
+      }
+      return { pool, log }
+    }
+    const withForgedRead = (hook: Parameters<typeof forgedPool>[0]) => {
+      const f = forgedPool(hook)
+      return {
+        log: f.log,
+        svc: createPostgresSessionPersistence(physical, f.pool as never, {
+          tenantId: tenantA,
+          schemaName: schema,
+          maxOpenWriters: 4,
+          acquireTimeoutMs: 3000
+        }).then((r) => r.service)
+      }
+    }
+    const seed = async (id: string, n: number) => {
+      const svc = await service()
+      await (await svc.create(hdr(id))).close()
+      const store = new PostgresSessionEventStore(readPool, {
+        tenantId: tenantA,
+        schemaName: schema
+      })
+      for (let i = 1; i <= n; i++) await store.append(ev(id, `e${i}`))
+    }
+
+    it('names the failing preflight check', async () => {
+      const mk = async (name: string, ddl: string) => {
+        await admin.query(
+          `CREATE ROLE ${name} LOGIN ${ddl} PASSWORD '${password}'`
+        )
+        await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${name}`)
+        await admin.query(
+          `GRANT SELECT ON ${schema}.session_events, ${schema}.session_streams, ${schema}.schema_migrations TO ${name}`
+        )
+        const u = new URL(url!)
+        u.username = name
+        u.password = password
+        return new Pool({ connectionString: u.toString(), max: 1 })
+      }
+      const open = (pool: Pool, schemaName = schema) =>
+        createPostgresSessionPersistence(physical, pool, {
+          tenantId: tenantA,
+          schemaName,
+          maxOpenWriters: 1
+        })
+      const roles = [`${role}_su`, `${role}_bp`, `${role}_ow`]
+      const pools: Pool[] = []
+      try {
+        const su = await mk(roles[0]!, 'SUPERUSER')
+        const bp = await mk(roles[1]!, 'NOSUPERUSER BYPASSRLS')
+        await admin
+          .query(`GRANT postgres TO ${roles[2]}`)
+          .catch(() => undefined)
+        const ow = await mk(roles[2]!, 'NOSUPERUSER NOBYPASSRLS INHERIT')
+        await admin.query(`GRANT postgres TO ${roles[2]}`)
+        pools.push(su, bp, ow)
+        await expect(open(su)).rejects.toThrow(/superuser or bypasses/)
+        await expect(open(bp)).rejects.toThrow(/superuser or bypasses/)
+        await expect(open(ow)).rejects.toThrow(/owns the session tables/)
+      } finally {
+        for (const p of pools) await p.end()
+        for (const r of roles) {
+          await admin.query(`REVOKE postgres FROM ${r}`).catch(() => undefined)
+          await admin
+            .query(
+              `REVOKE ALL ON ${schema}.session_events, ${schema}.session_streams, ${schema}.schema_migrations FROM ${r}`
+            )
+            .catch(() => undefined)
+          await admin
+            .query(`REVOKE USAGE ON SCHEMA ${schema} FROM ${r}`)
+            .catch(() => undefined)
+          await admin.query(`DROP ROLE IF EXISTS ${r}`)
+        }
+      }
+      await expect(open(readPool as never, `nope_${suffix}`)).rejects.toThrow(
+        /tables are missing/
+      )
+      await expect(open(readPool as never, bare)).rejects.toThrow(
+        /column writer_lock_id is missing/
+      )
+      await admin.query(
+        `UPDATE ${schema}.schema_migrations SET checksum='x' WHERE version='0034_session_writer_ownership'`
+      )
+      try {
+        await expect(open(readPool as never)).rejects.toThrow(
+          /checksum differs/
+        )
+      } finally {
+        const { createHash } = await import('node:crypto')
+        const { readPostgresMigrationSql } =
+          await import('../postgres-migrations.ts')
+        const sum = createHash('sha256')
+          .update(
+            await readPostgresMigrationSql('0034_session_writer_ownership')
+          )
+          .digest('hex')
+        await admin.query(
+          `UPDATE ${schema}.schema_migrations SET checksum=$1 WHERE version='0034_session_writer_ownership'`,
+          [sum]
+        )
+      }
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events NO FORCE ROW LEVEL SECURITY`
+      )
+      try {
+        await expect(open(readPool as never)).rejects.toThrow(
+          /row level security/
+        )
+      } finally {
+        await admin.query(
+          `ALTER TABLE ${schema}.session_events FORCE ROW LEVEL SECURITY`
+        )
+      }
+      await admin.query(
+        `ALTER TABLE ${schema}.session_streams DISABLE TRIGGER session_streams_writer_guard`
+      )
+      try {
+        await expect(open(readPool as never)).rejects.toThrow(
+          /trigger session_streams_writer_guard is not enabled/
+        )
+      } finally {
+        await admin.query(
+          `ALTER TABLE ${schema}.session_streams ENABLE TRIGGER session_streams_writer_guard`
+        )
+      }
+      for (const [field, value, message] of [
+        ['recovery', true, /standby/],
+        ['fsync', 'off', /durability/],
+        ['fpw', 'off', /durability/],
+        ['sync', 'off', /durability/]
+      ] as const) {
+        const f = forgedPool((sql, result) => {
+          if (!sql.includes('pg_is_in_recovery')) return undefined
+          return { ...result, rows: [{ ...result.rows[0], [field]: value }] }
+        })
+        await expect(open(f.pool as never)).rejects.toThrow(message)
+      }
+    })
+
+    it('creates under SET LOCAL synchronous_commit = on, before the INSERT', async () => {
+      const seen: string[] = []
+      const svc = await service(
+        tenantA,
+        2,
+        wrapped((sql) => {
+          seen.push(sql)
+          return undefined
+        }, [])
+      )
+      await (await svc.create(hdr('s1'))).close()
+      const sync = seen.findIndex((q) => q.includes('synchronous_commit = on'))
+      const insert = seen.findIndex((q) => q.includes('INSERT INTO'))
+      expect(sync).toBeGreaterThanOrEqual(0)
+      expect(sync).toBeLessThan(insert)
+    })
+    it('a refused session try-lock at create is AlreadyOwned and leaves no stream behind', async () => {
+      const log: string[] = []
+      const svc = await service(
+        tenantA,
+        2,
+        wrapped(
+          (sql) =>
+            sql.includes('pg_try_advisory_lock')
+              ? { rows: [{ ok: false }], rowCount: 1 }
+              : undefined,
+          log
+        )
+      )
+      await expect(svc.create(hdr('s2'))).rejects.toBeInstanceOf(
+        SessionAlreadyOwnedError
+      )
+      expect(log).toContain('destroy')
+      expect(
+        (
+          await admin.query(
+            `SELECT count(*) FROM ${schema}.session_streams WHERE session_id='s2'`
+          )
+        ).rows[0].count
+      ).toBe('0')
+    })
+    it('a refused session try-lock at open is AlreadyOwned', async () => {
+      await (await (await service()).create(hdr('s3'))).close()
+      const log: string[] = []
+      const svc = await service(
+        tenantA,
+        2,
+        wrapped(
+          (sql) =>
+            sql.includes('pg_try_advisory_lock')
+              ? { rows: [{ ok: false }], rowCount: 1 }
+              : undefined,
+          log
+        )
+      )
+      await expect(svc.open('s3', 'write')).rejects.toBeInstanceOf(
+        SessionAlreadyOwnedError
+      )
+      expect(log).toContain('destroy')
+    })
+    it.each([
+      ['key', { writer_lock_id: 987654 }],
+      ['cut', { inherited_event_count: '9' }],
+      ['head', { next_sequence: '1' }]
+    ])(
+      'a %s that moves between the claim and the publish is not published',
+      async (_name, patch) => {
+        const id = `s4${_name}`
+        await seed(id, 2)
+        const real = (
+          await admin.query(
+            `SELECT header_json, writer_lock_id, next_sequence, inherited_event_count, format_version FROM ${schema}.session_streams WHERE session_id=$1`,
+            [id]
+          )
+        ).rows[0]
+        const log: string[] = []
+        const svc = await service(
+          tenantA,
+          2,
+          wrapped(
+            (sql, calls) =>
+              sql.includes('writer_lock_id, header_json') && calls === 2
+                ? { rows: [{ ...real, ...patch }], rowCount: 1 }
+                : undefined,
+            log
+          )
+        )
+        await expect(svc.open(id, 'write')).rejects.toBeInstanceOf(
+          SessionPersistenceCorruptionError
+        )
+        expect(log).toContain('destroy')
+      }
+    )
+    it('an unsupported stored format version is reported as such', async () => {
+      await seed('s5', 0)
+      const real = (
+        await admin.query(
+          `SELECT header_json, writer_lock_id, next_sequence, inherited_event_count FROM ${schema}.session_streams WHERE session_id='s5'`
+        )
+      ).rows[0]
+      const svc = await service(
+        tenantA,
+        2,
+        wrapped(
+          (sql) =>
+            sql.includes('writer_lock_id, header_json')
+              ? { rows: [{ ...real, format_version: 2 }], rowCount: 1 }
+              : undefined,
+          []
+        )
+      )
+      await expect(svc.open('s5', 'write')).rejects.toMatchObject({
+        name: 'SessionFormatUnsupportedError'
+      })
+    })
+    it('a cut that changes under a live reader is corruption', async () => {
+      await seed('s6', 1)
+      const svc = await service()
+      const r = await svc.open('s6', 'read')
+      await tamper('s6', 'inherited_event_count=5')
+      await expect(r.read()).rejects.toBeInstanceOf(
+        SessionPersistenceCorruptionError
+      )
+      await r.close()
+    })
+    it('refuses a head that regresses, and keeps the high-water mark across reads', async () => {
+      await seed('s7', 3)
+      let shrink = false
+      const f = withForgedRead((sql, result) =>
+        shrink && sql.includes('next_sequence, format_version')
+          ? { ...result, rows: [{ ...result.rows[0], next_sequence: '3' }] }
+          : undefined
+      )
+      const r = await (await f.svc).open('s7', 'read')
+      expect((await r.read()).events).toHaveLength(3)
+      shrink = true
+      await expect(r.read()).rejects.toThrow(/regressed/)
+      await r.close()
+    })
+    it('refuses a gap in the prefix, and corruption beyond a short slice', async () => {
+      await seed('s8', 3)
+      const svc = await service()
+      const r = await svc.open('s8', 'read')
+      await admin.query('BEGIN')
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events DISABLE TRIGGER USER`
+      )
+      await admin.query(
+        `ALTER TABLE ${schema}.session_streams DISABLE TRIGGER USER`
+      )
+      await admin.query(
+        `DELETE FROM ${schema}.session_events WHERE session_id='s8' AND sequence=2`
+      )
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events ENABLE TRIGGER USER`
+      )
+      await admin.query(
+        `ALTER TABLE ${schema}.session_streams ENABLE TRIGGER USER`
+      )
+      await admin.query('COMMIT')
+      await expect(r.read(0, 1)).rejects.toThrow(/gap/)
+      await r.close()
+      await seed('s9', 3)
+      const r2 = await svc.open('s9', 'read')
+      await admin.query('BEGIN')
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events DISABLE TRIGGER USER`
+      )
+      await admin.query(
+        `UPDATE ${schema}.session_events SET input_digest=$1 WHERE session_id='s9' AND sequence=3`,
+        ['e'.repeat(64)]
+      )
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events ENABLE TRIGGER USER`
+      )
+      await admin.query('COMMIT')
+      await expect(r2.read(0, 1)).rejects.toBeInstanceOf(
+        SessionPersistenceCorruptionError
+      )
+      await r2.close()
+    })
+
+    it('reads in a repeatable-read snapshot and in pages of 256', async () => {
+      await seed('p1', 300)
+      const f = withForgedRead(() => undefined)
+      const r = await (await f.svc).open('p1', 'read')
+      f.log.length = 0
+      expect((await r.read()).events).toHaveLength(300)
+      expect(f.log.some((q) => q.includes('REPEATABLE READ READ ONLY'))).toBe(
+        true
+      )
+      expect(
+        f.log.filter((q) => q.includes('FROM') && q.includes('session_events'))
+      ).toHaveLength(2)
+      await r.close()
+    })
+    it.each([
+      ['sequence', (r: any) => ({ ...r, sequence: r.sequence + 10 })],
+      ['tenant', (r: any) => ({ ...r, tenantId: tenantB })],
+      ['session', (r: any) => ({ ...r, sessionId: 'someone-else' })]
+    ])(
+      'refuses a stored event whose %s differs from its place',
+      async (_n, forge) => {
+        await seed(`f1${_n}`, 2)
+        const f = withForgedRead((sql, result) =>
+          sql.includes('FROM') && sql.includes('session_events')
+            ? {
+                ...result,
+                rows: result.rows.map((row: any, i: number) =>
+                  i === 0 ? { ...row, record: forge(row.record) } : row
+                )
+              }
+            : undefined
+        )
+        const r = await (await f.svc).open(`f1${_n}`, 'read')
+        await expect(r.read()).rejects.toBeInstanceOf(
+          SessionPersistenceCorruptionError
+        )
+        await r.close()
+      }
+    )
+    it('a reader refuses append and flush as read-only, a writer after loss as lost', async () => {
+      const svc = await service()
+      await (await svc.create(hdr('ro1'))).close()
+      const r = await svc.open('ro1', 'read')
+      await expect(r.append([])).rejects.toMatchObject({
+        name: 'SessionReadOnlyError'
+      })
+      await expect(r.flush()).rejects.toMatchObject({
+        name: 'SessionReadOnlyError'
+      })
+      await r.close()
+    })
+    it('a lease reports a loss that happened before the listener was added, and releases once', async () => {
+      const lease = await physical.acquire({ timeoutMs: 3000 })
+      expect(lease.release()).toBe(lease.release())
+      const other = await physical.acquire({ timeoutMs: 3000 })
+      await admin.query('SELECT pg_terminate_backend($1)', [other.backendPid])
+      await new Promise((r) => setTimeout(r, 400))
+      const lost = await new Promise<Error>((resolve) => other.onLost(resolve))
+      expect(lost).toBeInstanceOf(Error)
+      await other.destroy()
+    })
+    it('a lease that lands after its deadline is destroyed by the adapter', async () => {
+      const late = `${role}_late`
+      await admin.query(
+        `CREATE ROLE ${late} LOGIN NOSUPERUSER PASSWORD '${password}'`
+      )
+      try {
+        const u = new URL(url!)
+        u.username = late
+        u.password = password
+        const pool = createPgPhysicalSessionPool({
+          connectionString: u.toString()
+        })
+        const count = async () =>
+          Number(
+            (
+              await admin.query(
+                `SELECT count(*) FROM pg_stat_activity WHERE usename=$1`,
+                [late]
+              )
+            ).rows[0].count
+          )
+        for (let i = 0; i < 3; i++)
+          await expect(pool.acquire({ timeoutMs: 1 })).rejects.toThrow(
+            /timed out/
+          )
+        await waitFor(async () => (await count()) === 0)
+        const kept = await pool.acquire({ timeoutMs: 3000 })
+        expect(await count()).toBe(1)
+        await kept.release()
+      } finally {
+        await admin.query(`DROP ROLE IF EXISTS ${late}`)
+      }
     })
   })
 })

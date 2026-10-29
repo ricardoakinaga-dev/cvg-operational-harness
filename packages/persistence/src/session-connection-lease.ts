@@ -92,7 +92,8 @@ export function createPgPhysicalSessionPool(options: {
       if (signal?.aborted) throw abortError()
       const client = new Client({
         connectionString: options.connectionString,
-        connectionTimeoutMillis: timeoutMs
+        // Our own timer governs the deadline, so a lease that lands late is still ours to destroy.
+        connectionTimeoutMillis: timeoutMs + 5_000
       })
       const connecting = (async (): Promise<PhysicalSessionLease> => {
         await client.connect()
