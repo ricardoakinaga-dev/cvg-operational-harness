@@ -72,11 +72,18 @@ describe('PAR-S01 slice 1: session header (SPEC 0221 §3/§4)', () => {
     expect(validateSessionHeader({ ...base }, 0).inheritedEventCount).toBe(0)
     rejects({ ...base, isSeeded: true }, -1)
     rejects({ ...base, isSeeded: true }, 1.5)
+    rejects({ ...base, isSeeded: true }, -0)
+    rejects({ ...base, isSeeded: 1 }, 5)
   })
   it('rejects non-JSON shapes', () => {
     const cyc: Record<string, unknown> = { ...base }
     cyc['self'] = cyc
-    rejects(cyc)
+    expect(() => validateSessionHeader(cyc)).toThrow(/cycle/)
+    const extra = [1, 2] as unknown[] & { x?: number }
+    extra.x = 1
+    expect(() => validateSessionHeader({ ...base, extra })).toThrow(
+      /extra array key/
+    )
     rejects({ ...base, f: () => 1 })
     rejects({ ...base, u: undefined })
     rejects({ ...base, b: 1n })
