@@ -14,6 +14,7 @@
   - Revisão DF da 0262 fatia 1 (`331b3f59`) e confirmação (`aa353efe`): só os dois commits de docs (`REVIEW.md`), por cherry-pick; o código da 0262 fica para a onda da sessão 07.
 - Limite conhecido (0278 e 0281): a decisão por `nlink` no descritor fecha o hardlink já existente, mas não vence um escritor concorrente do workspace que **remova o nome entre o `open` e o `fstat`**: o inode aberto fica só com o nome de fora e a conferência passa (sonda `race-probe-out.txt`: `SUCCEEDED`, conteúdo de fora enviado). Reconferir o nome depois da leitura ainda é burlável por religação. A defesa real é o isolamento do PROCESS (F02/X01), que impede o payload de ver o arquivo de fora e de agir no workspace; F02/X01 seguem abertos.
 - Gates na onda 3, com Node 22: typecheck 0; docs:check-links OK; skip:governance PASS; mutation-guard 3/3; vitest focado de `packages/channel-gateway` e `packages/sandbox` e testes PG das frentes (ver os BUILD-RESULT); gitleaks 8.28.0 sobre as faixas da onda sem achados.
+- 0262 S3–S5 (`422d41f89` + nota `e18bde6ba`, recibo human-decisions-12 `7a58a6a9…`) revistas pela D9 (APPROVE, 1 P2 no script de revogação: `PG*` do ambiente e query da URL; 5 P3) e mescladas na onda 3; F18 fatia 1 (`66ad2137e`, Codex) revista (APPROVE). Gates na onda 3: typecheck 0; skip:governance PASS; mutation-guard 3/3; docs:check-links OK; focado apps/api+persistence+web+`tests/operator-action*` com PG 183 arquivos / 1593 testes. Produção `NO_GO`.
 
 # 29/10/2026 — segunda onda AUD0625 (Claude DF, sessões 07 e D9, Codex AUD0625)
 

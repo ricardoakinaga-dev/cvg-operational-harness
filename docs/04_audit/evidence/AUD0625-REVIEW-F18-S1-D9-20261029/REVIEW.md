@@ -17,8 +17,8 @@ Node 22.23.2, sem PostgreSQL. Sintético.
 - **Caminho legítimo com grant intacto**: os positivos do arquivo RED (`clean`, `policy-only`,
   `confirm-failure`) continuam reservando 1, executando 1 e confirmando 1; `packages/harness` inteiro
   passa (ver abaixo). O ramo com grant não foi tocado.
-- **Mutantes D9 sobre a fatia** (todos mortos): retirar o termo da política (2 falhas: caso 2 + RED
-  `drop-needs`... o segundo é o RED de needsApproval), retirar `needsApproval` (caso 1), retirar o
+- **Mutantes D9 sobre a fatia** (todos mortos): retirar o termo da política (2 falhas: caso 2 e o RED
+  de needsApproval), retirar `needsApproval` (caso 1), retirar o
   descritor (caso 0), e ramo de execute sempre `next` (4 falhas). Fonte restaurada com `git checkout`.
 - **P3 da fase 1 incorporados**: R2 exige `TOOL_FAILURE` + `unknown_effect` + `complete=1`; R4 exige
   `POLICY_DENIED` + corpo 0 + reserva 0 + efeitos vazios; REDs novos para needsApproval, política,

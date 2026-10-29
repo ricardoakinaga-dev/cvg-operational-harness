@@ -76,7 +76,7 @@ Typecheck 0, `docs:check-links` (DOC_LINKS_OK e EVIDENCE_HYGIENE_OK), `prettier`
 
 ## Fica para depois
 
-- **0262 (U04/F16, revogação de sessão):** em BUILD pela sessão 07. A fatia 1 e a 2a foram revisadas (APPROVE); a fatia 2 (2b runtime approval e 2c journey task) também (APPROVE, `829bdc10`), com um P2 de integração com esta onda (testes F08b e rebind do catálogo) e 2 P3 que a sessão 07 vai tratar antes de entrar.
+- **0262 (U04/F16, revogação de sessão):** entra inteira nesta onda (fatias 1 a 5 da sessão 07, `claude/aud0625-0257-07` @ `e18bde6b`), todas revistas de forma independente (S3–S5: APPROVE, `AUD0625-REVIEW-0262-S345-D9-20261029`). Recibo `docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-12.json`: a SPEC se mantém e, no perfil HMAC de produção sem OIDC, toda rota de operador responde 503 (o ensaio é via OIDC). O script `revoke-operator-sessions.ts` tem 1 P2 aberto (ambiente `PG*` e query da URL) a corrigir antes do lançamento real (T4).
 - **Acompanhamentos:** F08c (opcional); a corrida remoção-entre-`open`-e-`fstat` das SPECs 0278 e 0281 (defesa no isolamento F02/X01); F05 global, K08 e X01.
 - **Com o Codex:** F13, F18 (fase 1, SPEC 0280) e F19.
 - **Com o Ricardo e o hospital:** servidor (U10), IdP (U09) e piloto (U23).
