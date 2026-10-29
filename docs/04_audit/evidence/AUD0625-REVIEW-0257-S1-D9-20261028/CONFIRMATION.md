@@ -30,6 +30,8 @@ Não achei defeito de código. `apps/api/src/__tests__/api-creation-http.test.ts
 - **O2:** um valor corrompido no `sessionStorage` (JSON truncado) faz `read` lançar `LogicalOperationStorageError` e bloqueia o envio do escopo até fechar a aba, sem caminho de limpeza. Só o JSON inválido; um JSON de forma errada vira "sem registro".
 - O console só testa o 500 como falha incerta (o `timeout` e o erro de rede usam o mesmo caminho do `catch`, sem teste próprio) e um 4xx definitivo deixa a operação pendente com a mesma chave (inofensivo, o corpo é determinístico).
 
+Nota de método: as mutações da API rodaram contra `api-creation-http.test.ts` e `case-scope-tasks-approvals.test.ts`; "nenhum teste fixa" vale para esses dois arquivos, não para a suíte inteira da API.
+
 ## Pedido (nenhum obrigatório)
 
 P3-1 teste do header depois da authz (401/403/404 com header ausente e inválido); P3-2 teste autenticado do ator no evento e do 409 entre atores; P3-3 duplo clique síncrono (dois cliques no mesmo `act`); P3-4 duplicado em caixas diferentes; e, da fatia 1, o teste do `rollback-fails`.
