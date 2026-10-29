@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { Client, type QueryResult, type QueryResultRow } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
@@ -23,6 +23,7 @@ import {
   TENANT_SCHEMA_TABLES,
   tenantRuntimeGrantPrivileges,
   PostgresControlPlaneRepository,
+  PostgresRuntimeRepository,
   TenantScopedPostgresRuntimeRepository,
   type PostgresPoolLike,
   type PostgresQueryable
@@ -1990,7 +1991,11 @@ describe('api PostgreSQL persistence mode', () => {
             'x-operator-role': 'Supervisor'
           }
         })
-        const approval = await app.inject({
+        // SPEC 0257: a shared queryable client has no exclusive transactional
+        // pool, so the creation POSTs answer 503 before any write; the
+        // approval below is seeded through the repository to keep the
+        // decision/audit coverage of this legacy profile.
+        const refused = await app.inject({
           method: 'POST',
           url: '/v1/approvals',
           payload: {
@@ -1999,11 +2004,23 @@ describe('api PostgreSQL persistence mode', () => {
             summary: 'Aprovacao ficticia em postgres',
             riskLevel: 'medium'
           },
-          headers: {
-            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
-          }
+          headers: { 'idempotency-key': 'approval-key-legacy-profile-0001' }
         })
-        const approvalBody = approval.json() as Envelope<{ id: string }>
+        expect(refused.statusCode).toBe(503)
+        const seeded = await new PostgresRuntimeRepository(client).saveApproval(
+          {
+            id: `approval_${randomUUID()}`,
+            sessionId: inboundBody.data.sessionId,
+            proposedAction: 'create_appointment_draft',
+            summary: 'Aprovacao ficticia em postgres',
+            riskLevel: 'medium',
+            status: 'pending',
+            decidedBy: null,
+            decidedAt: null,
+            createdAt: new Date()
+          }
+        )
+        const approvalBody = { data: { id: seeded.id } }
         // SPEC0251 (§6 adjustment d): without the 0029 tables an Approver
         // cannot be scoped (503 before any write); the persisted decision is
         // proven with the tenant-wide Supervisor.
@@ -2025,7 +2042,9 @@ describe('api PostgreSQL persistence mode', () => {
           },
           payload: { decision: 'approved' }
         })
-        const task = await app.inject({
+        // SPEC 0257: creation is refused (503) on the shared-client profile;
+        // the task is seeded through the repository.
+        const refusedTask = await app.inject({
           method: 'POST',
           url: '/v1/tasks',
           payload: {
@@ -2037,7 +2056,20 @@ describe('api PostgreSQL persistence mode', () => {
             idempotencyKey: 'postgres-task-1'
           }
         })
-        const taskBody = task.json() as Envelope<{ id: string; status: string }>
+        expect(refusedTask.statusCode).toBe(503)
+        const seededTask = await new PostgresRuntimeRepository(
+          client
+        ).createTask({
+          sessionId: inboundBody.data.sessionId,
+          title: 'Tarefa ficticia postgres',
+          description: 'Validar modo postgres controlado',
+          priority: 'high',
+          source: 'postgres-mode-test',
+          idempotencyKey: 'postgres-task-1'
+        })
+        const taskBody = {
+          data: { id: seededTask.id, status: seededTask.status }
+        }
         const taskStatus = await app.inject({
           method: 'PATCH',
           url: `/v1/tasks/${taskBody.data.id}/status`,
@@ -2201,7 +2233,9 @@ describe('api PostgreSQL persistence mode', () => {
         })
         const firstSessionId = first.json().data.sessionId as string
         const otherSessionId = otherTenant.json().data.sessionId as string
-        await app.inject({
+        // SPEC 0257: the shared-client profile refuses the creation POSTs (503);
+        // the tenant-scoped rows are seeded through the repository.
+        const refusedTask = await app.inject({
           method: 'POST',
           url: '/v1/tasks',
           headers: { 'x-tenant-id': postgresTenantA },
@@ -2214,47 +2248,38 @@ describe('api PostgreSQL persistence mode', () => {
             idempotencyKey: 'postgres-tenant-task-a'
           }
         })
-        await app.inject({
-          method: 'POST',
-          url: '/v1/tasks',
-          headers: { 'x-tenant-id': postgresTenantB },
-          payload: {
-            sessionId: otherSessionId,
-            title: 'Tarefa B',
-            description: 'Escopo B',
-            priority: 'medium',
-            source: 'postgres-tenant-scope',
-            idempotencyKey: 'postgres-tenant-task-b'
-          }
-        })
-        await app.inject({
-          method: 'POST',
-          url: '/v1/approvals',
-          headers: {
-            'x-tenant-id': postgresTenantA,
-            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
-          },
-          payload: {
-            sessionId: firstSessionId,
-            proposedAction: 'create_appointment_draft',
-            summary: 'Aprovação A',
-            riskLevel: 'medium'
-          }
-        })
-        await app.inject({
-          method: 'POST',
-          url: '/v1/approvals',
-          headers: {
-            'x-tenant-id': postgresTenantB,
-            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
-          },
-          payload: {
-            sessionId: otherSessionId,
-            proposedAction: 'create_appointment_draft',
-            summary: 'Aprovação B',
-            riskLevel: 'medium'
-          }
-        })
+        expect(refusedTask.statusCode).toBe(503)
+        const repository = new PostgresRuntimeRepository(client)
+        for (const [tenantId, sessionId, label, taskKey] of [
+          [postgresTenantA, firstSessionId, 'A', 'postgres-tenant-task-a'],
+          [postgresTenantB, otherSessionId, 'B', 'postgres-tenant-task-b']
+        ] as const) {
+          await repository.createTask(
+            {
+              sessionId,
+              title: `Tarefa ${label}`,
+              description: `Escopo ${label}`,
+              priority: 'medium',
+              source: 'postgres-tenant-scope',
+              idempotencyKey: taskKey
+            },
+            tenantId
+          )
+          await repository.saveApproval(
+            {
+              id: `approval_${randomUUID()}`,
+              sessionId,
+              proposedAction: 'create_appointment_draft',
+              summary: `Aprovação ${label}`,
+              riskLevel: 'medium',
+              status: 'pending',
+              decidedBy: null,
+              decidedAt: null,
+              createdAt: new Date()
+            },
+            tenantId
+          )
+        }
         const tasksA = await app.inject({
           method: 'GET',
           url: '/v1/tasks',
