@@ -190,12 +190,16 @@ describeWithPostgres(
     /** Creation through the authority unit, as the API composes it. */
     const create = (
       key: string,
-      hooks: ConstructorParameters<typeof PostgresApiCreation>[1] = {}
+      hooks: ConstructorParameters<typeof PostgresApiCreation>[1] = {},
+      afterPolicy?: () => Promise<void>
     ) => {
       const creation = new PostgresApiCreation(runtimePool, hooks)
       return authority.runAuthorizedMutation(tenant, {
         operatorId,
-        authorize: policy,
+        authorize: async (snapshot) => {
+          await policy(snapshot)
+          await afterPolicy?.()
+        },
         write: (unit) =>
           creation.createTaskWithAudit(
             command(key),
@@ -383,6 +387,36 @@ describeWithPostgres(
           identitySource: 'synthetic_fixture'
         })
       }
+    })
+
+    it('the policy reads after both FOR SHARE locks: a revocation issued while the policy is deciding waits for the unit', async () => {
+      await writeAssignment('ACTIVE')
+      const key = `unit-key-${randomBytes(6).toString('hex')}`
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let decided!: () => void
+      const policyRead = new Promise<void>((resolve) => {
+        decided = resolve
+      })
+      const unit = create(key, {}, async () => {
+        decided()
+        await gate
+      })
+      await policyRead
+      let revoked = false
+      const revocation = writeAssignment('REVOKED').then(() => {
+        revoked = true
+      })
+      await sleep(300)
+      // Policy ran before the locks => the revocation would have applied here.
+      expect(revoked).toBe(false)
+      release()
+      expect((await unit).outcome).toBe('created')
+      await revocation
+      expect(revoked).toBe(true)
+      expect(await taskCount(key)).toBe(1)
     })
 
     it('a principal deactivated before the unit is denied with zero writes', async () => {

@@ -5,6 +5,8 @@
  * grant denies a new creation and its replay (R01/R04). Synthetic data only.
  */
 import { describe, expect, it, vi } from 'vitest'
+import { PostgresCaseAuthority } from '@cvg/persistence'
+import type { Pool } from 'pg'
 import { buildServer } from '../server.ts'
 import {
   CONTROLLED_TEST_TENANT,
@@ -248,5 +250,24 @@ describe('SPEC 0262 authorization unit (memory)', () => {
       })
     ).rejects.toThrow('denied')
     expect(wrote).toBe(false)
+  })
+})
+
+describe('SPEC 0262 composition fails closed', () => {
+  it('a PostgreSQL authority paired with a creation port that is not PostgreSQL is refused with 503 before any write', async () => {
+    const app = buildServer({
+      caseAuthority: new PostgresCaseAuthority({} as unknown as Pool)
+    })
+    const inbound = await app.inject({
+      method: 'POST',
+      url: '/v1/tasks',
+      headers: { 'x-tenant-id': CONTROLLED_TEST_TENANT },
+      payload: taskBody(
+        '00000000-0000-4000-8000-000000000001',
+        'composition-key-1'
+      )
+    })
+    expect(inbound.statusCode).toBe(503)
+    expect(inbound.json().error.code).toBe('configuration_error')
   })
 })

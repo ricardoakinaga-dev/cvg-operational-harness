@@ -1877,7 +1877,14 @@ export function buildServer(options: BuildServerOptions = {}) {
         })
       }
       // SPEC 0257: resource, creation audit and receipt commit together.
-      if (!persistence.apiCreation) {
+      if (
+        !persistence.apiCreation ||
+        // SPEC 0262: a PostgreSQL authority only hands its lock hook to the
+        // PostgreSQL creation port; any other pairing would commit the write
+        // without the authorization unit, so it is refused before any write.
+        (caseAuthority instanceof PostgresCaseAuthority &&
+          !(persistence.apiCreation instanceof PostgresApiCreation))
+      ) {
         throw new DomainError(
           'configuration_error',
           'Atomic creation is not available in this persistence composition'
@@ -2047,7 +2054,14 @@ export function buildServer(options: BuildServerOptions = {}) {
       const creationKey = readCreationKey(request.raw.rawHeaders)
       // SPEC 0257: resource, creation audit and receipt commit together; a
       // replay returns the same approval.
-      if (!persistence.apiCreation) {
+      if (
+        !persistence.apiCreation ||
+        // SPEC 0262: a PostgreSQL authority only hands its lock hook to the
+        // PostgreSQL creation port; any other pairing would commit the write
+        // without the authorization unit, so it is refused before any write.
+        (caseAuthority instanceof PostgresCaseAuthority &&
+          !(persistence.apiCreation instanceof PostgresApiCreation))
+      ) {
         throw new DomainError(
           'configuration_error',
           'Atomic creation is not available in this persistence composition'
