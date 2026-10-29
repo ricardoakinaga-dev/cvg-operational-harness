@@ -10,6 +10,7 @@ import {
   type ModelInput,
   type PromptBinding,
   type ModelResult,
+  type ProviderRequest,
   type ProviderResult,
   type ProviderUsage,
   type UsageStatus,
@@ -42,6 +43,7 @@ import {
 } from './prompt-registry.ts'
 import { ModelRouter, type ModelRoutingOptions } from './router.ts'
 import { renderGovernedInput } from './prompt-binding.ts'
+import { assembleProviderStream, type StreamProgress } from './stream.ts'
 
 export interface ModelGatewayOptions {
   providers: ModelProvider[]
@@ -270,6 +272,13 @@ export class ModelGateway {
         `Provider ${profile.providerId} is not registered`
       )
     }
+    // SPEC 0284 T-2: a streaming profile never falls back to `execute`.
+    if (profile.streaming === true && provider.executeStream === undefined) {
+      throw new ModelGatewayError(
+        'invalid_request',
+        `Provider ${provider.id} has no stream path for a streaming profile`
+      )
+    }
     // F13: an aborted caller never reserves budget nor reaches a provider.
     throwIfCancelled(externalSignal)
 
@@ -355,6 +364,7 @@ export class ModelGateway {
       let accounted:
         | { usage: ProviderUsage; costUsd: number; status: UsageStatus }
         | undefined
+      const progress: StreamProgress = { outputSeen: false }
 
       this.#emit({
         type: 'model.call.started',
@@ -368,7 +378,7 @@ export class ModelGateway {
       })
 
       try {
-        const providerResult = await provider.execute({
+        const providerRequest = {
           requestId: request.requestId,
           tenantId: request.tenantId,
           correlationId: request.correlationId,
@@ -384,7 +394,16 @@ export class ModelGateway {
           signal,
           timeoutMs,
           ...(request.metadata ? { metadata: request.metadata } : {})
-        })
+        }
+        const providerResult: ProviderResult = profile.streaming
+          ? await this.#runStream(
+              provider,
+              providerRequest,
+              signal,
+              externalSignal,
+              progress
+            )
+          : await provider.execute(providerRequest)
 
         // SPEC 0267 §3.3: usage is validated and accounted before the output
         // is parsed, so a rejected output still costs what it consumed.
@@ -473,6 +492,29 @@ export class ModelGateway {
             ? new ModelGatewayError('cancelled', 'Model call was cancelled')
             : toGatewayError(error, provider.id)
         lastError = gatewayError
+        // SPEC 0284 §7.3: a stream that produced output and then failed or
+        // was cancelled consumed an unknown amount. It is charged the
+        // conservative bound, never zero and never a partial count.
+        if (profile.streaming && progress.outputSeen && !accounted) {
+          const usage = conservativeUsage(
+            rendered.input,
+            request.maxTokens ?? profile.maxTokens
+          )
+          const costUsd = Math.max(
+            estimatedCost,
+            this.#computeCost(profile, usage)
+          )
+          this.#meter?.recordUnreported()
+          if (this.#budget) {
+            this.#budget.settle({
+              reservedKeys,
+              estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
+              actualCostUsd: costUsd
+            })
+          }
+          reservationSettled = true
+          accounted = { usage, costUsd, status: 'unreported' }
+        }
         if (this.#countsAgainstCircuit(gatewayError)) {
           this.#circuit.onFailure(circuitKey)
         }
@@ -561,6 +603,27 @@ export class ModelGateway {
       await Promise.race([this.#sleep(ms), aborted])
     } finally {
       signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  async #runStream(
+    provider: ModelProvider,
+    providerRequest: ProviderRequest,
+    signal: AbortSignal,
+    externalSignal: AbortSignal | undefined,
+    progress: StreamProgress
+  ): Promise<ProviderResult> {
+    const outcome = await assembleProviderStream(
+      provider.executeStream!(providerRequest),
+      { signal, externalSignal, progress }
+    )
+    return {
+      text: outcome.text,
+      ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+      providerId: provider.id,
+      model: providerRequest.model,
+      externalCall: provider.location === 'external',
+      finishReason: outcome.finishReason
     }
   }
 

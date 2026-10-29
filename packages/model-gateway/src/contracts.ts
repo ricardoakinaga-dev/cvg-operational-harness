@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ProviderStreamEvent } from './stream.ts'
 import { DataClassificationSchema } from '@cvg/shared'
 
 export const ModelProfileNameSchema = z.enum([
@@ -126,6 +127,11 @@ export interface ModelProvider {
   readonly location: ModelLocation
   readonly models: readonly string[]
   execute(request: ProviderRequest): Promise<ProviderResult>
+  /**
+   * SPEC 0284: internal stream, used only by a profile with `streaming: true`.
+   * The gateway still returns one terminal result per call (D1, D2).
+   */
+  executeStream?(request: ProviderRequest): AsyncIterable<ProviderStreamEvent>
 }
 
 export interface ModelProfile {
@@ -144,6 +150,8 @@ export interface ModelProfile {
     outputPer1kUsd: number
   }
   fallbackProfile?: ModelProfileName
+  /** SPEC 0284: consume the provider as an internal stream. Default false. */
+  streaming?: boolean
 }
 
 export type UsageStatus = 'reported' | 'unreported'

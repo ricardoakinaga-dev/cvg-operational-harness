@@ -61,20 +61,23 @@ export async function fetchWithResolvedAddress(
       callback()
     }
 
+    // SPEC 0284 §5.1: `responseMode: 'stream'` hands over the Response at the
+    // headers; anything else is the buffered mode of SPEC 0248.
+    const onResponse = (response: IncomingMessage) => {
+      const read =
+        init.responseMode === 'stream'
+          ? readStreamedResponse(response, method, init.maxResponseBytes)
+          : readResponse(response, method, init.maxResponseBytes)
+      void read.then(
+        (result) => finish(() => resolve(result)),
+        (error: unknown) => finish(() => reject(error))
+      )
+    }
+
     const request =
       url.protocol === 'https:'
-        ? httpsRequest(requestOptions, (response) => {
-            void readResponse(response, method, init.maxResponseBytes).then(
-              (result) => finish(() => resolve(result)),
-              (error: unknown) => finish(() => reject(error))
-            )
-          })
-        : httpRequest(requestOptions, (response) => {
-            void readResponse(response, method, init.maxResponseBytes).then(
-              (result) => finish(() => resolve(result)),
-              (error: unknown) => finish(() => reject(error))
-            )
-          })
+        ? httpsRequest(requestOptions, onResponse)
+        : httpRequest(requestOptions, onResponse)
 
     request.once('error', (error) => finish(() => reject(error)))
 
@@ -248,4 +251,90 @@ async function readResponse(
     return new Response(failing, init)
   }
   return new Response(bodyless ? null : Buffer.concat(chunks), init)
+}
+
+/**
+ * SPEC 0284 §5: a 2xx body is handed over as a live stream that applies the
+ * same byte ceiling as the buffered mode, with backpressure. A declared length
+ * above the ceiling, a bodyless response and every non-2xx status keep the
+ * buffered handling, so the known status still wins and nothing else changes.
+ */
+async function readStreamedResponse(
+  response: IncomingMessage,
+  method: string,
+  maxResponseBytes: unknown
+): Promise<Response> {
+  const status = response.statusCode
+  const bodyless =
+    method.toUpperCase() === 'HEAD' ||
+    status === 204 ||
+    status === 205 ||
+    status === 304
+  const limit =
+    typeof maxResponseBytes === 'number' ? maxResponseBytes : undefined
+  const declared = Number(response.headers['content-length'])
+  if (
+    !status ||
+    status < 200 ||
+    status >= 300 ||
+    bodyless ||
+    (limit !== undefined && declared > limit)
+  ) {
+    return readResponse(response, method, maxResponseBytes)
+  }
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) headers.append(name, entry)
+    } else if (value !== undefined) {
+      headers.append(name, value)
+    }
+  }
+  let total = 0
+  let ended = false
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      response.on('data', (chunk: Buffer | string) => {
+        if (ended) return
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        total += bytes.byteLength
+        if (limit !== undefined && total > limit) {
+          ended = true
+          response.destroy()
+          controller.error(responseTooLarge())
+          return
+        }
+        // An own copy: never retain the socket's pooled buffer.
+        controller.enqueue(new Uint8Array(bytes))
+        if ((controller.desiredSize ?? 0) <= 0) response.pause()
+      })
+      response.once('end', () => {
+        if (ended) return
+        ended = true
+        controller.close()
+      })
+      response.once('error', (error) => {
+        if (ended) return
+        ended = true
+        controller.error(error)
+      })
+      response.once('close', () => {
+        if (ended) return
+        ended = true
+        controller.error(new Error('Response closed before its end'))
+      })
+    },
+    pull() {
+      response.resume()
+    },
+    cancel() {
+      ended = true
+      response.destroy()
+    }
+  })
+  return new Response(body, {
+    status,
+    statusText: response.statusMessage ?? '',
+    headers
+  })
 }
