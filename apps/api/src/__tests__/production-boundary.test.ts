@@ -1,6 +1,44 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildServer } from '../server.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
+import { SYNTHETIC_AUTHORITY_VERSION } from './case-authorization-fixtures.ts'
+
+/**
+ * SPEC 0262 §5: a trusted route needs a current principal and the principal
+ * authority is composed only under the controlled test profile. The server is
+ * built under NODE_ENV=test and the request path runs as production; the
+ * principal is the verified-adapter kind a trusted deployment accepts.
+ */
+async function buildProductionLike(
+  options: Parameters<typeof buildServer>[0],
+  principal: {
+    tenantId: string
+    operatorId: string
+    role: 'Operator' | 'Approver' | 'Supervisor' | 'Admin'
+  }
+) {
+  vi.stubEnv('NODE_ENV', 'test')
+  let app: ReturnType<typeof buildServer>
+  try {
+    app = buildServer({
+      ...options,
+      casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
+    })
+  } finally {
+    vi.stubEnv('NODE_ENV', 'production')
+  }
+  await app.caseAuthority.applyVerifiedPrincipalState({
+    tenantId: principal.tenantId as never,
+    operatorId: principal.operatorId,
+    role: principal.role,
+    active: true,
+    expectedRevision: 0,
+    authorityVersion: SYNTHETIC_AUTHORITY_VERSION,
+    proofRef: `synthetic-proof:${principal.operatorId}`,
+    identitySource: 'verified_adapter'
+  })
+  return app
+}
 
 const operatorHeaders = {
   'x-operator-id': 'operator.production',
@@ -34,18 +72,25 @@ describe('production boundary authentication', () => {
 
   it('accepts a trusted resolver and verifier in controlled production-like tests', async () => {
     vi.stubEnv('NODE_ENV', 'production')
-    const app = buildServer({
-      durableInbound: true,
-      operatorIdentityResolver: () => ({
+    const app = await buildProductionLike(
+      {
+        durableInbound: true,
+        operatorIdentityResolver: () => ({
+          operatorId: 'trusted.production',
+          role: 'Supervisor',
+          tenantId: 'tenant_00000000-0000-4000-8000-000000000061'
+        }),
+        webhookVerifier: () => true,
+        inboundTenantResolver: () =>
+          'tenant_00000000-0000-4000-8000-000000000061',
+        operatorSessionStore: createInMemoryOperatorSessionStore()
+      },
+      {
+        tenantId: 'tenant_00000000-0000-4000-8000-000000000061',
         operatorId: 'trusted.production',
-        role: 'Supervisor',
-        tenantId: 'tenant_00000000-0000-4000-8000-000000000061'
-      }),
-      webhookVerifier: () => true,
-      inboundTenantResolver: () =>
-        'tenant_00000000-0000-4000-8000-000000000061',
-      operatorSessionStore: createInMemoryOperatorSessionStore()
-    })
+        role: 'Supervisor'
+      }
+    )
     // SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503
     // without a trusted principal authority; the trusted-resolver probe uses
     // a protected route without case scope permitted to the Supervisor.
@@ -203,15 +248,22 @@ describe('production boundary authentication', () => {
 
   it('binds trusted production identities to the requested tenant', async () => {
     vi.stubEnv('NODE_ENV', 'production')
-    const app = buildServer({
-      durableInbound: true,
-      operatorIdentityResolver: () => ({
+    const app = await buildProductionLike(
+      {
+        durableInbound: true,
+        operatorIdentityResolver: () => ({
+          operatorId: 'trusted.production',
+          role: 'Admin',
+          tenantId: 'tenant_00000000-0000-4000-8000-000000000061'
+        }),
+        operatorSessionStore: createInMemoryOperatorSessionStore()
+      },
+      {
+        tenantId: 'tenant_00000000-0000-4000-8000-000000000061',
         operatorId: 'trusted.production',
-        role: 'Admin',
-        tenantId: 'tenant_00000000-0000-4000-8000-000000000061'
-      }),
-      operatorSessionStore: createInMemoryOperatorSessionStore()
-    })
+        role: 'Admin'
+      }
+    )
     const mismatch = await app.inject({
       method: 'GET',
       url: '/v1/admin/agents',

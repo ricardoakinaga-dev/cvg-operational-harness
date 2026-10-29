@@ -172,6 +172,11 @@ import {
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
 import {
+  installOperatorPrincipalGuard,
+  recordRegisteredRoutes
+} from './operator-principal-guard.ts'
+import type { RegisteredRoute } from './operator-route-class.ts'
+import {
   assertSessionBinding,
   readCurrentPrincipal,
   SessionBindingError
@@ -561,6 +566,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       caseAuthority
     }
   )
+  // SPEC 0262 §5: the registered inventory (method + template) and its class.
+  const routeRegistry: RegisteredRoute[] = []
+  recordRegisteredRoutes(app, routeRegistry)
+  Object.assign(app, { operatorRouteInventory: routeRegistry })
   app.setErrorHandler((error, _request, reply) => {
     const failure = classifyHttpRequestError(error)
     reply.code(failure.statusCode)
@@ -621,6 +630,20 @@ export function buildServer(options: BuildServerOptions = {}) {
       sessionIdentityByHeaders,
       sessionRecordByHeaders,
       sessionStoreFailureByHeaders
+    })
+  }
+  if (identityMode === 'trusted') {
+    installOperatorPrincipalGuard({
+      app,
+      caseAuthority,
+      principalPolicy,
+      cookiePolicy: operatorCookiePolicy,
+      resolveIdentity: (headers) => {
+        if (!operatorIdentityResolver) throw new Error('no resolver')
+        return operatorIdentityResolver(headers)
+      },
+      sessionRecordByHeaders,
+      registry: routeRegistry
     })
   }
   app.addHook('onRequest', async (request) => {

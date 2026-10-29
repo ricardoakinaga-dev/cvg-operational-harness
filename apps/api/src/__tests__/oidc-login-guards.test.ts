@@ -187,13 +187,10 @@ describe('SPEC0254 O7 — composition refusals', () => {
           url,
           headers: { 'x-cvg-operator-token': token }
         })
-        // Fail closed for every role: 503 (no principal authority), except
-        // the registry, where Operator/Approver lack the permission (403)
-        // before any scope is resolved.
-        const expected =
-          url === '/v1/cases' && (role === 'Operator' || role === 'Approver')
-            ? 403
-            : 503
+        // Fail closed for every role: 503 (no principal authority). SPEC 0262
+        // §5: the principal guard answers before the role matrix, so even the
+        // registry's 403 for Operator/Approver is now the same 503.
+        const expected = 503
         expect(response.statusCode, `${role} ${url}`).toBe(expected)
       }
     }

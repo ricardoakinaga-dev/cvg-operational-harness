@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
+import { buildTrustedServer } from './case-authorization-fixtures.ts'
+
+const buildAny = (options: Record<string, unknown>) =>
+  buildServer(options as never)
 import {
   TRUSTED_OPERATOR_TOKEN_HEADER,
   createLocalIdentityKeyRing,
@@ -60,15 +64,19 @@ describe('trusted identity mode', () => {
   })
 
   it('rejects spoofed role and tenant headers instead of trusting the simulation claims', async () => {
-    const app = buildServer({
-      identityMode: 'trusted',
-      operatorIdentityResolver: () => ({
-        operatorId: 'trusted.operator',
-        role: 'Operator',
-        tenantId: tenantA
-      }),
-      operatorSessionStore: createInMemoryOperatorSessionStore()
-    })
+    const app = await buildTrustedServer(
+      buildAny,
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: () => ({
+          operatorId: 'trusted.operator',
+          role: 'Operator',
+          tenantId: tenantA
+        }),
+        operatorSessionStore: createInMemoryOperatorSessionStore()
+      },
+      [{ tenantId: tenantA, operatorId: 'trusted.operator', role: 'Operator' }]
+    )
     const promoted = await app.inject({
       method: 'GET',
       url: '/v1/admin/agents',
@@ -94,20 +102,30 @@ describe('trusted identity mode', () => {
   })
 
   it('authorizes only through the trusted resolver and ignores simulation-only headers', async () => {
-    const app = buildServer({
-      identityMode: 'trusted',
-      operatorIdentityResolver: (headers) => {
-        if (headers['x-cvg-operator-token'] !== 'trusted-synthetic-token') {
-          throw new Error('Untrusted operator identity')
-        }
-        return {
-          operatorId: 'trusted.operator',
-          role: 'Supervisor',
-          tenantId: tenantA
-        }
+    const app = await buildTrustedServer(
+      buildAny,
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: (headers: Record<string, unknown>) => {
+          if (headers['x-cvg-operator-token'] !== 'trusted-synthetic-token') {
+            throw new Error('Untrusted operator identity')
+          }
+          return {
+            operatorId: 'trusted.operator',
+            role: 'Supervisor',
+            tenantId: tenantA
+          }
+        },
+        operatorSessionStore: createInMemoryOperatorSessionStore()
       },
-      operatorSessionStore: createInMemoryOperatorSessionStore()
-    })
+      [
+        {
+          tenantId: tenantA,
+          operatorId: 'trusted.operator',
+          role: 'Supervisor'
+        }
+      ]
+    )
     // SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503
     // in trusted mode without a principal authority; the identity probe uses
     // a protected route without case scope permitted to the Supervisor.
@@ -156,21 +174,25 @@ describe('trusted identity mode', () => {
   })
 
   it('requires an identity for mutations in trusted mode even when the legacy flag is off', async () => {
-    const app = buildServer({
-      identityMode: 'trusted',
-      requireAuthenticatedMutations: false,
-      operatorIdentityResolver: (headers) => {
-        if (headers['x-cvg-operator-token'] !== 'trusted-synthetic-token') {
-          throw new Error('Untrusted operator identity')
-        }
-        return {
-          operatorId: 'trusted.operator',
-          role: 'Operator',
-          tenantId: tenantA
-        }
+    const app = await buildTrustedServer(
+      buildAny,
+      {
+        identityMode: 'trusted',
+        requireAuthenticatedMutations: false,
+        operatorIdentityResolver: (headers: Record<string, unknown>) => {
+          if (headers['x-cvg-operator-token'] !== 'trusted-synthetic-token') {
+            throw new Error('Untrusted operator identity')
+          }
+          return {
+            operatorId: 'trusted.operator',
+            role: 'Operator',
+            tenantId: tenantA
+          }
+        },
+        operatorSessionStore: createInMemoryOperatorSessionStore()
       },
-      operatorSessionStore: createInMemoryOperatorSessionStore()
-    })
+      [{ tenantId: tenantA, operatorId: 'trusted.operator', role: 'Operator' }]
+    )
     const anonymous = await app.inject({
       method: 'POST',
       url: '/v1/tasks',
@@ -227,11 +249,21 @@ describe('trusted identity mode', () => {
       key,
       () => now
     )
-    const app = buildServer({
-      identityMode: 'trusted',
-      operatorIdentityResolver: resolver,
-      operatorSessionStore: createInMemoryOperatorSessionStore()
-    })
+    const app = await buildTrustedServer(
+      buildAny,
+      {
+        identityMode: 'trusted',
+        operatorIdentityResolver: resolver,
+        operatorSessionStore: createInMemoryOperatorSessionStore()
+      },
+      [
+        {
+          tenantId: tenantA,
+          operatorId: 'operator.wave3.supervisor',
+          role: 'Supervisor'
+        }
+      ]
+    )
     try {
       const first = await app.inject({
         method: 'POST',
