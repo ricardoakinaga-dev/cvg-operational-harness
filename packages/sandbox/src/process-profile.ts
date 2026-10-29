@@ -304,6 +304,8 @@ export interface PreparedProcessLaunch {
   readonly args: readonly string[]
   readonly env: Readonly<Record<string, string>>
   readonly fds: readonly number[]
+  /** Child fd of the private `--json-status-fd` pipe; the caller adds a 'pipe' stdio at this index. */
+  readonly statusFdIndex?: number
   close(): void
 }
 
@@ -314,6 +316,10 @@ export function prepareProcessLaunch(request: {
   readonly argv: readonly string[]
   readonly cwd?: string
   readonly bwrapPath?: string
+  /** Ask bubblewrap for its private status channel (SPEC 0286 I6). */
+  readonly statusFd?: boolean
+  /** Already validated by the process service; the profile's own variables always win. */
+  readonly env?: Readonly<Record<string, string>>
 }): PreparedProcessLaunch {
   const record = recordOf(request.profile)
   if (
@@ -398,6 +404,7 @@ export function prepareProcessLaunch(request: {
       '--clearenv'
     )
     for (const [name, value] of Object.entries({
+      ...request.env,
       ...FIXED_ENV,
       HOME: '/tmp',
       TMPDIR: '/tmp',
@@ -405,6 +412,9 @@ export function prepareProcessLaunch(request: {
       PWD: cwd
     }))
       args.push('--setenv', name, value)
+    const statusFdIndex = request.statusFd ? 3 + fds.length : undefined
+    if (statusFdIndex !== undefined)
+      args.push('--json-status-fd', String(statusFdIndex))
     args.push('--', ...request.argv)
     // Extra stdio entries are duplicated into child fd3,fd4,... before exec.
     return {
@@ -412,6 +422,7 @@ export function prepareProcessLaunch(request: {
       args,
       env: FIXED_ENV,
       fds,
+      ...(statusFdIndex !== undefined ? { statusFdIndex } : {}),
       close: () => {
         for (const fd of fds.splice(0)) closeQuietly(fd)
       }
