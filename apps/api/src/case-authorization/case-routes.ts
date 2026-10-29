@@ -433,13 +433,28 @@ export async function assertCaseMutationOnSnapshot(
   snapshot: CaseReadSnapshot,
   deps: CaseRouteDependencies,
   identity: OperatorIdentity,
-  target: Exclude<CaseMutationTarget, { kind: 'execution' }>
+  target: CaseMutationTarget,
+  tenantId?: TenantId
 ): Promise<void> {
   const scope = await resolveCaseReadScope(
     snapshot,
     identity,
     deps.principalPolicy
   )
+  if (target.kind === 'execution') {
+    // Same algorithm as the execution reader (SPEC 0262: on this snapshot).
+    if (!tenantId) throw notFound()
+    if (scope.kind === 'assigned') {
+      const link = await snapshot.executionCase(target.executionId)
+      if (!(await canReadCase(snapshot, scope, link?.caseId))) throw notFound()
+    }
+    const record = await executionReader(deps, snapshot).get(
+      tenantId,
+      target.executionId
+    )
+    if (!record) throw notFound()
+    return
+  }
   const located =
     target.kind === 'task'
       ? await snapshot.taskCase(target.taskId)
@@ -461,13 +476,13 @@ export async function runAuthorizedCaseMutation<T>(
   deps: CaseRouteDependencies,
   identity: OperatorIdentity,
   tenantId: TenantId,
-  target: Exclude<CaseMutationTarget, { kind: 'execution' }>,
+  target: CaseMutationTarget,
   write: (unit: AuthorizedMutationUnit) => Promise<T>
 ): Promise<T> {
   return deps.caseAuthority.runAuthorizedMutation(tenantId, {
     operatorId: identity.operatorId,
     authorize: (snapshot) =>
-      assertCaseMutationOnSnapshot(snapshot, deps, identity, target),
+      assertCaseMutationOnSnapshot(snapshot, deps, identity, target, tenantId),
     write
   })
 }

@@ -103,6 +103,7 @@ import {
   InMemoryApiCreation,
   InMemoryDatabase,
   PostgresApiCreation,
+  PostgresRuntimeApprovalDecision,
   PostgresAuthorizedWrites,
   type ApiCreationPort,
   OutboxRepository,
@@ -451,6 +452,16 @@ export function buildServer(options: BuildServerOptions = {}) {
   const operationalApprovalAuthority =
     options.operationalApprovalAuthority ??
     createOperationalApprovalAuthority(options.persistence)
+  const runtimeApprovalDecision =
+    options.persistence?.kind === 'postgres-pool' &&
+    operationalApprovalAuthority instanceof PostgresApprovalAuthority &&
+    operationalExecution instanceof PostgresOperationalExecutionStore
+      ? new PostgresRuntimeApprovalDecision(
+          options.persistence.pool,
+          operationalApprovalAuthority,
+          operationalExecution
+        )
+      : null
   const operationalApprovals = new DurableApprovalEngineAdapter(
     operationalApprovalAuthority
   )
@@ -824,6 +835,18 @@ export function buildServer(options: BuildServerOptions = {}) {
    * PostgreSQL writers; any other pairing would commit the write without the
    * authorization unit, so it is refused before any write.
    */
+  const assertRuntimeApprovalDecisionComposition = (): void => {
+    if (
+      caseAuthority instanceof PostgresCaseAuthority &&
+      !runtimeApprovalDecision
+    ) {
+      throw new DomainError(
+        'configuration_error',
+        'Runtime approval decisions are not available in this persistence composition'
+      )
+    }
+  }
+
   const assertAuthorizedWriteComposition = (): void => {
     if (
       caseAuthority instanceof PostgresCaseAuthority &&
@@ -1389,165 +1412,199 @@ export function buildServer(options: BuildServerOptions = {}) {
           kind: 'execution',
           executionId: params.executionId
         })
-        const execution = await operationalExecution.get(
-          tenantId,
-          params.executionId
-        )
-        if (!execution) {
-          throw new DomainError('not_found', 'Execution not found')
-        }
-        if (execution.approvalId !== params.approvalId) {
-          throw new DomainError('not_found', 'Approval not found')
-        }
-        let approval = await operationalApprovalAuthority.get(
-          tenantId,
-          params.approvalId
-        )
-        if (
-          approval.executionRef !== execution.id ||
-          approval.agentId !== execution.request.runtime.agent.id ||
-          approval.agentVersion !== execution.request.runtime.agent.version ||
-          approval.correlationId !== execution.request.runtime.correlationId
-        ) {
-          throw new DomainError('not_found', 'Approval not found')
-        }
         const decision = body.decision
         const decisionReason = body.note
         const decisionActorType =
           identity.role === 'Supervisor' ? ('Supervisor' as const) : 'Approver'
-        if (
-          execution.state !== 'WAITING_APPROVAL' &&
-          (approval.status === 'PENDING' || approval.status === 'REQUESTED')
-        ) {
-          throw new DomainError(
-            'conflict',
-            'Execution is no longer waiting for this approval decision'
-          )
-        }
-        if (
-          execution.state === 'WAITING_APPROVAL' &&
-          ['RESERVED', 'EXECUTING', 'EXECUTED'].includes(approval.status)
-        ) {
-          throw new DomainError(
-            'conflict',
-            'Approval has already entered effect execution'
-          )
-        }
-        if (approval.status === 'REQUESTED') {
-          try {
-            approval = await operationalApprovalAuthority.submit(
-              tenantId,
-              approval.approvalId,
-              approval.operatorId
-            )
-          } catch (error) {
-            const refreshed = await operationalApprovalAuthority.get(
-              tenantId,
-              approval.approvalId
-            )
-            if (refreshed.status === 'REQUESTED') throw error
-            approval = refreshed
-          }
-        }
-        if (decision === 'APPROVED') {
-          if (approval.status === 'PENDING') {
-            approval = await operationalApprovalAuthority.approve(
-              tenantId,
-              approval.approvalId,
-              {
-                approverId: identity.operatorId,
-                decisionActorType,
-                decisionCorrelationId: correlationId,
-                commandKey,
-                ...(decisionReason !== undefined
-                  ? { reason: decisionReason }
-                  : {})
-              }
-            )
-          } else if (
-            !['APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED'].includes(
-              approval.status
-            )
-          ) {
-            throw new DomainError(
-              'conflict',
-              'Approval is not available for approval'
-            )
-          }
-        } else if (approval.status === 'PENDING') {
-          approval = await operationalApprovalAuthority.reject(
-            tenantId,
-            approval.approvalId,
-            {
-              approverId: identity.operatorId,
-              decisionActorType,
-              decisionCorrelationId: correlationId,
-              commandKey,
-              ...(decisionReason !== undefined
-                ? { reason: decisionReason }
-                : {})
-            }
-          )
-        } else if (approval.status !== 'REJECTED') {
-          throw new DomainError(
-            'conflict',
-            'Approval is not available for rejection'
-          )
-        }
-
-        const decisionActorId = approval.approverId
-        const persistedDecisionActorType = approval.decisionActorType
-        const persistedDecisionCorrelation = approval.decisionCorrelationId
-        const persistedDecisionCommandKey = approval.decisionCommandKey
-        if (
-          !decisionActorId ||
-          !persistedDecisionActorType ||
-          !persistedDecisionCorrelation ||
-          !persistedDecisionCommandKey
-        ) {
-          throw new DomainError(
-            'conflict',
-            'Approval decision causality is incomplete'
-          )
-        }
-
-        const resolved = await operationalExecution.resolveApproval({
+        assertRuntimeApprovalDecisionComposition()
+        const executionId = params.executionId
+        const approvalId = params.approvalId
+        // SPEC 0262: the case policy and the whole decision share one unit
+        // (PostgreSQL: one transaction; memory: the authority queue).
+        const { approval, resolved } = await runAuthorizedCaseMutation(
+          caseRouteDeps,
+          identity,
           tenantId,
-          executionId: execution.id,
-          approvalId: approval.approvalId,
-          actorId: decisionActorId,
-          decision,
-          ...(approval.decisionReason !== undefined
-            ? { reason: approval.decisionReason }
-            : {})
-        })
-        // AUD19-003: the decision audit event is appended unconditionally.
-        // `audit.append` deduplicates `approval_decision` by
-        // (tenant, approvalId, decision), so retries after a crash between
-        // resume and audit converge on exactly one event instead of losing
-        // it (previous code gated on the stale pre-resolve state) or
-        // duplicating it.
-        await audit.append(
-          {
-            type: 'approval_decision',
-            actorType: persistedDecisionActorType,
-            actorId: decisionActorId,
-            correlationId: persistedDecisionCorrelation,
-            policyVersion: approval.policyVersion,
-            payload: {
+          { kind: 'execution', executionId: executionId },
+          async (unit) => {
+            if (runtimeApprovalDecision && unit.authorizeOnClient) {
+              const result = await runtimeApprovalDecision.decide(
+                {
+                  tenantId,
+                  executionId: executionId,
+                  approvalId: approvalId,
+                  verdict: decision,
+                  actorId: identity.operatorId,
+                  decisionActorType,
+                  correlationId,
+                  commandKey,
+                  ...(decisionReason !== undefined
+                    ? { reason: decisionReason }
+                    : {})
+                },
+                { authorize: unit.authorizeOnClient }
+              )
+              return { approval: result.approval, resolved: result.execution }
+            }
+            const execution = await operationalExecution.get(
+              tenantId,
+              executionId
+            )
+            if (!execution) {
+              throw new DomainError('not_found', 'Execution not found')
+            }
+            if (execution.approvalId !== approvalId) {
+              throw new DomainError('not_found', 'Approval not found')
+            }
+            let approval = await operationalApprovalAuthority.get(
+              tenantId,
+              approvalId
+            )
+            if (
+              approval.executionRef !== execution.id ||
+              approval.agentId !== execution.request.runtime.agent.id ||
+              approval.agentVersion !==
+                execution.request.runtime.agent.version ||
+              approval.correlationId !== execution.request.runtime.correlationId
+            ) {
+              throw new DomainError('not_found', 'Approval not found')
+            }
+            if (
+              execution.state !== 'WAITING_APPROVAL' &&
+              (approval.status === 'PENDING' || approval.status === 'REQUESTED')
+            ) {
+              throw new DomainError(
+                'conflict',
+                'Execution is no longer waiting for this approval decision'
+              )
+            }
+            if (
+              execution.state === 'WAITING_APPROVAL' &&
+              ['RESERVED', 'EXECUTING', 'EXECUTED'].includes(approval.status)
+            ) {
+              throw new DomainError(
+                'conflict',
+                'Approval has already entered effect execution'
+              )
+            }
+            if (approval.status === 'REQUESTED') {
+              try {
+                approval = await operationalApprovalAuthority.submit(
+                  tenantId,
+                  approval.approvalId,
+                  approval.operatorId
+                )
+              } catch (error) {
+                const refreshed = await operationalApprovalAuthority.get(
+                  tenantId,
+                  approval.approvalId
+                )
+                if (refreshed.status === 'REQUESTED') throw error
+                approval = refreshed
+              }
+            }
+            if (decision === 'APPROVED') {
+              if (approval.status === 'PENDING') {
+                approval = await operationalApprovalAuthority.approve(
+                  tenantId,
+                  approval.approvalId,
+                  {
+                    approverId: identity.operatorId,
+                    decisionActorType,
+                    decisionCorrelationId: correlationId,
+                    commandKey,
+                    ...(decisionReason !== undefined
+                      ? { reason: decisionReason }
+                      : {})
+                  }
+                )
+              } else if (
+                !['APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED'].includes(
+                  approval.status
+                )
+              ) {
+                throw new DomainError(
+                  'conflict',
+                  'Approval is not available for approval'
+                )
+              }
+            } else if (approval.status === 'PENDING') {
+              approval = await operationalApprovalAuthority.reject(
+                tenantId,
+                approval.approvalId,
+                {
+                  approverId: identity.operatorId,
+                  decisionActorType,
+                  decisionCorrelationId: correlationId,
+                  commandKey,
+                  ...(decisionReason !== undefined
+                    ? { reason: decisionReason }
+                    : {})
+                }
+              )
+            } else if (approval.status !== 'REJECTED') {
+              throw new DomainError(
+                'conflict',
+                'Approval is not available for rejection'
+              )
+            }
+
+            const decisionActorId = approval.approverId
+            const persistedDecisionActorType = approval.decisionActorType
+            const persistedDecisionCorrelation = approval.decisionCorrelationId
+            const persistedDecisionCommandKey = approval.decisionCommandKey
+            if (
+              !decisionActorId ||
+              !persistedDecisionActorType ||
+              !persistedDecisionCorrelation ||
+              !persistedDecisionCommandKey
+            ) {
+              throw new DomainError(
+                'conflict',
+                'Approval decision causality is incomplete'
+              )
+            }
+
+            const resolved = await operationalExecution.resolveApproval({
               tenantId,
               executionId: execution.id,
               approvalId: approval.approvalId,
-              decision: decision.toLowerCase(),
-              reason: approval.decisionReason ?? null,
-              previousState: execution.state,
-              nextState: resolved.state,
-              payloadHash: approval.payloadHash,
-              commandKey: persistedDecisionCommandKey,
-              operationKey: approval.operationKey ?? null
-            }
-          },
-          tenantId
+              actorId: decisionActorId,
+              decision,
+              ...(approval.decisionReason !== undefined
+                ? { reason: approval.decisionReason }
+                : {})
+            })
+            // AUD19-003: the decision audit event is appended unconditionally.
+            // `audit.append` deduplicates `approval_decision` by
+            // (tenant, approvalId, decision), so retries after a crash between
+            // resume and audit converge on exactly one event instead of losing
+            // it (previous code gated on the stale pre-resolve state) or
+            // duplicating it.
+            await audit.append(
+              {
+                type: 'approval_decision',
+                actorType: persistedDecisionActorType,
+                actorId: decisionActorId,
+                correlationId: persistedDecisionCorrelation,
+                policyVersion: approval.policyVersion,
+                payload: {
+                  tenantId,
+                  executionId: execution.id,
+                  approvalId: approval.approvalId,
+                  decision: decision.toLowerCase(),
+                  reason: approval.decisionReason ?? null,
+                  previousState: execution.state,
+                  nextState: resolved.state,
+                  payloadHash: approval.payloadHash,
+                  commandKey: persistedDecisionCommandKey,
+                  operationKey: approval.operationKey ?? null
+                }
+              },
+              tenantId
+            )
+            return { approval, resolved }
+          }
         )
         reply
           .code(decision === 'APPROVED' ? 202 : 200)

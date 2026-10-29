@@ -129,7 +129,7 @@ describe('durable correlation without PII (AUD19-009)', () => {
           reason: 'waiting for correlation proof'
         })
         const server = buildServer({
-          persistence: { kind: 'postgres', client: pool as never },
+          persistence: { kind: 'postgres-pool', pool: pool as never },
           operationalExecution: store as never,
           operationalApprovalAuthority: authority as never
         })
