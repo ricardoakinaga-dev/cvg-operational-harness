@@ -334,7 +334,7 @@ export async function assertPostgresWorkerPreflight(
          pg_get_expr(d.adbin,d.adrelid) AS default_expression
        FROM pg_attribute a LEFT JOIN pg_attrdef d
          ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-       WHERE a.attrelid=to_regclass('operational_effect_journal')
+       WHERE a.attrelid=to_regclass(format('%I.%I', current_schema(), 'operational_effect_journal'))
          AND NOT a.attisdropped AND a.attname=ANY($1::text[])
        ORDER BY a.attname`,
       [['result_storage_payload', 'result_storage_version']]
@@ -357,7 +357,7 @@ export async function assertPostgresWorkerPreflight(
          (t.tgqual IS NULL AND t.tgnargs=0) AS unconditional,p.proconfig AS function_config
        FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
          JOIN pg_class c ON c.oid=t.tgrelid
-       WHERE t.tgrelid=to_regclass('operational_effect_journal')
+       WHERE t.tgrelid=to_regclass(format('%I.%I', current_schema(), 'operational_effect_journal'))
          AND NOT t.tgisinternal AND t.tgname='journal_result_storage_guard'`
     )
     if (journalColumns.rows.length || journalGuards.rows.length) {

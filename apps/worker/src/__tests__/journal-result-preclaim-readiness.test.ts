@@ -204,7 +204,9 @@ function fixture(options: FixtureOptions = {}) {
     }
     if (sql.includes('FROM pg_attribute')) {
       events.push('journal-columns')
-      expect(sql).toContain("to_regclass('operational_effect_journal')")
+      expect(sql).toContain(
+        "to_regclass(format('%I.%I', current_schema(), 'operational_effect_journal'))"
+      )
       expect(sql).toContain('NOT a.attisdropped')
       expect(parameters).toEqual([
         ['result_storage_payload', 'result_storage_version']
@@ -214,7 +216,9 @@ function fixture(options: FixtureOptions = {}) {
     }
     if (sql.includes('FROM pg_trigger t')) {
       events.push('journal-guard')
-      expect(sql).toContain("to_regclass('operational_effect_journal')")
+      expect(sql).toContain(
+        "to_regclass(format('%I.%I', current_schema(), 'operational_effect_journal'))"
+      )
       expect(sql).toContain("t.tgname='journal_result_storage_guard'")
       expect(sql).toContain('NOT t.tgisinternal')
       expect(sql).toContain('p.pronamespace=c.relnamespace')
