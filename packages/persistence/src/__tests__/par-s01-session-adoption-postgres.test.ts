@@ -756,9 +756,8 @@ describe.skipIf(!url)('PAR-S01 slice 7: adoption and compatibility', () => {
               sql.includes('header_json') &&
               v?.[1] === 's-0'
             )
-              throw Object.assign(new Error('statement timeout'), {
-                code: '57014'
-              })
+              // A real failure: it aborts the verification transaction unless the entry is isolated.
+              return admin.query('SELECT 1/0')
             return admin.query(sql, v as never)
           }
         }
@@ -768,7 +767,7 @@ describe.skipIf(!url)('PAR-S01 slice 7: adoption and compatibility', () => {
             { schemaName: name },
             entries
           )
-        ).toEqual([`${tenants[0]}/s-0: error 57014`])
+        ).toEqual([`${tenants[0]}/s-0: error 22012`])
       } finally {
         await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
       }
