@@ -261,8 +261,9 @@ function createExecutor(
     let url: string
     try {
       signal.throwIfAborted()
+      // SPEC 0263 §2: the preliminary resolution shares the operation signal.
       url = (
-        await resolveAndGuardOutboundUrl(parsed.url, guard, deps)
+        await resolveAndGuardOutboundUrl(parsed.url, guard, { ...deps, signal })
       ).url.toString()
       signal.throwIfAborted()
     } catch {

@@ -253,10 +253,116 @@ export interface GuardedOutboundUrl {
 
 const MAX_EGRESS_REDIRECTS = 5
 
-async function defaultDnsLookup(hostname: string): Promise<string[]> {
+async function defaultDnsLookup(
+  hostname: string,
+  signal: AbortSignal | undefined
+): Promise<string[]> {
   const { lookup } = await import('node:dns/promises')
+  // SPEC 0263 §3: an abort observed while the module loaded never starts
+  // getaddrinfo; no await between this check and the native lookup.
+  throwIfCancelled(signal)
   const records = await lookup(hostname, { all: true, verbatim: true })
   return records.map((record) => record.address)
+}
+
+/**
+ * SPEC 0263 §4: cancellation is a constant AbortError, or a TimeoutError
+ * when that is the recognised reason. A custom reason is never surfaced.
+ */
+function cancellationError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason
+  const timedOut =
+    typeof reason === 'object' &&
+    reason !== null &&
+    (reason as { name?: unknown }).name === 'TimeoutError'
+  // A plain Error named like the DOM exceptions: an Error in every realm
+  // (jsdom's DOMException is not), which is what the mappers check.
+  const error = new Error(
+    timedOut ? 'The operation timed out' : 'The operation was aborted'
+  )
+  error.name = timedOut ? 'TimeoutError' : 'AbortError'
+  return error
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw cancellationError(signal)
+}
+
+/** A present but invalid signal is a TypeError before any I/O. */
+function operationSignal(value: unknown): AbortSignal | undefined {
+  if (value === undefined || value === null) return undefined
+  if (
+    typeof value === 'object' &&
+    typeof (value as { aborted?: unknown }).aborted === 'boolean' &&
+    typeof (value as { addEventListener?: unknown }).addEventListener ===
+      'function' &&
+    typeof (value as { removeEventListener?: unknown }).removeEventListener ===
+      'function'
+  ) {
+    return value as AbortSignal
+  }
+  throw new TypeError('signal must be an AbortSignal')
+}
+
+/**
+ * SPEC 0263 §3: wait for `thunk` while honouring `signal`. The thunk is never
+ * invoked once the signal is aborted (checked again after the listener is
+ * installed), its sync throw and late settlement are always observed, the
+ * listener is removed on every exit, and a value that arrives after the abort
+ * is handed to `onLateValue` for cleanup instead of being used.
+ */
+function awaitWithSignal<T>(
+  thunk: () => T | PromiseLike<T>,
+  signal: AbortSignal | undefined,
+  onLateValue?: (value: T) => void
+): Promise<T> {
+  if (!signal) {
+    try {
+      return Promise.resolve(thunk())
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+  if (signal.aborted) return Promise.reject(cancellationError(signal))
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const settle = (finish: () => void): boolean => {
+      if (settled) return false
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      finish()
+      return true
+    }
+    const onAbort = (): void => {
+      settle(() => reject(cancellationError(signal)))
+    }
+    signal.addEventListener('abort', onAbort)
+    if (signal.aborted) {
+      onAbort()
+      return
+    }
+    let result: T | PromiseLike<T>
+    try {
+      result = thunk()
+    } catch (error) {
+      settle(() => reject(error))
+      return
+    }
+    Promise.resolve(result).then(
+      (value) => {
+        if (!settle(() => resolve(value)) && onLateValue) {
+          try {
+            onLateValue(value)
+          } catch {
+            // Cleanup of a discarded late value never surfaces.
+          }
+        }
+      },
+      (error: unknown) => {
+        settle(() => reject(error))
+      }
+    )
+  })
 }
 
 function stripBrackets(hostname: string): string {
@@ -273,8 +379,11 @@ function stripBrackets(hostname: string): string {
 export async function resolveAndGuardOutboundUrl(
   rawUrl: string,
   options: EgressGuardOptions = {},
-  deps: { dnsLookup?: EgressDns['lookup'] } = {}
+  deps: { dnsLookup?: EgressDns['lookup']; signal?: AbortSignal } = {}
 ): Promise<GuardedOutboundUrl> {
+  const signal = operationSignal(deps.signal)
+  // An aborted operation resolves nothing, not even a literal IP.
+  throwIfCancelled(signal)
   const checked = evaluateOutboundUrl(rawUrl, options)
   if (!checked.allowed) {
     throw new UnsafeUrlError(checked.reason)
@@ -293,13 +402,21 @@ export async function resolveAndGuardOutboundUrl(
     }
     return { url: checked.url, resolvedAddresses: [hostname] }
   }
-  const lookup = deps.dnsLookup ?? defaultDnsLookup
+  const dnsLookup = deps.dnsLookup
   let addresses: readonly string[]
   try {
-    addresses = await lookup(hostname)
+    addresses = await awaitWithSignal(
+      () =>
+        dnsLookup ? dnsLookup(hostname) : defaultDnsLookup(hostname, signal),
+      signal
+    )
   } catch {
+    // Cancellation is never reported as a DNS failure.
+    throwIfCancelled(signal)
     throw new UnsafeUrlError('dns_resolution_failed')
   }
+  // A resolution that finished after the abort has no authority.
+  throwIfCancelled(signal)
   const verdict = evaluateResolvedAddresses(addresses, options)
   if (!verdict.allowed) {
     throw new UnsafeUrlError(
@@ -321,6 +438,23 @@ function redirectTarget(current: URL, location: string | null): URL | null {
 export interface GuardedFetchResponse {
   status: number
   headers: { get(name: string): string | null }
+  /** Released when the response is discarded (SPEC 0263 §4). */
+  body?: { cancel(reason?: unknown): Promise<unknown> } | null
+}
+
+/**
+ * Starts releasing a discarded response without waiting for it; a cleanup
+ * failure is observed and never replaces the main outcome.
+ */
+function discardResponse(response: GuardedFetchResponse): void {
+  try {
+    const pending = response.body?.cancel()
+    if (pending && typeof pending.then === 'function') {
+      pending.then(undefined, () => undefined)
+    }
+  } catch {
+    // Same rule as a rejected cancel.
+  }
 }
 
 export type BoundFetchImpl<T extends GuardedFetchResponse> = (
@@ -346,29 +480,50 @@ export async function fetchWithSsrfGuard<T extends GuardedFetchResponse>(
   } = {}
 ): Promise<T> {
   const maxRedirects = options.maxRedirects ?? MAX_EGRESS_REDIRECTS
-  let currentGuard = await resolveAndGuardOutboundUrl(rawUrl, options, deps)
+  // SPEC 0263 §2: the caller's composed signal bounds DNS and every hop; no
+  // hop creates or renews a timeout.
+  const signal = operationSignal(init?.signal)
+  const guardDeps = {
+    ...(deps.dnsLookup ? { dnsLookup: deps.dnsLookup } : {}),
+    ...(signal ? { signal } : {})
+  }
+  let currentGuard = await resolveAndGuardOutboundUrl(
+    rawUrl,
+    options,
+    guardDeps
+  )
   let current = currentGuard.url
   for (let hop = 0; ; hop += 1) {
     const requestInit = { ...(init ?? {}), redirect: 'manual' }
-    const response = deps.boundFetchImpl
-      ? await deps.boundFetchImpl(
-          current.toString(),
-          requestInit,
-          currentGuard.resolvedAddresses
-        )
-      : await fetchImpl(current.toString(), requestInit)
+    const target = current.toString()
+    const addresses = currentGuard.resolvedAddresses
+    const boundFetchImpl = deps.boundFetchImpl
+    const response = await awaitWithSignal<T>(
+      () =>
+        boundFetchImpl
+          ? boundFetchImpl(target, requestInit, addresses)
+          : fetchImpl(target, requestInit),
+      signal,
+      discardResponse
+    )
+    if (signal?.aborted) {
+      discardResponse(response)
+      throw cancellationError(signal)
+    }
     if (response.status < 300 || response.status >= 400) return response
+    // A redirect response is released before the next hop is validated.
+    discardResponse(response)
     if (hop >= maxRedirects) {
       throw new UnsafeUrlError('too_many_redirects')
     }
-    const target = redirectTarget(current, response.headers.get('location'))
-    if (!target) {
+    const next = redirectTarget(current, response.headers.get('location'))
+    if (!next) {
       throw new UnsafeUrlError('redirect_without_location')
     }
     currentGuard = await resolveAndGuardOutboundUrl(
-      target.toString(),
+      next.toString(),
       options,
-      deps
+      guardDeps
     )
     current = currentGuard.url
   }
