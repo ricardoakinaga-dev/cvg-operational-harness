@@ -16,6 +16,10 @@ import {
 } from '../operator-session.ts'
 import { hasOperatorSessionCookieName } from '../oidc-routes.ts'
 import { buildServer, buildServerFromEnv } from '../server.ts'
+import {
+  provisionPrincipal,
+  SYNTHETIC_AUTHORITY_VERSION
+} from './case-authorization-fixtures.ts'
 import { SYNTHETIC_TENANT_A } from './support/synthetic-oidc-issuer.ts'
 
 const CONSOLE = 'https://console.synthetic.test'
@@ -189,8 +193,57 @@ describe('SPEC0254 O7 — composition refusals', () => {
         })
         // Fail closed for every role: 503 (no principal authority). SPEC 0262
         // §5: the principal guard answers before the role matrix, so even the
-        // registry's 403 for Operator/Approver is now the same 503.
+        // registry's 403 for Operator/Approver is now the same 503. The matrix
+        // itself, with a current principal, is the companion test below.
         const expected = 503
+        expect(response.statusCode, `${role} ${url}`).toBe(expected)
+      }
+    }
+  })
+
+  it('keeps the role matrix of case, conversation and task readers once a principal is current (companion of the 503 guard)', async () => {
+    const key = {
+      keyId: 'guard-synthetic',
+      secret: randomBytes(32).toString('base64url')
+    }
+    const env: NodeJS.ProcessEnv = {
+      NODE_ENV: 'test',
+      CVG_IDENTITY_MODE: 'trusted',
+      CVG_OPERATOR_IDENTITY_KEYRING: JSON.stringify({ current: key })
+    }
+    const app = (await buildServerFromEnv(env, {
+      operatorIdentityResolver: createConfiguredOperatorIdentityResolver(env)!,
+      casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
+    })) as unknown as App
+    opened.push(app)
+    const roles = ['Operator', 'Approver', 'Supervisor', 'Admin'] as const
+    for (const role of roles) {
+      await provisionPrincipal(app, {
+        tenantId: SYNTHETIC_TENANT_A as never,
+        operatorId: `guard.${role.toLowerCase()}`,
+        role
+      })
+    }
+    for (const role of roles) {
+      for (const url of ['/v1/conversations', '/v1/cases', '/v1/tasks']) {
+        const token = createTrustedOperatorIdentityToken(
+          {
+            operatorId: `guard.${role.toLowerCase()}`,
+            role,
+            tenantId: SYNTHETIC_TENANT_A
+          },
+          key
+        )
+        const response = await app.inject({
+          method: 'GET',
+          url,
+          headers: { 'x-cvg-operator-token': token }
+        })
+        // The registry's matrix: /v1/cases is for Supervisor and Admin only.
+        const expected =
+          url === '/v1/cases' && (role === 'Operator' || role === 'Approver')
+            ? 403
+            : 200
         expect(response.statusCode, `${role} ${url}`).toBe(expected)
       }
     }

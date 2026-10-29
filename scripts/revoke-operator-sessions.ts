@@ -12,14 +12,14 @@
  * environment variable to change that path, no `--test`, no `--force`, and
  * no `DATABASE_URL` is read from the shell.
  */
-import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { Pool } from 'pg'
 import { PostgresCaseAuthority } from '@cvg/persistence'
 import type { TenantId } from '@cvg/platform'
+import { createPool } from './lib/operator-action-connect.ts'
 import {
-  OperatorActionRefusal,
+  artifactSha256,
+  INSTALLED_ARTIFACT_FILES,
   runOperatorAction,
   type DatastoreProfile,
   type DatastoreSession,
@@ -36,6 +36,7 @@ const realFileSystem: OperatorActionFileSystem = {
         isDirectory: stat.isDirectory(),
         isSymlink: stat.isSymbolicLink(),
         uid: stat.uid,
+        nlink: stat.nlink,
         mode: stat.mode & 0o7777,
         size: stat.size
       }
@@ -50,31 +51,7 @@ async function connect(
   connectionText: string,
   expected: DatastoreProfile
 ): Promise<DatastoreSession> {
-  let url: URL
-  try {
-    url = new URL(connectionText)
-  } catch {
-    throw new OperatorActionRefusal('connection file is not a PostgreSQL URL')
-  }
-  // The profile is compared BEFORE any connection is opened.
-  if (
-    !['postgres:', 'postgresql:'].includes(url.protocol) ||
-    url.hostname !== expected.host ||
-    Number(url.port || 5432) !== expected.port ||
-    decodeURIComponent(url.pathname.slice(1)) !== expected.database ||
-    decodeURIComponent(url.username) !== expected.user
-  ) {
-    throw new OperatorActionRefusal(
-      'connection differs from the policy profile'
-    )
-  }
-  const pool = new Pool({
-    connectionString: connectionText,
-    max: 1,
-    connectionTimeoutMillis: 3_000,
-    query_timeout: 10_000,
-    statement_timeout: 10_000
-  })
+  const pool = createPool(connectionText, expected)
   pool.on('error', () => undefined)
   const authority = new PostgresCaseAuthority(pool)
   return {
@@ -96,14 +73,19 @@ async function connect(
 }
 
 async function main(): Promise<void> {
-  const artifact = fileURLToPath(import.meta.url)
+  const root = fileURLToPath(new URL('..', import.meta.url))
   const result = await runOperatorAction(
     {
       fs: realFileSystem,
       euid: process.geteuid?.() ?? -1,
       now: () => new Date(),
       installedArtifactSha256: () =>
-        createHash('sha256').update(readFileSync(artifact)).digest('hex'),
+        artifactSha256(
+          INSTALLED_ARTIFACT_FILES.map((label) => ({
+            label,
+            bytes: readFileSync(`${root}${label}`)
+          }))
+        ),
       connect
     },
     process.argv.slice(2)
