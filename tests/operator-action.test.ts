@@ -105,6 +105,7 @@ function fixture(
         isDirectory: node.stat.kind === 'dir',
         isSymlink: node.stat.kind === 'link',
         uid: node.stat.uid ?? 0,
+        nlink: node.stat.nlink ?? 1,
         mode: node.stat.mode ?? 0o600,
         size: node.content?.length ?? 0
       }
@@ -270,6 +271,24 @@ describe('runOperatorAction', () => {
       {
         [PROOF]: {
           stat: { kind: 'file', uid: 1000, mode: 0o600 },
+          content: Buffer.from('{}')
+        }
+      }
+    ],
+    [
+      'proof with a second hard link',
+      {
+        [PROOF]: {
+          stat: { kind: 'file', uid: 0, mode: 0o600, nlink: 2 },
+          content: Buffer.from('{}')
+        }
+      }
+    ],
+    [
+      'policy with a second hard link',
+      {
+        [OPERATOR_ACTION_POLICY_PATH]: {
+          stat: { kind: 'file', uid: 0, mode: 0o600, nlink: 2 },
           content: Buffer.from('{}')
         }
       }

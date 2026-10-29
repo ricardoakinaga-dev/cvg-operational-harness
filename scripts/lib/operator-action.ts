@@ -51,6 +51,8 @@ export interface FileStat {
   readonly isDirectory: boolean
   readonly isSymlink: boolean
   readonly uid: number
+  /** Hard links to the inode: a second name could outlive the checked path. */
+  readonly nlink: number
   /** Permission bits only (e.g. 0o600). */
   readonly mode: number
   readonly size: number
@@ -216,6 +218,7 @@ export function assertPrivateRootFile(
     refuse(`${label} is not a regular file`)
   }
   if (stat.uid !== 0) refuse(`${label} is not owned by root`)
+  if (stat.nlink !== 1) refuse(`${label} has more than one hard link`)
   if (stat.mode !== 0o600) refuse(`${label} must have mode 0600`)
   if (stat.size > maxBytes) refuse(`${label} is too large`)
   assertTrustedParents(fs, file, label)
@@ -567,4 +570,23 @@ export async function runOperatorAction(
     }
     return { outcome: 'REFUSED', reason: 'unexpected failure before any write' }
   }
+}
+
+/**
+ * Digest of the installed artifact (SPEC 0262 section 6.1): the entry script,
+ * the decision library and the persistence code that performs the write. The
+ * label (a repository-relative path) is part of the digest, so renaming or
+ * swapping files changes it, and the order of `files` does not.
+ */
+export function artifactSha256(
+  files: readonly { readonly label: string; readonly bytes: Buffer }[]
+): string {
+  const lines = files
+    .map(
+      (file) =>
+        `${file.label}\0${createHash('sha256').update(file.bytes).digest('hex')}\n`
+    )
+    .sort()
+  if (lines.length === 0) throw new Error('artifact has no files')
+  return createHash('sha256').update(lines.join(''), 'utf8').digest('hex')
 }

@@ -12,20 +12,34 @@
  * environment variable to change that path, no `--test`, no `--force`, and
  * no `DATABASE_URL` is read from the shell.
  */
-import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { Pool } from 'pg'
 import { PostgresCaseAuthority } from '@cvg/persistence'
 import type { TenantId } from '@cvg/platform'
 import {
-  OperatorActionRefusal,
+  createPool,
+  scrubPgEnvironment
+} from './lib/operator-action-connect.ts'
+import {
+  artifactSha256,
   runOperatorAction,
   type DatastoreProfile,
   type DatastoreSession,
   type FileStat,
   type OperatorActionFileSystem
 } from './lib/operator-action.ts'
+
+/**
+ * The installed artifact: the entry, the decision library, the connection
+ * guard and the persistence code that performs the write (repository-relative).
+ */
+const ARTIFACT_FILES = [
+  'scripts/revoke-operator-sessions.ts',
+  'scripts/lib/operator-action.ts',
+  'scripts/lib/operator-action-connect.ts',
+  'packages/persistence/src/case-authority.ts',
+  'packages/persistence/src/case-authority-postgres.ts'
+] as const
 
 const realFileSystem: OperatorActionFileSystem = {
   lstat(file): FileStat | null {
@@ -36,6 +50,7 @@ const realFileSystem: OperatorActionFileSystem = {
         isDirectory: stat.isDirectory(),
         isSymlink: stat.isSymbolicLink(),
         uid: stat.uid,
+        nlink: stat.nlink,
         mode: stat.mode & 0o7777,
         size: stat.size
       }
@@ -50,31 +65,7 @@ async function connect(
   connectionText: string,
   expected: DatastoreProfile
 ): Promise<DatastoreSession> {
-  let url: URL
-  try {
-    url = new URL(connectionText)
-  } catch {
-    throw new OperatorActionRefusal('connection file is not a PostgreSQL URL')
-  }
-  // The profile is compared BEFORE any connection is opened.
-  if (
-    !['postgres:', 'postgresql:'].includes(url.protocol) ||
-    url.hostname !== expected.host ||
-    Number(url.port || 5432) !== expected.port ||
-    decodeURIComponent(url.pathname.slice(1)) !== expected.database ||
-    decodeURIComponent(url.username) !== expected.user
-  ) {
-    throw new OperatorActionRefusal(
-      'connection differs from the policy profile'
-    )
-  }
-  const pool = new Pool({
-    connectionString: connectionText,
-    max: 1,
-    connectionTimeoutMillis: 3_000,
-    query_timeout: 10_000,
-    statement_timeout: 10_000
-  })
+  const pool = createPool(connectionText, expected)
   pool.on('error', () => undefined)
   const authority = new PostgresCaseAuthority(pool)
   return {
@@ -96,14 +87,22 @@ async function connect(
 }
 
 async function main(): Promise<void> {
-  const artifact = fileURLToPath(import.meta.url)
+  // The shell cannot add to the connection: PG* variables are gone before
+  // anything reads the environment (they are scrubbed again before the Pool).
+  scrubPgEnvironment(process.env)
+  const root = fileURLToPath(new URL('..', import.meta.url))
   const result = await runOperatorAction(
     {
       fs: realFileSystem,
       euid: process.geteuid?.() ?? -1,
       now: () => new Date(),
       installedArtifactSha256: () =>
-        createHash('sha256').update(readFileSync(artifact)).digest('hex'),
+        artifactSha256(
+          ARTIFACT_FILES.map((label) => ({
+            label,
+            bytes: readFileSync(`${root}${label}`)
+          }))
+        ),
       connect
     },
     process.argv.slice(2)
