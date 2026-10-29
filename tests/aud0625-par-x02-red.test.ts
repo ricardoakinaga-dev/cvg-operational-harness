@@ -10,6 +10,7 @@ import type {
 import {
   createLocalSandboxGate,
   detectSandboxCapabilities,
+  LANDLOCK_MIN_ABI,
   type SandboxCapabilities,
   type SandboxProbe
 } from '../packages/sandbox/src/index.ts'
@@ -92,49 +93,115 @@ describe('PAR-X02 controls (pass before and after the BUILD)', () => {
   })
 })
 
-describe('PAR-X02 targets (RED in phase 1)', () => {
-  it.fails(
-    'a kernel release alone is not Landlock: without a ruleset helper the capability is false',
-    () => {
-      // The probe the host uses today answers from the kernel version only.
-      const kernelOnly: SandboxProbe = {
+describe('PAR-X02 targets (RED in phase 1, GREEN after slice 2)', () => {
+  it('a kernel release alone is not Landlock: without a helper-confirmed ABI the capability is false', () => {
+    const kernelOnly: SandboxProbe = {
+      probeBubblewrap: () => true,
+      probeLandlock: () => true
+    }
+    const detected = detectSandboxCapabilities(kernelOnly)
+    expect(detected.landlock).toBe(false)
+    expect(detected.landlockAbi).toBeUndefined()
+  })
+
+  it('a helper-confirmed ABI below the floor is reported but is not Landlock', () => {
+    const detected = detectSandboxCapabilities({
+      probeBubblewrap: () => true,
+      probeLandlock: () => true,
+      probeLandlockAbi: () => LANDLOCK_MIN_ABI - 1
+    })
+    expect(detected.landlockAbi).toBe(LANDLOCK_MIN_ABI - 1)
+    expect(detected.landlock).toBe(false)
+  })
+
+  it('a helper-confirmed ABI at the floor is Landlock', () => {
+    const detected = detectSandboxCapabilities({
+      probeBubblewrap: () => true,
+      probeLandlock: () => false,
+      probeLandlockAbi: () => LANDLOCK_MIN_ABI
+    })
+    expect(detected).toMatchObject({
+      landlock: true,
+      landlockAbi: LANDLOCK_MIN_ABI
+    })
+  })
+
+  it('a probe that throws or answers garbage is never Landlock', () => {
+    for (const probeLandlockAbi of [
+      () => {
+        throw new Error('probe failed')
+      },
+      () => Number.NaN,
+      () => 0,
+      () => 2.5
+    ]) {
+      const detected = detectSandboxCapabilities({
         probeBubblewrap: () => true,
-        probeLandlock: () => true
-      }
-      const detected = detectSandboxCapabilities(kernelOnly) as
-        | (SandboxCapabilities & { landlockAbi?: number })
-        | undefined
-      // Target: `landlock` is true only with a helper-confirmed ABI.
-      expect(detected?.landlockAbi).toBeGreaterThanOrEqual(1)
+        probeLandlock: () => true,
+        probeLandlockAbi: probeLandlockAbi as () => number
+      })
+      expect(detected.landlock).toBe(false)
     }
-  )
+  })
 
-  it.fails(
-    'requireLandlock cannot be honoured in-process: IN_PROCESS is refused even when Landlock is reported',
-    async () => {
-      const outcome = await evaluate(
-        createLocalSandboxGate({
-          capabilities: caps({ landlock: true }),
-          requireLandlock: true
-        }),
-        descriptor({ sandbox: 'IN_PROCESS' })
-      )
-      expect(outcome.kind).toBe('unavailable')
-    }
-  )
+  it('requireLandlock cannot be honoured in-process: IN_PROCESS is refused even when Landlock is reported', async () => {
+    const outcome = await evaluate(
+      createLocalSandboxGate({
+        capabilities: caps({ landlock: true, landlockAbi: 8 }),
+        requireLandlock: true
+      }),
+      descriptor({ sandbox: 'IN_PROCESS' })
+    )
+    expect(outcome.kind).toBe('unavailable')
+  })
 
-  it.fails(
-    'requireLandlock cannot be honoured for in-process workspace tools: WORKSPACE is refused',
-    async () => {
-      const outcome = await evaluate(
-        createLocalSandboxGate({
-          capabilities: caps({ landlock: true }),
-          requireLandlock: true,
-          workspaceBase: workspace()
-        }),
-        descriptor({ sandbox: 'WORKSPACE' })
-      )
-      expect(outcome.kind).toBe('unavailable')
-    }
-  )
+  it('requireLandlock cannot be honoured for in-process workspace tools: WORKSPACE is refused', async () => {
+    const outcome = await evaluate(
+      createLocalSandboxGate({
+        capabilities: caps({ landlock: true, landlockAbi: 8 }),
+        requireLandlock: true,
+        workspaceBase: workspace()
+      }),
+      descriptor({ sandbox: 'WORKSPACE' })
+    )
+    expect(outcome.kind).toBe('unavailable')
+  })
+
+  it('PROCESS with requireLandlock is granted only with Landlock confirmed', async () => {
+    const granted = await evaluate(
+      createLocalSandboxGate({
+        capabilities: caps({ landlock: true, landlockAbi: 8 }),
+        requireLandlock: true
+      }),
+      descriptor({ sandbox: 'PROCESS' })
+    )
+    expect(granted.kind).toBe('allowed')
+    const refused = await evaluate(
+      createLocalSandboxGate({
+        capabilities: caps({ landlock: false }),
+        requireLandlock: true
+      }),
+      descriptor({ sandbox: 'PROCESS' })
+    )
+    expect(refused).toMatchObject({
+      kind: 'unavailable',
+      reason: expect.stringContaining('Landlock ausente')
+    })
+  })
+
+  it('the journal note never claims Landlock for an in-process tool', async () => {
+    const notes: unknown[] = []
+    const outcome = await evaluate(
+      createLocalSandboxGate({
+        capabilities: caps({ landlock: true, landlockAbi: 8 }),
+        workspaceBase: workspace(),
+        journal: (entry) => notes.push(entry)
+      }),
+      descriptor({ sandbox: 'WORKSPACE' })
+    )
+    expect(outcome.kind).toBe('allowed')
+    expect(JSON.stringify(notes)).toContain(
+      'Landlock não se aplica em processo'
+    )
+  })
 })

@@ -1,6 +1,9 @@
 export {
+  createHostProbe,
   detectSandboxCapabilities,
   hostProbe,
+  LANDLOCK_MIN_ABI,
+  probeLandlockAbiWith,
   type SandboxCapabilities,
   type SandboxProbe
 } from './capabilities.ts'

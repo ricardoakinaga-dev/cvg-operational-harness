@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 import { release } from 'node:os'
 import type { SandboxMode } from '@cvg/harness-contracts'
 
@@ -9,7 +10,13 @@ import type { SandboxMode } from '@cvg/harness-contracts'
  */
 export interface SandboxCapabilities {
   readonly bubblewrap: boolean
+  /**
+   * SPEC 0288 (T-1): true only when the Landlock helper confirmed, by syscall,
+   * an ABI at or above LANDLOCK_MIN_ABI. Never inferred from the kernel release.
+   */
   readonly landlock: boolean
+  /** ABI reported by the helper's probe, when one ran. */
+  readonly landlockAbi?: number
   /** Highest mode fully supported here; never a downgrade of a asked mode. */
   readonly mode: SandboxMode | 'unsupported'
   /** Modes supported only with a documented limitation (fail-visible). */
@@ -20,8 +27,14 @@ export interface SandboxCapabilities {
 /** Injectable probe so tests never depend on the host they run on. */
 export interface SandboxProbe {
   probeBubblewrap(): boolean
+  /** Kept for compatibility; a boolean alone never makes `landlock` true (SPEC 0288). */
   probeLandlock(): boolean
+  /** SPEC 0288: the ABI the Landlock helper read from the kernel, if any. */
+  probeLandlockAbi?(): number | undefined
 }
+
+/** SPEC 0288 D-B: rename/link (REFER) and truncate must be enforceable. */
+export const LANDLOCK_MIN_ABI = 3
 
 const LANDLOCK_MIN_KERNEL = [5, 13] as const
 
@@ -45,6 +58,43 @@ function kernelSupportsLandlock(): boolean {
  * Host probe: bubblewrap must both exist and successfully close a namespace
  * (a mere `--version` would not prove user/mount namespaces work here).
  */
+/**
+ * SPEC 0288: asks the native helper for the ABI (`--probe`). The helper path is
+ * host composition, absolute, and nothing else reaches the child (no env).
+ */
+export function probeLandlockAbiWith(helper: string): number | undefined {
+  if (!isAbsolute(helper)) return undefined
+  try {
+    const result = spawnSync(helper, ['--probe', '--status-fd', '3'], {
+      stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+      timeout: 5000,
+      env: {},
+      cwd: '/'
+    })
+    if (result.status !== 0) return undefined
+    const raw = result.output[3]?.toString('utf8') ?? ''
+    const abi = (JSON.parse(raw) as { abi?: unknown }).abi
+    return typeof abi === 'number' && Number.isSafeInteger(abi) && abi >= 1
+      ? abi
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Host probe with the Landlock helper the composition installed (SPEC 0288). */
+export function createHostProbe(
+  options: { readonly landlockHelper?: string } = {}
+): SandboxProbe {
+  const helper = options.landlockHelper
+  return {
+    probeBubblewrap: () => hostProbe.probeBubblewrap(),
+    probeLandlock: () => kernelSupportsLandlock(),
+    probeLandlockAbi: () =>
+      helper === undefined ? undefined : probeLandlockAbiWith(helper)
+  }
+}
+
 export const hostProbe: SandboxProbe = {
   probeBubblewrap(): boolean {
     try {
@@ -77,17 +127,23 @@ export function detectSandboxCapabilities(
   probe: SandboxProbe = hostProbe
 ): SandboxCapabilities {
   let bubblewrap = false
-  let landlock = false
+  let landlockAbi: number | undefined
   try {
     bubblewrap = probe.probeBubblewrap()
   } catch {
     bubblewrap = false
   }
   try {
-    landlock = probe.probeLandlock()
+    const abi = probe.probeLandlockAbi?.()
+    landlockAbi =
+      typeof abi === 'number' && Number.isSafeInteger(abi) && abi >= 1
+        ? abi
+        : undefined
   } catch {
-    landlock = false
+    landlockAbi = undefined
   }
+  // SPEC 0288 T-1: only a helper-confirmed ABI at or above the floor counts.
+  const landlock = landlockAbi !== undefined && landlockAbi >= LANDLOCK_MIN_ABI
 
   const partial: SandboxMode[] = []
   const reasons: string[] = []
@@ -105,6 +161,7 @@ export function detectSandboxCapabilities(
   return {
     bubblewrap,
     landlock,
+    ...(landlockAbi !== undefined ? { landlockAbi } : {}),
     mode,
     partial,
     ...(reasons.length > 0 ? { reason: reasons.join('; ') } : {})

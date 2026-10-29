@@ -1,6 +1,12 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { closeSync, existsSync, mkdtempSync, openSync, rmSync } from 'node:fs'
 import { createServer, type Server } from 'node:net'
+import {
+  createHostProbe,
+  detectSandboxCapabilities,
+  LANDLOCK_MIN_ABI,
+  probeLandlockAbiWith
+} from '../capabilities.ts'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -162,6 +168,20 @@ describe.skipIf(!cc || !kernelAbi())(
         applied: false,
         error: 'usage'
       })
+    })
+
+    it('slice 2: the host probe reads the ABI through the real helper', () => {
+      const abi = probeLandlockAbiWith(helper)
+      expect(abi).toBeGreaterThanOrEqual(LANDLOCK_MIN_ABI)
+      const detected = detectSandboxCapabilities(
+        createHostProbe({ landlockHelper: helper })
+      )
+      expect(detected).toMatchObject({ landlock: true, landlockAbi: abi })
+      // Without a configured helper, the same host is honestly not Landlock.
+      expect(detectSandboxCapabilities(createHostProbe()).landlock).toBe(false)
+      // A relative or missing helper path is never trusted.
+      expect(probeLandlockAbiWith('cvg-landlock-exec')).toBeUndefined()
+      expect(probeLandlockAbiWith(join(dir, 'missing'))).toBeUndefined()
     })
 
     it('XL01: below the minimum ABI the helper refuses and never runs the payload', async () => {

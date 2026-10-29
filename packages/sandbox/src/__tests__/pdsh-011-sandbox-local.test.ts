@@ -27,7 +27,9 @@ const probe = (
     if (throwBubblewrap) throw new Error('prova falhou')
     return bubblewrap
   },
-  probeLandlock: () => landlock
+  probeLandlock: () => landlock,
+  // SPEC 0288: Landlock counts only with a helper-confirmed ABI.
+  probeLandlockAbi: () => (landlock ? 8 : undefined)
 })
 
 const caps = (
