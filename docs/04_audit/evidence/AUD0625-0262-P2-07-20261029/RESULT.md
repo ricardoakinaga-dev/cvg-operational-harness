@@ -13,7 +13,7 @@ Revisão de origem: `AUD0625-REVIEW-0262-S345-D9-20261029`.
 - O script usa só `createPool`. Limite assumido: o perfil da política não tem
   campo de TLS, então `ssl` é `false` fixo (emenda da SPEC se o datastore exigir
   TLS); o P2 pedia "ssl a partir do perfil" e o perfil não o contém.
-- Testes (`tests/operator-action-connect.test.ts`, 33): scrub (só nomes saem),
+- Testes (`tests/operator-action-connect.test.ts`, 27): scrub (só nomes saem),
   config explícita, 9 URLs com query/fragmento recusadas, 6 divergências de
   perfil recusadas, `createPool` com shell hostil resolve para o perfil nos
   parâmetros reais do `pg`, e um controle que prova que sem o scrub o `pg`
