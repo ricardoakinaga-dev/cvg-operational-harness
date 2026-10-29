@@ -10,6 +10,7 @@ import {
   TENANT_ONLY_TABLES,
   TENANT_READ_INSERT_TABLES,
   TENANT_SCHEMA_TABLES,
+  isAcceptedMigrationChecksum,
   readPostgresMigrationSql,
   type PostgresQueryable
 } from '@cvg/persistence'
@@ -376,7 +377,11 @@ export async function assertTenantIsolationMigrationState(
       baselineFields.some((field) => field === null || field === undefined)
     if (
       !migration ||
-      migration.checksum !== expectedChecksum ||
+      !isAcceptedMigrationChecksum(
+        version,
+        migration.checksum,
+        expectedChecksum
+      ) ||
       !Number.isFinite(appliedAt) ||
       appliedAt < previousAppliedAt ||
       baselineIsPartial

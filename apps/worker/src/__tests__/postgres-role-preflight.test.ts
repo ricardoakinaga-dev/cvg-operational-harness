@@ -6,6 +6,7 @@ import type { TenantId } from '@cvg/platform'
 import {
   PostgresEffectJournal,
   runPostgresMigrations,
+  supersededMigrationChecksums,
   TENANT_ONLY_TABLES,
   TENANT_SCHEMA_TABLES,
   tenantRuntimeGrantPrivileges,
@@ -506,6 +507,46 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
       ).toContain('SUCCEEDED')
     } finally {
       await runtime.close()
+    }
+  })
+
+  it('SPEC 0271: the worker preflight accepts the previous 0021 checksum and refuses an unknown one', async () => {
+    const guard = '0021_approval_decision_audit_dedupe'
+    const previous = supersededMigrationChecksums[guard]?.[0] as string
+    expect(previous).toBeDefined()
+    const role = await createRole(
+      'checksum',
+      'NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION'
+    )
+    await grantValidWorkerPrivileges(role)
+    const pool = poolFor(role)
+    const original = (
+      await admin.query<{ checksum: string }>(
+        `SELECT checksum FROM ${schema}.schema_migrations WHERE version = $1`,
+        [guard]
+      )
+    ).rows[0]?.checksum as string
+    const setChecksum = (checksum: string) =>
+      admin.query(
+        `UPDATE ${schema}.schema_migrations SET checksum = $2 WHERE version = $1`,
+        [guard, checksum]
+      )
+    const options = { tenantId: tenant, requiredMigrations: [guard] }
+    try {
+      await expect(
+        assertPostgresWorkerPreflight(pool, options)
+      ).resolves.toBeUndefined()
+      await setChecksum(previous)
+      await expect(
+        assertPostgresWorkerPreflight(pool, options)
+      ).resolves.toBeUndefined()
+      await setChecksum('f'.repeat(64))
+      await expect(
+        assertPostgresWorkerPreflight(pool, options)
+      ).rejects.toThrow(`PostgreSQL worker migration is not verified: ${guard}`)
+    } finally {
+      await setChecksum(original)
+      await pool.end().catch(() => undefined)
     }
   })
 
