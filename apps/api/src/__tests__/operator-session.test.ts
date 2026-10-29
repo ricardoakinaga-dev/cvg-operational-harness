@@ -486,6 +486,33 @@ describe('REM21-005 trusted operator session API', () => {
     expect(second.statusCode).toBe(200)
     expect(calls).toEqual({ replace: 1, switchIdentity: 0 })
     const b = cookieOf(second)
+    // A principal that moves between the session boundary and the handler
+    // (after the hook's read) is never a rotation of the old family.
+    const spy = vi
+      .spyOn(app.caseAuthority, 'readSnapshot')
+      .mockImplementationOnce(async (...args) => {
+        const result = await (
+          Object.getPrototypeOf(app.caseAuthority).readSnapshot as (
+            ...a: unknown[]
+          ) => Promise<unknown>
+        ).apply(app.caseAuthority, args)
+        const row = await app.caseAuthority.readSnapshot(
+          identity.tenantId as never,
+          (snapshot) => snapshot.principal(identity.operatorId)
+        )
+        await provisionPrincipal(app, {
+          tenantId: identity.tenantId as never,
+          operatorId: identity.operatorId,
+          role: 'Supervisor',
+          expectedRevision: row!.revision
+        })
+        return result as never
+      })
+    const racing = await login(b)
+    spy.mockRestore()
+    expect(racing.statusCode).toBe(200)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 1 })
+    const racingCookie = cookieOf(racing)
     // The principal moves (re-registered under a new matrix version).
     const current = await app.caseAuthority.readSnapshot(
       identity.tenantId as never,
@@ -501,15 +528,15 @@ describe('REM21-005 trusted operator session API', () => {
     const stale = await app.inject({
       method: 'GET',
       url: PROTECTED_PROBE,
-      headers: { cookie: b }
+      headers: { cookie: racingCookie }
     })
     expect(stale.statusCode).toBe(401)
     expect(String(stale.headers['set-cookie'])).toContain('Max-Age=0')
     // A new bootstrap on the moved revision is a new family, never a rotation.
-    const third = await login(b)
+    const third = await login(racingCookie)
     expect(third.statusCode).toBe(200)
-    expect(calls).toEqual({ replace: 1, switchIdentity: 1 })
-    expect(counter).toBe(1)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 2 })
+    expect(counter).toBe(2)
     const fresh = await app.inject({
       method: 'GET',
       url: PROTECTED_PROBE,

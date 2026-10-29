@@ -945,10 +945,29 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
   it('binds the created session to the revision of the principal the login made current', async () => {
     const h = await harness()
     const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
+    // A principal already at revision 3 (e.g. after earlier logins/changes):
+    // the login keeps it (matrix row 8) and the cookie binds exactly 3.
+    const operatorId = expectedOperatorId(ISSUER, user.sub)
+    for (
+      let expectedRevision = 0;
+      expectedRevision < 3;
+      expectedRevision += 1
+    ) {
+      await h.app.caseAuthority.applyVerifiedPrincipalState({
+        tenantId: SYNTHETIC_TENANT_A as never,
+        operatorId,
+        role: 'Operator',
+        active: true,
+        expectedRevision,
+        authorityVersion: h.authorityVersion,
+        proofRef: 'synthetic-proof:seed',
+        identitySource: 'verified_adapter'
+      })
+    }
     await login(h, user)
-    const current = await principal(h, expectedOperatorId(ISSUER, user.sub))
-    expect(current?.revision).toBe(1)
-    expect(h.sessions.lastPrincipalRevision).toBe(1)
+    const current = await principal(h, operatorId)
+    expect(current?.revision).toBe(3)
+    expect(h.sessions.lastPrincipalRevision).toBe(3)
   })
 
   it('lands on indisponivel without a session after two principal conflicts in a row', async () => {
