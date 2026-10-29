@@ -361,22 +361,54 @@ describe('SPEC0176 AUTH02 — tenant-wide roles, tenants and identity', () => {
       return { cookie: String(response.headers['set-cookie']).split(';')[0]! }
     }
 
+    // SPEC 0262 §3: a session is created only for a current principal, so
+    // without the producer authority the login itself is a 503 and without a
+    // provisioned principal it is a 401.
     const unconfigured = build()
-    const cookie = await login(unconfigured, 'supervisor.trusted', 'Supervisor')
-    const refused = await get(unconfigured, '/v1/conversations', cookie)
+    const token = createTrustedOperatorIdentityToken(
+      {
+        operatorId: 'supervisor.trusted',
+        role: 'Supervisor',
+        tenantId: TENANT
+      },
+      key,
+      Date.now,
+      120
+    )
+    const refused = await unconfigured.inject({
+      method: 'GET',
+      url: '/v1/session',
+      headers: { 'x-cvg-operator-token': token }
+    })
     expect(refused.statusCode).toBe(503)
     expect(refused.json().error.code).toBe('configuration_error')
+    expect(refused.headers['set-cookie']).not.toContain('opsess_')
 
     const app = build(SYNTHETIC_AUTHORITY_VERSION)
     const seeded = await seedConversation(app, 'MARKER_TRUSTED')
-    const supervisor = await login(app, 'supervisor.trusted', 'Supervisor')
-    const missing = await get(app, '/v1/conversations', supervisor)
+    const missingToken = createTrustedOperatorIdentityToken(
+      {
+        operatorId: 'supervisor.trusted',
+        role: 'Supervisor',
+        tenantId: TENANT
+      },
+      key,
+      Date.now,
+      120
+    )
+    const missing = await app.inject({
+      method: 'GET',
+      url: '/v1/session',
+      headers: { 'x-cvg-operator-token': missingToken }
+    })
     expect(missing.statusCode).toBe(401)
+    expect(String(missing.headers['set-cookie'])).not.toContain('opsess_')
 
     await provisionPrincipal(app, {
       operatorId: 'supervisor.trusted',
       role: 'Supervisor'
     })
+    const supervisor = await login(app, 'supervisor.trusted', 'Supervisor')
     const allowed = await get(
       app,
       `/v1/conversations/${seeded.conversationId}/timeline`,

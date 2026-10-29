@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
-import {
-  createTrustedOperatorIdentityResolver,
-  createTrustedOperatorIdentityToken
-} from '../operator-identity.ts'
+import { createTrustedOperatorIdentityResolver } from '../operator-identity.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 
 /**
@@ -90,28 +87,28 @@ describe('AUD-0621 F01 — unassigned Operator case reads', () => {
   })
 
   it('trusted Operator session without assignment never receives 200 case content', async () => {
+    const sessions = createInMemoryOperatorSessionStore()
     const app = buildServer({
       identityMode: 'trusted',
       operatorIdentityResolver: createTrustedOperatorIdentityResolver({
         secret: SIGNING_KEY
       }),
-      operatorSessionStore: createInMemoryOperatorSessionStore(),
+      operatorSessionStore: sessions,
       requireAuthenticatedMutations: false
     })
     try {
-      const token = createTrustedOperatorIdentityToken(
-        { operatorId: 'audit.unassigned', role: 'Operator', tenantId: TENANT },
-        SIGNING_KEY,
-        Date.now,
-        120
-      )
-      const login = await app.inject({
-        method: 'GET',
-        url: '/v1/session',
-        headers: { 'x-cvg-operator-token': token }
+      // SPEC 0262 §3: no session is created without a producer authority, so
+      // the cookie is planted directly and the reads must still fail closed.
+      const record = await sessions.create({
+        identity: {
+          operatorId: 'audit.unassigned',
+          role: 'Operator',
+          tenantId: TENANT
+        },
+        expiresAt: Date.now() + 60_000,
+        principalRevision: 1
       })
-      expect(login.statusCode).toBe(200)
-      const cookie = String(login.headers['set-cookie']).split(';')[0]!
+      const cookie = `cvg_operator_session=${record.sessionId}`
       const seeded = await seedCase(app)
       const responses = await readAll(app, { cookie }, seeded)
       expect(JSON.stringify(responses)).not.toContain(MARKER)

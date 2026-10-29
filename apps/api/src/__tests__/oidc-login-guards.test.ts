@@ -226,13 +226,25 @@ async function guarded(): Promise<Guarded> {
     httpSecurity: { allowedOrigins: [CONSOLE, SIBLING] },
     webhookVerifier: () => true
   } as never)
+  // SPEC 0262 §3: the cookie binds the revision of a current principal.
+  const principal = await app.caseAuthority.applyVerifiedPrincipalState({
+    tenantId: SYNTHETIC_TENANT_A as never,
+    operatorId: 'oidc_guard_supervisor',
+    role: 'Supervisor',
+    active: true,
+    expectedRevision: 0,
+    authorityVersion: VERSION,
+    proofRef: 'synthetic-proof:oidc_guard_supervisor',
+    identitySource: 'synthetic_fixture'
+  })
   const record = await sessions.create({
     identity: {
       operatorId: 'oidc_guard_supervisor',
       role: 'Supervisor',
       tenantId: SYNTHETIC_TENANT_A
     },
-    expiresAt: Date.now() + 60_000
+    expiresAt: Date.now() + 60_000,
+    principalRevision: principal.revision
   })
   return { app, sessions, cookie: `cvg_operator_session=${record.sessionId}` }
 }

@@ -386,7 +386,8 @@ describe('SPEC0254 O3 — OIDC login happy path in process', () => {
         role: 'Supervisor',
         tenantId: SYNTHETIC_TENANT_A
       },
-      expiresAt: Date.now() + 60_000
+      expiresAt: Date.now() + 60_000,
+      principalRevision: 1
     })
     for (const url of ['/v1/cases', '/v1/tasks']) {
       const response = await app.inject({
@@ -515,7 +516,8 @@ describe('SPEC0254 O4 — POST /v1/auth/oidc/start', () => {
         role: 'Operator',
         tenantId: SYNTHETIC_TENANT_A
       },
-      expiresAt: Date.now() + 25
+      expiresAt: Date.now() + 25,
+      principalRevision: 1
     })
     await new Promise((resolve) => setTimeout(resolve, 40))
     const cookies = [
