@@ -62,7 +62,7 @@ nem a D2.
   hash/revisão errados, revisão substituída, outro autor, eco em `uncertain`,
   eco recusado em `not_sent`), recibo de falha parcial, sem apresentação
   concorrente.
-- Suíte do produto: 14 arquivos, 158 testes, 155 passam + 3 esperados falhar
+- Suíte do produto: 14 arquivos, 162 testes, 159 passam + 3 esperados falhar
   (fatia 2). eslint, prettier `--check` e `docs:check-links` OK. `tsc` do
   produto: só o erro preexistente `classification-no-model.test.ts(40,15)`
   (TS7006, referência de projeto do `model-gateway` não construída) e TS6305.
