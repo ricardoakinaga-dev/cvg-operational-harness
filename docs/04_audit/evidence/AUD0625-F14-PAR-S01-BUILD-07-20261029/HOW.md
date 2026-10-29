@@ -26,6 +26,6 @@ Base: `claude/aud0625-wave3` (8a98de177). Barra de qualificação composta: 5 ch
 | 2 | Migration 0034 + guards + testes PG negativos | feita |
 | 3 | Adaptador (lease físico), create/open/read, preflight | feita |
 | 4 | append/flush/close, LOST, commit-unknown | feita |
-| 5 | Ponte `sessionEventStoreForHandle` + teste SDK | |
+| 5 | Ponte `sessionEventStoreForHandle` + teste SDK | feita |
 | 6 | Testemunhos S1–S5 em processos distintos | |
 | 7 | Mutação, campanha PG, rebind de catálogos, revisão | |
