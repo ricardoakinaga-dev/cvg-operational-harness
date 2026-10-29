@@ -524,10 +524,7 @@ export class JourneyRepository implements JourneyRepositoryPort {
       .map(cloneAppointmentDraft)
   }
 
-  createJourneyTask(
-    input: CreateJourneyTaskInput,
-    _options?: JourneyTaskAuthorization
-  ): TaskRecord {
+  createJourneyTask(input: CreateJourneyTaskInput): TaskRecord {
     const tenantId = this.tenant(input.tenantId)
     const previousTasks = this.db.state.tasks
     const previousAudit = this.db.state.auditEvents
