@@ -14,6 +14,9 @@ import type {
 } from '@cvg/channel-gateway'
 import type { PostgresQueryable } from './postgres.ts'
 
+/** SPEC 0282: same default as the channel-gateway journals (no runtime import). */
+const DEFAULT_MAX_ATTEMPTS = 5
+
 export const LEGACY_CHANNEL_HASH_VERSION = 'legacy-local-v1'
 export const SHARED_CHANNEL_HASH_VERSION = 'shared-rfc8785-subset-v1'
 
@@ -66,12 +69,14 @@ interface ChannelEffectRow extends QueryResultRow {
   error_code: ChannelErrorCode | null
   revision: string | number
   updated_at: Date | string
+  /** SPEC 0282 (migration 0031); bigint arrives as a string. */
+  retry_not_before_ms: string | number | null
 }
 
 const channelEffectColumns = `
   tenant_id, channel, operation_kind, idempotency_key, payload_hash,
   hash_version, state, attempt, lease_owner, lease_expires_at, result,
-  error_code, revision, updated_at`
+  error_code, revision, updated_at, retry_not_before_ms`
 
 const MAX_TRANSACTION_RETRIES = 2
 
@@ -103,7 +108,11 @@ function mapChannelEffectRow(row: ChannelEffectRow): ChannelEffectRecord {
     result: row.result,
     errorCode: row.error_code,
     updatedAtMs: toTimeMs(row.updated_at),
-    revision: Number(row.revision)
+    revision: Number(row.revision),
+    notBeforeMs:
+      row.retry_not_before_ms === null || row.retry_not_before_ms === undefined
+        ? null
+        : Number(row.retry_not_before_ms)
   }
 }
 
@@ -151,7 +160,8 @@ function createChannelEffectRecord(
     result: null,
     errorCode: null,
     updatedAtMs: nowMs,
-    revision: 1
+    revision: 1,
+    notBeforeMs: null
   }
 }
 
@@ -161,6 +171,8 @@ type ChannelReserveDecision =
   | { action: 'in_flight'; record: ChannelEffectRecord }
   | { action: 'conflict'; record: ChannelEffectRecord }
   | { action: 'uncertain'; record: ChannelEffectRecord }
+  | { action: 'retry_later'; record: ChannelEffectRecord }
+  | { action: 'exhausted'; record: ChannelEffectRecord }
   | { action: 'version_mismatch' }
 
 /**
@@ -279,6 +291,20 @@ export class PostgresChannelEffectJournal implements ChannelEffectJournal {
         const takeover = await this.#persist(existing, decision.record)
         return { outcome: 'reserved', record: takeover }
       }
+      if (decision.action === 'exhausted') {
+        const failed = await this.#persist(existing, decision.record)
+        return { outcome: 'replay', record: failed }
+      }
+      if (decision.action === 'retry_later') {
+        return {
+          outcome: 'retry_later',
+          record: decision.record,
+          retryAfterMs: Math.max(
+            0,
+            (decision.record.notBeforeMs ?? nowMs) - nowMs
+          )
+        }
+      }
       return { outcome: 'in_flight', record: decision.record }
     })
   }
@@ -382,7 +408,8 @@ export class PostgresChannelEffectJournal implements ChannelEffectJournal {
   async release(
     identity: ChannelEffectIdentity,
     leaseOwner: string,
-    errorCode: ChannelErrorCode
+    errorCode: ChannelErrorCode,
+    retryAfterMs?: number
   ): Promise<ChannelEffectTransition> {
     const nowMs = this.#clock()
     return this.#settle(
@@ -395,6 +422,12 @@ export class PostgresChannelEffectJournal implements ChannelEffectJournal {
         errorCode,
         leaseOwner: null,
         leaseExpiresAtMs: null,
+        notBeforeMs:
+          retryAfterMs !== undefined &&
+          Number.isFinite(retryAfterMs) &&
+          retryAfterMs > 0
+            ? nowMs + Math.floor(retryAfterMs)
+            : null,
         updatedAtMs: nowMs,
         revision: existing.revision + 1
       })
@@ -547,11 +580,36 @@ export class PostgresChannelEffectJournal implements ChannelEffectJournal {
         }
       }
     }
+    // SPEC 0282: the ceiling first (terminal), then the provider's "not before".
+    const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
+    if (existing.attempt >= maxAttempts) {
+      return {
+        action: 'exhausted',
+        record: {
+          ...existing,
+          state: 'FAILED',
+          errorCode: 'attempts_exhausted',
+          leaseOwner: null,
+          leaseExpiresAtMs: null,
+          notBeforeMs: null,
+          updatedAtMs: nowMs,
+          revision: existing.revision + 1
+        }
+      }
+    }
+    if (
+      typeof existing.notBeforeMs === 'number' &&
+      Number.isFinite(existing.notBeforeMs) &&
+      existing.notBeforeMs > nowMs
+    ) {
+      return { action: 'retry_later', record: existing }
+    }
     return {
       action: 'takeover',
       record: {
         ...existing,
         state: 'PENDING',
+        notBeforeMs: null,
         attempt: existing.attempt + 1,
         leaseOwner: input.leaseOwner,
         leaseExpiresAtMs: nowMs + input.leaseMs,
@@ -623,7 +681,8 @@ export class PostgresChannelEffectJournal implements ChannelEffectJournal {
            result = $12::jsonb,
            error_code = $13,
            revision = $14,
-           updated_at = $15
+           updated_at = $15,
+           retry_not_before_ms = $16
        WHERE tenant_id = $1
          AND channel = $2
          AND operation_kind = $3
@@ -647,7 +706,8 @@ export class PostgresChannelEffectJournal implements ChannelEffectJournal {
         next.result === null ? null : JSON.stringify(next.result),
         next.errorCode,
         next.revision,
-        new Date(next.updatedAtMs)
+        new Date(next.updatedAtMs),
+        next.notBeforeMs ?? null
       ]
     )
     const row = result.rows[0]

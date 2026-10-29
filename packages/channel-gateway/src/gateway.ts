@@ -14,12 +14,14 @@ import { ChannelError } from './errors.ts'
 import {
   CHANNEL_OPERATION_KIND,
   CURRENT_HASH_VERSION,
+  DEFAULT_CHANNEL_MAX_ATTEMPTS,
   InMemoryChannelEffectJournal,
   hashOutboundPayload,
   type ChannelEffectIdentity,
   type ChannelEffectJournal,
   type ChannelEffectRecord
 } from './effect-journal.ts'
+import { MAX_RETRY_AFTER_MS } from './adapters/bounded-body.ts'
 import { InboundDeduplicator } from './idempotency.ts'
 
 export type ChannelEventType =
@@ -52,6 +54,10 @@ export interface ChannelGatewayOptions {
   clock?: () => number
   waitTimeoutMs?: number
   heartbeatIntervalMs?: number
+  /** SPEC 0282: reservations per operation before FAILED (default 5). */
+  maxAttempts?: number
+  /** SPEC 0282: ceiling of an honoured Retry-After (default 5 minutes). */
+  maxRetryAfterMs?: number
   onEvent?: (event: ChannelEvent) => void
 }
 
@@ -78,6 +84,8 @@ export class ChannelGateway {
   readonly #leaseOwner: string
   readonly #waitTimeoutMs: number
   readonly #heartbeatIntervalMs: number
+  readonly #maxAttempts: number
+  readonly #maxRetryAfterMs: number
   readonly #onEvent?: (event: ChannelEvent) => void
 
   constructor(options: ChannelGatewayOptions = {}) {
@@ -96,6 +104,8 @@ export class ChannelGateway {
     this.#waitTimeoutMs = options.waitTimeoutMs ?? this.#leaseMs * 2
     this.#heartbeatIntervalMs =
       options.heartbeatIntervalMs ?? Math.max(1, Math.floor(this.#leaseMs / 3))
+    this.#maxAttempts = options.maxAttempts ?? DEFAULT_CHANNEL_MAX_ATTEMPTS
+    this.#maxRetryAfterMs = options.maxRetryAfterMs ?? MAX_RETRY_AFTER_MS
     if (options.onEvent) this.#onEvent = options.onEvent
   }
 
@@ -203,7 +213,8 @@ export class ChannelGateway {
       payloadHash: hashOutboundPayload(outbound),
       hashVersion: CURRENT_HASH_VERSION,
       leaseOwner,
-      leaseMs: this.#leaseMs
+      leaseMs: this.#leaseMs,
+      maxAttempts: this.#maxAttempts
     })
 
     if (reservation.outcome === 'version_mismatch') {
@@ -236,6 +247,15 @@ export class ChannelGateway {
         'effect_uncertain',
         'Channel operation effect is uncertain; reconcile before retrying',
         false
+      )
+    }
+    if (reservation.outcome === 'retry_later') {
+      // SPEC 0282: the provider asked us to wait; no lease, no network, no new attempt.
+      throw new ChannelError(
+        'retry_later',
+        'Channel operation must wait before it is sent again',
+        true,
+        { retryAfterMs: reservation.retryAfterMs }
       )
     }
     if (reservation.outcome === 'in_flight') {
@@ -371,7 +391,14 @@ export class ChannelGateway {
     }
 
     const transition = channelError.retryable
-      ? await this.#effects.release(identity, leaseOwner, channelError.code)
+      ? await this.#effects.release(
+          identity,
+          leaseOwner,
+          channelError.code,
+          channelError.retryAfterMs === undefined
+            ? undefined
+            : Math.min(channelError.retryAfterMs, this.#maxRetryAfterMs)
+        )
       : await this.#effects.fail(identity, leaseOwner, channelError.code)
     this.#emit({
       type: 'channel.outbound.rejected',

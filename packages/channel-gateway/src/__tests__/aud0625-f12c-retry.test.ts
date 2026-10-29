@@ -12,10 +12,10 @@ import {
 import { FileChannelEffectJournal } from '../effect-journal-file.ts'
 import { ChannelGateway } from '../gateway.ts'
 
-// AUD0625 F12c / SPEC 0282 (phase 1): a 429 releases the operation to PENDING
-// today, with no wait for Retry-After and no ceiling on attempts. `it.fails`
-// states the target and fails today for the gap; controls pass before and
-// after the BUILD. Memory and file journals; synthetic data only.
+// AUD0625 F12c / SPEC 0282: a 429 honours Retry-After and attempts have a
+// ceiling. The three target cases were `it.fails` in phase 1 and are plain
+// tests after the BUILD; controls pass before and after it. Memory and file
+// journals; synthetic data only.
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000f12'
 const dirs: string[] = []
@@ -103,59 +103,48 @@ const rateLimited = (retryAfter?: string) =>
 describe.each(['memory', 'file'] as const)(
   'F12c retry policy (%s journal)',
   (kind) => {
-    it.fails(
-      'a 429 with Retry-After blocks the resend until the moment, without network or a new attempt',
-      async () => {
-        const w = world(kind, (call) =>
-          call === 1 ? rateLimited('2') : new Response('ok', { status: 200 })
-        )
-        expect(await w.dispatch()).toBe('provider_rejected')
-        expect(w.calls()).toBe(1)
-        w.advance(1_000)
-        expect(await w.dispatch()).toBe('retry_later')
-        expect(w.calls()).toBe(1)
-        expect((await w.record())?.attempt).toBe(1)
-        w.advance(1_000)
-        expect(await w.dispatch()).toBe('ok')
-        expect(w.calls()).toBe(2)
-        expect((await w.record())?.state).toBe('CONFIRMED')
-      }
-    )
+    it('a 429 with Retry-After blocks the resend until the moment, without network or a new attempt', async () => {
+      const w = world(kind, (call) =>
+        call === 1 ? rateLimited('2') : new Response('ok', { status: 200 })
+      )
+      expect(await w.dispatch()).toBe('provider_rejected')
+      expect(w.calls()).toBe(1)
+      w.advance(1_000)
+      expect(await w.dispatch()).toBe('retry_later')
+      expect(w.calls()).toBe(1)
+      expect((await w.record())?.attempt).toBe(1)
+      w.advance(1_000)
+      expect(await w.dispatch()).toBe('ok')
+      expect(w.calls()).toBe(2)
+      expect((await w.record())?.state).toBe('CONFIRMED')
+    })
 
-    it.fails(
-      'a huge Retry-After is clamped to the ceiling (default 5 minutes)',
-      async () => {
-        const w = world(kind, (call) =>
-          call === 1
-            ? rateLimited('86400')
-            : new Response('ok', { status: 200 })
-        )
-        expect(await w.dispatch()).toBe('provider_rejected')
-        w.advance(299_000)
-        expect(await w.dispatch()).toBe('retry_later')
-        expect(w.calls()).toBe(1)
-        w.advance(2_000)
-        expect(await w.dispatch()).toBe('ok')
-        expect(w.calls()).toBe(2)
-      }
-    )
+    it('a huge Retry-After is clamped to the ceiling (default 5 minutes)', async () => {
+      const w = world(kind, (call) =>
+        call === 1 ? rateLimited('86400') : new Response('ok', { status: 200 })
+      )
+      expect(await w.dispatch()).toBe('provider_rejected')
+      w.advance(299_000)
+      expect(await w.dispatch()).toBe('retry_later')
+      expect(w.calls()).toBe(1)
+      w.advance(2_000)
+      expect(await w.dispatch()).toBe('ok')
+      expect(w.calls()).toBe(2)
+    })
 
-    it.fails(
-      'after the attempt ceiling (default 5) the operation is FAILED attempts_exhausted and never resent',
-      async () => {
-        const w = world(kind, () => rateLimited())
-        const codes: string[] = []
-        for (let i = 0; i < 9; i += 1) {
-          codes.push(await w.dispatch())
-          w.advance(1)
-        }
-        expect(w.calls()).toBe(5)
-        expect(codes.slice(5)).toEqual(Array(4).fill('attempts_exhausted'))
-        const record = await w.record()
-        expect(record?.state).toBe('FAILED')
-        expect(record?.errorCode).toBe('attempts_exhausted')
+    it('after the attempt ceiling (default 5) the operation is FAILED attempts_exhausted and never resent', async () => {
+      const w = world(kind, () => rateLimited())
+      const codes: string[] = []
+      for (let i = 0; i < 9; i += 1) {
+        codes.push(await w.dispatch())
+        w.advance(1)
       }
-    )
+      expect(w.calls()).toBe(5)
+      expect(codes.slice(5)).toEqual(Array(4).fill('attempts_exhausted'))
+      const record = await w.record()
+      expect(record?.state).toBe('FAILED')
+      expect(record?.errorCode).toBe('attempts_exhausted')
+    })
 
     it('control: a 429 without Retry-After may be resent at once while under the ceiling', async () => {
       const w = world(kind, (call) =>

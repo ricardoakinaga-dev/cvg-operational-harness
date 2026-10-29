@@ -22,7 +22,7 @@ import {
   drainBoundedBody,
   isResponseTooLarge,
   oversizedResponseError,
-  statusEffectOptions,
+  responseErrorOptions,
   raceSignal
 } from './bounded-body.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
@@ -279,7 +279,7 @@ export class ChatwootChannelAdapter
         'provider_rejected',
         `Chatwoot responded with status ${response.status}`,
         response.status === 429,
-        statusEffectOptions(response.status)
+        responseErrorOptions(response, this.#clock().getTime())
       )
     }
     await drainBoundedBody(response, this.#maxResponseBytes, signal)

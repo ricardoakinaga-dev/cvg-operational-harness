@@ -13,7 +13,10 @@ export const ChannelErrorCodes = {
   lease_lost: 'lease_lost',
   reconciliation_required: 'reconciliation_required',
   journal_unavailable: 'journal_unavailable',
-  hash_algorithm_mismatch: 'hash_algorithm_mismatch'
+  hash_algorithm_mismatch: 'hash_algorithm_mismatch',
+  // SPEC 0282: a 429 told us to wait / the reservation ceiling was reached.
+  retry_later: 'retry_later',
+  attempts_exhausted: 'attempts_exhausted'
 } as const
 
 export type ChannelErrorCode =
@@ -25,12 +28,15 @@ export interface ChannelErrorOptions {
    * must treat such failures as uncertain: blind retries are forbidden.
    */
   effectUnknown?: boolean
+  /** SPEC 0282: how long the provider asked us to wait (a 429 Retry-After). */
+  retryAfterMs?: number
 }
 
 export class ChannelError extends Error {
   readonly code: ChannelErrorCode
   readonly retryable: boolean
   readonly effectUnknown: boolean
+  readonly retryAfterMs: number | undefined
 
   constructor(
     code: ChannelErrorCode,
@@ -43,5 +49,6 @@ export class ChannelError extends Error {
     this.code = code
     this.retryable = retryable
     this.effectUnknown = options.effectUnknown ?? false
+    this.retryAfterMs = options.retryAfterMs
   }
 }
