@@ -1,0 +1,314 @@
+/**
+ * AUD19-003 — causal atomicity on durable PostgreSQL (fail-closed gate).
+ *
+ * Ad-hoc runs without TEST_DATABASE_URL skip (repo convention); any required
+ * gate sets AUD19_PG_REQUIRED=1 and a missing database becomes a hard
+ * failure instead of a silent skip.
+ */
+import { randomUUID } from 'node:crypto'
+import { Client, Pool } from 'pg'
+import { describe, expect, it } from 'vitest'
+import {
+  PostgresApprovalAuthority,
+  PostgresOperationalExecutionStore,
+  runPostgresMigrations,
+  type PostgresPoolLike
+} from '@cvg/persistence'
+import type { ApprovalRequestInput } from '@cvg/approval-engine'
+import { assertApprovalDecisionAuditDedupe, buildServer } from '../server.ts'
+import { grantCase } from './case-authorization-fixtures.ts'
+import {
+  reconcileStuckApprovalDecisions,
+  STUCK_APPROVAL_DECISIONS_SQL,
+  INCOHERENT_TERMINAL_COUNT_SQL,
+  INCOMPLETE_ENVELOPE_COUNT_SQL
+} from '../../../worker/src/homolog-worker.ts'
+
+// SPEC 0272 fix: the worker waits 30 s before recovering; these tests recover at once.
+const noFloor = {
+  window: { minAgeSeconds: 0, maxAgeSeconds: null as number | null }
+}
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL
+const pgRequired = process.env.AUD19_PG_REQUIRED === '1'
+const pgEnabled = Boolean(testDatabaseUrl)
+
+if (pgRequired && !pgEnabled) {
+  throw new Error(
+    'AUD19_PG_REQUIRED=1 but TEST_DATABASE_URL is absent; refusing to pass this required gate with a skip'
+  )
+}
+
+const itWithPostgres = pgEnabled ? it : it.skip
+
+const tenantA = 'tenant_00000000-0000-4000-8000-000000000711'
+
+function runtimeInput() {
+  return {
+    agent: {
+      id: 'agent.atomic.pg.synthetic',
+      version: 'v1',
+      objective: 'synthetic PG atomicity proof',
+      instructions: ['synthetic only'],
+      skills: [],
+      tools: [],
+      policies: []
+    },
+    tenantId: tenantA,
+    conversationId: 'conversation_atomic_pg_synthetic',
+    sessionId: 'session_atomic_pg_synthetic',
+    correlationId: 'correlation_atomic_pg_synthetic',
+    traceId: 'trace_atomic_pg_synthetic',
+    userMessage: 'synthetic HTTP message',
+    context: {
+      values: { fixture: true },
+      sourceIds: ['synthetic'],
+      capturedAt: '2026-09-13T00:00:00.000Z'
+    },
+    state: { version: 1, values: {}, updatedAt: '2026-09-13T00:00:00.000Z' },
+    budget: {
+      maxSteps: 1,
+      maxModelCalls: 1,
+      maxToolCalls: 1,
+      maxDurationMs: 10_000,
+      maxCostUsd: 1,
+      maxTokens: 1_000
+    }
+  } as never
+}
+
+async function setupDatabase() {
+  const admin = new Client({ connectionString: testDatabaseUrl as string })
+  await admin.connect()
+  const schemaName = `cvg_aud19_003_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`
+  await runPostgresMigrations(admin, { schemaName })
+  const pool = new Pool({
+    connectionString: testDatabaseUrl as string,
+    options: `-c search_path=${schemaName}`
+  })
+  return { admin, pool, schemaName }
+}
+
+async function teardownDatabase(setup: {
+  admin: Client
+  pool: Pool
+  schemaName: string
+}) {
+  await setup.pool.end().catch(() => undefined)
+  await setup.admin
+    .query(`DROP SCHEMA IF EXISTS ${setup.schemaName} CASCADE`)
+    .catch(() => undefined)
+  await setup.admin.end().catch(() => undefined)
+}
+
+async function waitingFixture(
+  store: PostgresOperationalExecutionStore,
+  authority: PostgresApprovalAuthority,
+  key: string
+) {
+  const runtime = runtimeInput()
+  const accepted = await store.submit({
+    tenantId: tenantA,
+    idempotencyKey: key,
+    runtime
+  })
+  const claimed = await store.claimNext(tenantA, `worker-${key}`)
+  if (!claimed) throw new Error('claim failed')
+  const running = await store.transition({
+    tenantId: tenantA,
+    executionId: accepted.record.id,
+    to: 'RUNNING',
+    workerId: `worker-${key}`,
+    fenceToken: claimed.record.attempt
+  })
+  const request: ApprovalRequestInput = {
+    tenantId: tenantA,
+    operatorId: 'agent.atomic.pg.synthetic',
+    agentId: 'agent.atomic.pg.synthetic',
+    agentVersion: 'v1',
+    action: 'tool.execute',
+    resource: { type: 'tool', id: 'synthetic.atomic.pg.tool' },
+    payload: { synthetic: true },
+    policyVersion: 'policy-approval-v1',
+    correlationId: 'correlation_atomic_pg_synthetic',
+    operationKey: `operation.atomic.pg.${key}`,
+    executionRef: accepted.record.id,
+    singleUse: true,
+    reason: 'synthetic PG atomicity',
+    proposalPayload: { synthetic: true }
+  }
+  const requested = await authority.request(request)
+  await store.transition({
+    tenantId: tenantA,
+    executionId: accepted.record.id,
+    to: 'WAITING_APPROVAL',
+    workerId: `worker-${key}`,
+    fenceToken: running.attempt,
+    approvalId: requested.approvalId,
+    reason: 'waiting for PG atomicity proof'
+  })
+  return { executionId: accepted.record.id, approvalId: requested.approvalId }
+}
+
+/**
+ * Reproduces the state the pre-SPEC-0262 route could leave after a crash
+ * between the decision and the audit append (decision persisted, execution
+ * resolved, no `approval_decision` event). The route itself is now one
+ * transaction and can no longer produce it; legacy rows can still exist, so
+ * the worker recovery (SPEC 0272) is exercised on this state.
+ */
+async function leaveCrashedDecision(
+  store: PostgresOperationalExecutionStore,
+  authority: PostgresApprovalAuthority,
+  input: {
+    executionId: string
+    approvalId: string
+    commandKey: string
+    reason: string
+    approverId?: string
+    verdict?: 'approved' | 'rejected'
+  }
+) {
+  const approverId = input.approverId ?? 'approver.synthetic'
+  const verdict = input.verdict ?? 'approved'
+  await authority.submit(tenantA, input.approvalId, 'agent.atomic.pg.synthetic')
+  const decision = {
+    approverId,
+    decisionActorType: 'Approver' as const,
+    decisionCorrelationId: `corr_${randomUUID()}`,
+    commandKey: input.commandKey,
+    reason: input.reason
+  }
+  if (verdict === 'approved') {
+    await authority.approve(tenantA, input.approvalId, decision)
+  } else {
+    await authority.reject(tenantA, input.approvalId, decision)
+  }
+  await store.resolveApproval({
+    tenantId: tenantA,
+    executionId: input.executionId,
+    approvalId: input.approvalId,
+    actorId: approverId,
+    decision: verdict === 'approved' ? 'APPROVED' : 'REJECTED',
+    reason: input.reason
+  })
+}
+
+
+const SCENARIOS: Array<{ name: string; total: number; inWindow: number; undecided?: number }> = [
+  { name: 'E 10k, 100% in window, 0.1% undecided', total: 10_000, inWindow: 1, undecided: 0.001 },
+  { name: 'F 100k, 100% in window, 0.1% undecided', total: 100_000, inWindow: 1, undecided: 0.001 },
+  { name: 'G 100k, 1% in window, 50% undecided', total: 100_000, inWindow: 0.01, undecided: 0.5 },
+  { name: 'H 100k, 100% in window, 0 undecided (selector finds nothing)', total: 100_000, inWindow: 1, undecided: 0 },
+  { name: 'A 10k, 100% in window', total: 10_000, inWindow: 1 },
+  { name: 'B 10k, 1% in window', total: 10_000, inWindow: 0.01 },
+  { name: 'C 100k, 100% in window', total: 100_000, inWindow: 1 },
+  { name: 'D 100k, 1% in window', total: 100_000, inWindow: 0.01 }
+]
+
+describe('F08c measurement (not part of the suite)', () => {
+  for (const scenario of SCENARIOS.filter((item) => !process.env.F08C_ONLY || process.env.F08C_ONLY.split(',').includes(item.name.slice(0, 1)))) {
+    itWithPostgres(scenario.name, async () => {
+      const setup = await setupDatabase()
+      const client = await setup.pool.connect()
+      const out: string[] = [`-- ${scenario.name}`]
+      try {
+        const store = new PostgresOperationalExecutionStore(setup.pool as never)
+        const authority = new PostgresApprovalAuthority(setup.pool as never)
+        const fixture = await waitingFixture(store, authority, 'seed')
+        await leaveCrashedDecision(store, authority, {
+          ...fixture,
+          commandKey: 'seed-command',
+          reason: 'seed'
+        })
+        await client.query(
+          `UPDATE operational_executions SET updated_at = now() - interval '10 minutes' WHERE id = $1`,
+          [fixture.executionId]
+        )
+        const total = scenario.total
+        await client.query(
+          `INSERT INTO runtime_approvals
+             SELECT (jsonb_populate_record(NULL::runtime_approvals,
+               to_jsonb(a) || jsonb_build_object(
+                 'approval_id', 'syn_' || g,
+                 'operation_key', 'syn_op_' || g))).*
+             FROM runtime_approvals a, generate_series(1, $2::int) AS g
+            WHERE a.approval_id = $1`,
+          [fixture.approvalId, total]
+        )
+        // Rows inside the 30 s..24 h window are the first `inWindow` share
+        // (spread 1..~20 h); the rest are 2..365 days old.
+        await client.query(
+          `INSERT INTO operational_executions
+             SELECT (jsonb_populate_record(NULL::operational_executions,
+               to_jsonb(e) || jsonb_build_object(
+                 'id', 'syn_exec_' || g,
+                 'approval_id', 'syn_' || g,
+                 'idempotency_key', 'syn_key_' || g,
+                 'updated_at', CASE WHEN g <= $3::double precision * $2::int
+                   THEN now() - ((60 + (g * 72000.0 / ($2::int * $3::double precision)))::int || ' seconds')::interval
+                   ELSE now() - ((172800 + (g * 31000000.0 / $2::int))::int || ' seconds')::interval END))).*
+             FROM operational_executions e, generate_series(1, $2::int) AS g
+            WHERE e.id = $1`,
+          [fixture.executionId, total, scenario.inWindow]
+        )
+        await client.query(
+          `INSERT INTO audit_events
+             (tenant_id, id, type, actor_type, actor_id, correlation_id, policy_version, payload)
+           SELECT $1, 'syn_audit_' || g, 'approval_decision', 'Approver', 'synthetic',
+                  'corr_syn_' || g, 'policy-v1',
+                  jsonb_build_object('approvalId', 'syn_' || g, 'decision', 'approved')
+             FROM generate_series(1, $2::int) AS g WHERE (g % 1000) >= $3::double precision * 1000`,
+          [tenantA, total, scenario.undecided ?? 0.5]
+        )
+        await client.query('VACUUM ANALYZE operational_executions')
+        await client.query('VACUUM ANALYZE runtime_approvals')
+        await client.query('VACUUM ANALYZE audit_events')
+        await client.query(`SELECT set_config('cvg.tenant_id', $1, false)`, [
+          tenantA
+        ])
+        const sizes = await client.query(
+          `SELECT pg_size_pretty(pg_relation_size('operational_executions')) AS heap,
+                  (SELECT string_agg(indexrelid::regclass || '=' || pg_size_pretty(pg_relation_size(indexrelid)), ', ')
+                     FROM pg_index WHERE indrelid = 'operational_executions'::regclass) AS indexes`
+        )
+        out.push(`-- sizes ${JSON.stringify(sizes.rows[0])}`)
+        const run = async (label: string, sql: string, params: unknown[]) => {
+          // Three warm runs; report the last (steady state).
+          let plan = ''
+          for (let i = 0; i < 3; i += 1) {
+            const result = await client.query<{ 'QUERY PLAN': string }>(
+              `EXPLAIN (ANALYZE, BUFFERS) ${sql}`,
+              params
+            )
+            plan = result.rows.map((row) => row['QUERY PLAN']).join('\n')
+          }
+          out.push(`\n== ${label}\n${plan}`)
+        }
+        const queries = async (phase: string) => {
+          await run(`${phase} / selector limit 25, window 30s..24h`, STUCK_APPROVAL_DECISIONS_SQL, [25, 30, 86_400])
+          await run(`${phase} / selector limit 25, no ceiling (backfill)`, STUCK_APPROVAL_DECISIONS_SQL, [25, 30, null])
+          await run(`${phase} / incomplete-envelope count, 24h`, INCOMPLETE_ENVELOPE_COUNT_SQL, [30, 86_400])
+          await run(`${phase} / incoherent-terminal count, 24h`, INCOHERENT_TERMINAL_COUNT_SQL, [30, 86_400])
+        }
+        await queries('WITHOUT candidate index')
+        const created = Date.now()
+        await client.query(
+          'CREATE INDEX idx_f08c_candidate ON operational_executions (tenant_id, updated_at)'
+        )
+        out.push(`\n-- candidate index built in ${Date.now() - created} ms`)
+        await client.query('ANALYZE operational_executions')
+        const size = await client.query(
+          `SELECT pg_size_pretty(pg_relation_size('idx_f08c_candidate')) AS size`
+        )
+        out.push(`-- candidate index size ${size.rows[0]!.size}`)
+        await queries('WITH candidate index (tenant_id, updated_at)')
+      } finally {
+        client.release()
+        await teardownDatabase(setup)
+        const { appendFileSync } = await import('node:fs')
+        appendFileSync(process.env.F08C_OUT as string, `${out.join('\n')}\n\n`)
+      }
+    }, 900_000)
+  }
+})
