@@ -108,6 +108,28 @@ SLICES = {
   ('guard-tests', 'tests/par-x01-spawn-boundary.test.ts', "!/\\.(?:test|spec)\\./.test(entry.name) &&", ""),
   ('guard-skip-dist', 'tests/par-x01-spawn-boundary.test.ts', "'node_modules', 'dist', ", "'node_modules', "),
  ]),
+ 's4': (['tests/par-x01-process-persistent.test.ts','tests/par-x01-process-service.test.ts'], [
+  ('pers-stdin-open', D+'service.ts', "if (persistent) {\n    // stdin stays open", "if (false) {\n    // stdin stays open"),
+  ('pers-stdin-cap', D+'service.ts', "stdinBytes + chunk.length > limits.maxStdinBytes", "false"),
+  ('pers-stdin-ended', D+'service.ts', "stdinEnded || cleanupTask !== undefined || !child.stdin", "!child.stdin"),
+  ('pers-chunk-type', D+'service.ts', "if (!(chunk instanceof Uint8Array))\n        return Promise.reject", "if (false)\n        return Promise.reject"),
+  ('pers-initial-stdin', D+'service.ts', "if (request.mode === 'persistent' && request.stdin !== undefined)", "if (false)"),
+  ('bp-hold', D+'service.ts', "if (queuedBytes >= limits.maxOutputBytes && !held)", "if (false)"),
+  ('bp-resume', D+'service.ts', "held && queuedBytes < limits.maxOutputBytes / 2", "false"),
+  ('consumer-gone', D+'service.ts', "consumerGone = true", ""),
+  ('teardown-release', D+'service.ts', "tear-down releases it.\n    child.stdout?.resume()\n    child.stderr?.resume()", "tear-down releases it."),
+  ('dispose-state', D+'service.ts', "state = 'closing'", ""),
+  ('dispose-live', D+'service.ts', "live.map((l) => l.terminate('dispose'))", "[]"),
+  ('dispose-memo', D+'service.ts', "(disposal ??= (async", "((async"),
+  ('dispose-clean-count', D+'service.ts', "o.cleanup.state === 'clean')", "true)"),
+  ('registry-delete', D+'service.ts', "active.delete(supervised)", "undefined"),
+  ('registry-add', D+'service.ts', "active.add(supervised)", ""),
+  ('ns-wait', D+'service.ts', "if (nsInode === undefined && alive())", "if (false)"),
+  ('ns-unknown-rule', D+'service.ts', "cause !== 'spawn_failed'", "cause === 'startup_timeout'"),
+  ('closed-launch', D+'service.ts', "if (state !== 'active')", "if (false)"),
+  ('pers-no-text', D+'service.ts', "...(persistent\n        ? {}", "...(false\n        ? {}"),
+  ('iter-done', D+'service.ts', "finished = true\n    pump()", "pump()"),
+ ]),
 }
 sl = sys.argv[1]
 test, M = SLICES[sl]
