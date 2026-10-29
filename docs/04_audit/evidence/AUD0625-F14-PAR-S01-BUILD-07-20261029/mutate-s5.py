@@ -22,21 +22,27 @@ M = [
  ('error-map', "if (error instanceof SessionEventError) return error\n  const wrapped", "const wrapped"),
  ('error-code', "'session_storage_unavailable',\n    'Session storage is unavailable; retry only with the original event identity and input'\n  )\n  Object.defineProperty", "'session_not_open',\n    'x'\n  )\n  Object.defineProperty"),
  ('admit-queue', "this.#admit(undefined, () => this.#appendInputAtomic(input, digest))", "this.#appendInputAtomic(input, digest)"),
- ('atomic-notopen', "throw new SessionEventError('session_not_open', 'Session stream is not open')", "throw new SessionStorageUnavailableError('x', this.id)"),
+ ('atomic-notopen', "if (!row) throw new SessionEventError( 'session_not_open',", "if (!row) throw new SessionStorageUnavailableError( 'session_not_open',"),
  ('atomic-format', "if (row.format_version !== input.formatVersion)", "if (false)"),
  ('atomic-replay', "if (previous.input_digest !== digest)", "if (false)"),
  ('atomic-prior-return', "return checkEvent(previous, this.id, tenant, sequence)", "return materializeSessionEvent(input, Number(row.next_sequence))"),
  ('atomic-sequence', "const event = materializeSessionEvent(input, next)", "const event = materializeSessionEvent(input, next + 1)"),
- ('atomic-cursor', "[tenant, this.id, next + 1]\n      )\n      if (advanced.rowCount !== 1)\n        throw new SessionStorageUnavailableError('Session cursor was not advanced', this.id)\n      this.#highWater", "[tenant, this.id, next]\n      )\n      if (advanced.rowCount !== 1)\n        throw new SessionStorageUnavailableError('Session cursor was not advanced', this.id)\n      this.#highWater"),
+ ('atomic-cursor-last', "[tenant, this.id, next + 1]", "[tenant, this.id, next]"),
  ('atomic-digest-stored', "          digest,\n          canonicalizeJson(event)\n        ]\n      )\n      const advanced", "          'b'.repeat(64),\n          canonicalizeJson(event)\n        ]\n      )\n      const advanced"),
  ('classify-eventerror', "error instanceof SessionPersistenceError || error instanceof SessionEventError", "error instanceof SessionPersistenceError"),
 ]
+JUSTIFIED = {
+ 'atomic-format': 'equivalent: the table CHECK forces format_version = 1 and the validated input is always 1, so the branch cannot be reached',
+}
 env = dict(os.environ)
 src = open(F).read()
 norm = lambda x: re.sub(r'\s+', ' ', x)
 res = []
 for name, a, b in M:
-    if a in src:
+    if name.endswith('-last') and a in src:
+        i = src.rindex(a)
+        mutated = src[:i] + b + src[i + len(a):]
+    elif a in src:
         mutated = src.replace(a, b, 1)
     else:
         pat = re.escape(norm(a)).replace(r'\ ', r'\s*')
@@ -48,5 +54,8 @@ for name, a, b in M:
     r = subprocess.run(['npx','vitest','run',*TESTS,'--maxWorkers=1','--testTimeout=60000'],capture_output=True,text=True,env=env)
     subprocess.run(['git','checkout','--',F])
     res.append({'mutant': name, 'result': 'KILLED' if r.returncode != 0 else 'SURVIVED'})
+for r_ in res:
+    if r_['result'] == 'SURVIVED' and r_['mutant'] in JUSTIFIED:
+        r_['result'] = 'EQUIVALENT'; r_['justification'] = JUSTIFIED[r_['mutant']]
 print(json.dumps(res, indent=1))
 json.dump(res, open(sys.argv[1], 'w'), indent=1)
