@@ -13,11 +13,14 @@ import {
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
+  hostProbe,
   createProcessService,
   ProcessServiceError,
   type ProcessLaunchRequest,
   type ProcessOutcome
 } from '../packages/sandbox/src/index.ts'
+import { runContained } from '../packages/sandbox/src/run.ts'
+import { chmodSync } from 'node:fs'
 import { reviewedNodeProfile } from './helpers/aud0625-node-process-profile.ts'
 
 // PAR-X01 slice 2 (SPEC 0286 I3-I6, I9): the engine on a real bubblewrap, observed from outside
@@ -696,6 +699,57 @@ describe('PAR-X01 slice 2: process service engine', () => {
       expect(outcome.secondaryErrors).not.toContain('launcher_not_reaped')
       expect(outcome.secondaryErrors).toContain('namespace_unknown')
     }, 30_000)
+  })
+
+  describe('adapter and probe', () => {
+    it('runContained reports an abort in flight as cancelled, with the observed cleanup', async () => {
+      const controller = new AbortController()
+      const run = runContained({
+        processProfile: reviewedNodeProfile(workspace),
+        argv: [process.execPath, '-e', 'setInterval(()=>{},1000)'],
+        handle: handle(),
+        timeoutMs: 20_000,
+        signal: controller.signal
+      })
+      await new Promise((r) => setTimeout(r, 700))
+      controller.abort()
+      const result = await run
+      expect(result.exitCode).toBe('cancelled')
+      expect(result.cause).toBe('cancelled')
+      expect(result.cleanup).toMatchObject({ state: 'clean', leftover: 0 })
+    }, 30_000)
+
+    it('runContained reports a request the service refuses as spawn_failed with the reason', async () => {
+      const result = await runContained({
+        processProfile: reviewedNodeProfile(workspace),
+        argv: [process.execPath, '-e', 'process.exit(0)'],
+        handle: handle(),
+        timeoutMs: 0
+      })
+      expect(result.exitCode).toBe('spawn_failed')
+      expect(result.stderr).toContain('limit lifetimeMs is invalid')
+    })
+
+    it('the capability probe passes on only PATH to bwrap, never the host environment', () => {
+      const dir = mkdtempSync(join(base, 'fakebin-'))
+      const out = join(dir, 'seen-env')
+      writeFileSync(
+        join(dir, 'bwrap'),
+        `#!/bin/sh\n/usr/bin/env > ${JSON.stringify(out)}\nexit 0\n`
+      )
+      chmodSync(join(dir, 'bwrap'), 0o755)
+      const savedPath = process.env.PATH
+      process.env.PATH = `${dir}:${savedPath}`
+      process.env.CVG_X01_HOST_SENTINEL = 'host-secret'
+      try {
+        expect(hostProbe.probeBubblewrap()).toBe(true)
+        expect(existsSync(out)).toBe(true)
+        expect(readFileSync(out, 'utf8')).not.toContain('CVG_X01_HOST_SENTINEL')
+      } finally {
+        process.env.PATH = savedPath
+        delete process.env.CVG_X01_HOST_SENTINEL
+      }
+    })
   })
 
   it('exports the typed error', () => {

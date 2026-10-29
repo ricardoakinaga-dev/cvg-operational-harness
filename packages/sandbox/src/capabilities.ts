@@ -51,8 +51,13 @@ export const hostProbe: SandboxProbe = {
       execFileSync(
         'bwrap',
         ['--ro-bind', '/', '/', '--unshare-net', '/bin/true'],
-        // The probe has no payload: it gets an empty environment, never the host's.
-        { stdio: 'ignore', timeout: 5000, env: {}, cwd: '/' }
+        // The probe has no payload: only PATH (to find bwrap) is passed on, never the host's other variables.
+        {
+          stdio: 'ignore',
+          timeout: 5000,
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+          cwd: '/'
+        }
       )
       return true
     } catch {
