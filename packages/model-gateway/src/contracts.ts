@@ -78,6 +78,22 @@ export interface ProviderUsage {
   outputTokens: number
 }
 
+/**
+ * SPEC 0267 §3.1: digests the gateway computes for the material it hands to
+ * the provider. The caller never supplies them.
+ */
+export interface PromptBinding {
+  promptId: string
+  promptVersion: string
+  /** SHA-256 of the approved `PromptRecord.content` held by the registry. */
+  registrySha256: string
+  rendererVersion: 'literal-v1'
+  /** SHA-256 of the UTF-8 system instruction actually rendered. */
+  instructionSha256: string
+  /** SHA-256 of the canonical rendered material (system + messages). */
+  renderedInputSha256: string
+}
+
 export interface ProviderRequest {
   requestId: string
   tenantId: string
@@ -87,6 +103,8 @@ export interface ProviderRequest {
   temperature: number
   maxTokens: number
   promptSha256: string
+  /** Set by the gateway; adapters verify it against `input` before the wire. */
+  promptBinding?: PromptBinding
   structuredSchemaName?: string
   signal: AbortSignal
   timeoutMs: number
@@ -95,7 +113,8 @@ export interface ProviderRequest {
 
 export interface ProviderResult {
   text: string
-  usage: ProviderUsage
+  /** Absent when the provider did not report token counters (never zero). */
+  usage?: ProviderUsage
   providerId: string
   model: string
   externalCall: boolean
@@ -127,6 +146,8 @@ export interface ModelProfile {
   fallbackProfile?: ModelProfileName
 }
 
+export type UsageStatus = 'reported' | 'unreported'
+
 export interface ModelResult<TStructured = unknown> {
   requestId: string
   tenantId: string
@@ -138,11 +159,17 @@ export interface ModelResult<TStructured = unknown> {
     text: string
     structured?: TStructured
   }
+  /**
+   * Measured counters when `usageStatus` is `reported`; otherwise the
+   * conservative upper bound used for accounting, never a measurement.
+   */
   usage: ProviderUsage
+  usageStatus: UsageStatus
   costUsd: number
   attempts: number
   latencyMs: number
   promptSha256: string
+  promptBinding: PromptBinding
   createdAt: string
   fallbackUsed: boolean
   substitutedProfile?: ModelProfileName

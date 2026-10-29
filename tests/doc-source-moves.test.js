@@ -136,10 +136,21 @@ test('policy preserves exactly the 20 historical HISO moves and hashes', () => {
       'utf8'
     )
   )
+  // The 20 HISO relocations of SPEC0178; later tasks register their own
+  // additions and are pinned by their own tests below.
   const historical = policy.movedTargets.filter(
-    ({ movedBy }) => movedBy !== 'PARE100-EXEC-20261014'
+    ({ movedBy }) => movedBy === 'HISO-004' || movedBy === 'HISO-007'
   )
   assert.equal(historical.length, 20)
+  assert.deepEqual(
+    [...new Set(policy.movedTargets.map(({ movedBy }) => movedBy))].sort(),
+    [
+      'AUD0625-LEDGERS-D9-20261028',
+      'HISO-004',
+      'HISO-007',
+      'PARE100-EXEC-20261014'
+    ]
+  )
   assert.deepEqual(
     historical.map(({ old, new: target, sha256Before }) => ({
       old,
@@ -153,6 +164,26 @@ test('policy preserves exactly the 20 historical HISO moves and hashes', () => {
     }))
   )
   assert.match(policy.movedTargetsProvenance, /historical.*not a claim/)
+})
+
+test('AUD0625 relocations only resolve the frozen AUD-SCORE review links', () => {
+  const policy = JSON.parse(
+    readFileSync(join(repositoryRoot, 'docs/doc-link-policy.json'), 'utf8')
+  )
+  const additions = policy.movedTargets.filter(
+    ({ movedBy }) => movedBy === 'AUD0625-LEDGERS-D9-20261028'
+  )
+  assert.equal(additions.length, 16)
+  for (const entry of additions) {
+    assert.ok(entry.old.startsWith('docs/04_audit/evidence/'))
+    assert.ok(
+      entry.new.startsWith('docs/04_audit/evidence/AUD-SCORE-20261028/') ||
+        entry.new === 'docs/08_runtime/handoffs/aud_score_20261028.md'
+    )
+    assert.equal(existsSync(join(repositoryRoot, entry.old)), false)
+    assert.equal(existsSync(join(repositoryRoot, entry.new)), true)
+    assert.match(entry.reason, /Frozen Codex review/)
+  }
 })
 
 test('three PARE100 frozen document relocations retain exact existing targets', () => {

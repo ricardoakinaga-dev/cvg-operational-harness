@@ -7,9 +7,12 @@ import {
   type ModelProfile,
   type ModelProfileName,
   type ModelProvider,
+  type ModelInput,
+  type PromptBinding,
   type ModelResult,
   type ProviderResult,
   type ProviderUsage,
+  type UsageStatus,
   type StructuredOutputContract
 } from './contracts.ts'
 import {
@@ -38,6 +41,7 @@ import {
   type PromptRecord
 } from './prompt-registry.ts'
 import { ModelRouter, type ModelRoutingOptions } from './router.ts'
+import { renderGovernedInput } from './prompt-binding.ts'
 
 export interface ModelGatewayOptions {
   providers: ModelProvider[]
@@ -174,11 +178,17 @@ export class ModelGateway {
       normalized.dataClassification as DataClassification
     const startedAt = this.#clock()
 
-    const prompt = this.#resolvePrompt(normalized, dataClassification)
+    const { record: prompt, effectiveClassification } = this.#resolvePrompt(
+      normalized,
+      dataClassification
+    )
+    // SPEC 0267 §3.1: only the approved instruction reaches the provider.
+    const rendered = renderGovernedInput(normalized.input, prompt)
+    // SPEC 0267 §3.2: the strictest class decides the route.
     const route = this.#router.resolve({
       requestedProfile: normalized.modelProfile,
       ...(normalized.task !== undefined ? { task: normalized.task } : {}),
-      dataClassification
+      dataClassification: effectiveClassification
     })
     if (route.substitutedProfile) {
       this.#emit({
@@ -208,6 +218,7 @@ export class ModelGateway {
           normalized,
           candidate,
           prompt,
+          rendered,
           startedAt,
           structuredOutput,
           signal
@@ -246,6 +257,7 @@ export class ModelGateway {
     request: z.infer<typeof ModelGatewayRequestSchema>,
     candidate: Candidate,
     prompt: PromptRecord,
+    rendered: { input: ModelInput; binding: PromptBinding },
     startedAt: Date,
     structuredOutput: StructuredOutputContract | undefined,
     externalSignal: AbortSignal | undefined
@@ -318,9 +330,14 @@ export class ModelGateway {
     const attemptsAllowed = Math.max(1, maxRetries + 1)
     let attempt = 0
     let lastError: ModelGatewayError | undefined
+    // The reservation covers the first accounted attempt only; every later
+    // executed attempt is charged in full (SPEC 0267 §3.3, no refunds).
+    let reservationSettled = false
 
     while (attempt < attemptsAllowed) {
       attempt += 1
+      // SPEC 0167/013: a revoked or changed prompt blocks retry and fallback.
+      this.#assertPromptStillApproved(request, rendered.binding)
       if (!this.#circuit.canRequest(circuitKey)) {
         throw new ModelGatewayError(
           'circuit_open',
@@ -334,6 +351,10 @@ export class ModelGateway {
       const signal = externalSignal
         ? AbortSignal.any([controller.signal, externalSignal])
         : controller.signal
+
+      let accounted:
+        | { usage: ProviderUsage; costUsd: number; status: UsageStatus }
+        | undefined
 
       this.#emit({
         type: 'model.call.started',
@@ -352,10 +373,11 @@ export class ModelGateway {
           tenantId: request.tenantId,
           correlationId: request.correlationId,
           model: profile.model,
-          input: request.input,
+          input: rendered.input,
           temperature: profile.temperature,
           maxTokens: request.maxTokens ?? profile.maxTokens,
           promptSha256: prompt.sha256,
+          promptBinding: rendered.binding,
           ...(structuredOutput
             ? { structuredSchemaName: structuredOutput.schemaName }
             : {}),
@@ -364,26 +386,49 @@ export class ModelGateway {
           ...(request.metadata ? { metadata: request.metadata } : {})
         })
 
-        const output = this.#parseOutput(providerResult, structuredOutput)
-        const usage = providerResult.usage
-        // Fail closed before settle/meter: malformed usage must not become a
-        // silent NaN cost (PDSH-024).
-        if (!isValidProviderUsage(usage)) {
+        // SPEC 0267 §3.3: usage is validated and accounted before the output
+        // is parsed, so a rejected output still costs what it consumed.
+        const reportedUsage = providerResult.usage
+        // Fail closed: malformed usage must not become a silent NaN cost
+        // (PDSH-024).
+        if (
+          reportedUsage !== undefined &&
+          !isValidProviderUsage(reportedUsage)
+        ) {
           throw new ModelGatewayError(
             'provider_malformed_response',
             `Provider ${provider.id} returned invalid token usage`
           )
         }
-        const costUsd = this.#computeCost(profile, usage)
-        this.#meter?.record(usage)
-        this.#circuit.onSuccess(circuitKey)
+        const usageStatus: UsageStatus =
+          reportedUsage === undefined ? 'unreported' : 'reported'
+        const usage =
+          reportedUsage ??
+          conservativeUsage(
+            rendered.input,
+            request.maxTokens ?? profile.maxTokens
+          )
+        const costUsd =
+          reportedUsage === undefined
+            ? Math.max(estimatedCost, this.#computeCost(profile, usage))
+            : this.#computeCost(profile, usage)
+        if (reportedUsage === undefined) {
+          this.#meter?.recordUnreported()
+        } else {
+          this.#meter?.record(usage)
+        }
         if (this.#budget) {
           this.#budget.settle({
             reservedKeys,
-            estimatedCostUsd: estimatedCost,
+            estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
             actualCostUsd: costUsd
           })
         }
+        reservationSettled = true
+        accounted = { usage, costUsd, status: usageStatus }
+
+        const output = this.#parseOutput(providerResult, structuredOutput)
+        this.#circuit.onSuccess(circuitKey)
         const latencyMs = this.#clock().getTime() - startedAt.getTime()
         this.#emit({
           type: 'model.call.completed',
@@ -399,7 +444,7 @@ export class ModelGateway {
           outputTokens: usage.outputTokens,
           // The real cost is never hidden; an overrun of the ceiling is
           // reported with the result (SPEC 0248 §3.4).
-          ...(costUsd > ceiling ? { detail: 'cost_ceiling_exceeded' } : {})
+          ...completionDetail(usageStatus, costUsd > ceiling)
         })
         return {
           requestId: request.requestId,
@@ -410,10 +455,12 @@ export class ModelGateway {
           profile: profile.name,
           output,
           usage,
+          usageStatus,
           costUsd,
           attempts: attempt,
           latencyMs,
           promptSha256: prompt.sha256,
+          promptBinding: rendered.binding,
           createdAt: this.#clock().toISOString(),
           fallbackUsed: candidate.fallbackUsed,
           ...(routeSubstitution(profile.name, request.modelProfile)
@@ -474,7 +521,18 @@ export class ModelGateway {
           model: profile.model,
           profile: profile.name,
           attempt,
-          code: gatewayError.code
+          code: gatewayError.code,
+          // An executed call stays accounted even when its output failed.
+          ...(accounted
+            ? {
+                costUsd: accounted.costUsd,
+                inputTokens: accounted.usage.inputTokens,
+                outputTokens: accounted.usage.outputTokens,
+                ...(accounted.status === 'unreported'
+                  ? { detail: 'usage_unreported' }
+                  : {})
+              }
+            : {})
         })
         throw gatewayError
       } finally {
@@ -556,7 +614,7 @@ export class ModelGateway {
   #resolvePrompt(
     request: z.infer<typeof ModelGatewayRequestSchema>,
     dataClassification: DataClassification
-  ): PromptRecord {
+  ): { record: PromptRecord; effectiveClassification: DataClassification } {
     try {
       const record = this.#prompts.resolve(
         {
@@ -566,22 +624,19 @@ export class ModelGateway {
         },
         { tenantId: request.tenantId, at: this.#clock() }
       )
-      if (record.classification !== dataClassification) {
-        // Data class of the request must never be broader than the prompt's own
-        // class; mismatches are resolved to the strictest of the two.
-        const strictest =
-          classificationRank(record.classification) >=
-          classificationRank(dataClassification)
-            ? record.classification
-            : dataClassification
-        if (strictest !== record.classification) {
-          throw new ModelGatewayError(
-            'policy_denied',
-            'Request data classification exceeds the approved prompt class'
-          )
-        }
+      // SPEC 0267 §3.2: the prompt class is both the class of its content and
+      // the ceiling of the data it may be combined with. A broader request is
+      // refused; otherwise the strictest class (the prompt's) governs routing.
+      if (
+        classificationRank(dataClassification) >
+        classificationRank(record.classification)
+      ) {
+        throw new ModelGatewayError(
+          'policy_denied',
+          'Request data classification exceeds the approved prompt class'
+        )
       }
-      return record
+      return { record, effectiveClassification: record.classification }
     } catch (error) {
       if (error instanceof ModelGatewayError) throw error
       if (error instanceof PromptRegistryError) {
@@ -591,6 +646,22 @@ export class ModelGateway {
         )
       }
       throw error
+    }
+  }
+
+  #assertPromptStillApproved(
+    request: z.infer<typeof ModelGatewayRequestSchema>,
+    binding: PromptBinding
+  ): void {
+    const { record } = this.#resolvePrompt(
+      request,
+      request.dataClassification as DataClassification
+    )
+    if (record.sha256 !== binding.registrySha256) {
+      throw new ModelGatewayError(
+        'prompt_hash_mismatch',
+        'Approved prompt changed after rendering'
+      )
     }
   }
 
@@ -615,6 +686,35 @@ function classificationRank(classification: DataClassification): number {
     'CREDENTIAL'
   ]
   return order.indexOf(classification)
+}
+
+/**
+ * Upper bound used when a provider reports no counters: every UTF-8 byte of
+ * the rendered input counts as an input token, and the output reaches the
+ * call limit. It is an accounting bound, never a measurement.
+ */
+function conservativeUsage(
+  input: ModelInput,
+  maxTokens: number
+): ProviderUsage {
+  const bytes =
+    Buffer.byteLength(input.system ?? '', 'utf8') +
+    input.messages.reduce(
+      (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
+      0
+    )
+  return { inputTokens: bytes, outputTokens: maxTokens }
+}
+
+function completionDetail(
+  usageStatus: UsageStatus,
+  overCeiling: boolean
+): { detail?: string } {
+  const details = [
+    ...(usageStatus === 'unreported' ? ['usage_unreported'] : []),
+    ...(overCeiling ? ['cost_ceiling_exceeded'] : [])
+  ]
+  return details.length > 0 ? { detail: details.join(',') } : {}
 }
 
 function routeSubstitution(

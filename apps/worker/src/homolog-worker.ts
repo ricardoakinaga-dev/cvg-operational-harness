@@ -16,9 +16,14 @@
  */
 import { Pool } from 'pg'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
+import { ApprovalError } from '@cvg/approval-engine'
+import { OperationalExecutionError } from '@cvg/harness'
 import { createShutdownController } from '@cvg/shared'
 import { sweepExpiredApprovals } from '@cvg/agent-runtime'
-import { reconcileApprovalDecision } from '@cvg/agent-core'
+import {
+  ApprovalReconciliationDataError,
+  reconcileApprovalDecision
+} from '@cvg/agent-core'
 import {
   TenantScopedPostgresRuntimeRepository,
   withTenantContext,
@@ -40,6 +45,10 @@ export const OPERATIONAL_HARNESS_HOMOLOG_RUNTIME =
 export const HOMOLOG_SYNTHETIC_ONLY_ENV = 'CVG_HOMOLOG_SYNTHETIC_ONLY'
 export const HOMOLOG_SWEEP_INTERVAL_ENV = 'CVG_HOMOLOG_SWEEP_INTERVAL_MS'
 export const HOMOLOG_HEALTH_INTERVAL_ENV = 'CVG_HOMOLOG_HEALTH_INTERVAL_MS'
+export const HOMOLOG_RECONCILE_MAX_AGE_ENV =
+  'CVG_HOMOLOG_RECONCILE_MAX_AGE_HOURS'
+export const DEFAULT_HOMOLOG_RECONCILE_MIN_AGE_SECONDS = 30
+export const DEFAULT_HOMOLOG_RECONCILE_MAX_AGE_SECONDS = 24 * 60 * 60
 export const DEFAULT_HOMOLOG_SWEEP_INTERVAL_MS = 5_000
 export const DEFAULT_HOMOLOG_HEALTH_INTERVAL_MS = 1_000
 
@@ -97,6 +106,40 @@ export function parseHomologConfig(env: NodeJS.ProcessEnv): {
   return { tenantId, sweepIntervalMs, healthIntervalMs }
 }
 
+/**
+ * SPEC 0272 BUILD fix (review D9): how old an undecided-event approval must be
+ * before the worker recovers it (`minAgeSeconds`, lets a slow API finish its
+ * own append) and how far back it looks (`maxAgeSeconds`, `null` = no ceiling,
+ * the standalone backfill mode). Hours come from the environment; `0` means no
+ * ceiling.
+ */
+export interface StuckDecisionWindow {
+  minAgeSeconds: number
+  maxAgeSeconds: number | null
+}
+
+export function parseReconcileWindow(
+  env: NodeJS.ProcessEnv
+): StuckDecisionWindow {
+  const raw = env[HOMOLOG_RECONCILE_MAX_AGE_ENV]?.trim()
+  if (raw === undefined || raw === '') {
+    return {
+      minAgeSeconds: DEFAULT_HOMOLOG_RECONCILE_MIN_AGE_SECONDS,
+      maxAgeSeconds: DEFAULT_HOMOLOG_RECONCILE_MAX_AGE_SECONDS
+    }
+  }
+  const hours = Number(raw)
+  if (!Number.isInteger(hours) || hours < 0) {
+    throw new Error(
+      `${HOMOLOG_RECONCILE_MAX_AGE_ENV} must be a non-negative integer (0 = no ceiling)`
+    )
+  }
+  return {
+    minAgeSeconds: DEFAULT_HOMOLOG_RECONCILE_MIN_AGE_SECONDS,
+    maxAgeSeconds: hours === 0 ? null : hours * 3600
+  }
+}
+
 function healthFailureDetail(
   report: Awaited<ReturnType<typeof checkHomologHealth>>
 ): string {
@@ -120,84 +163,200 @@ export async function assertHomologHealthPreflight(
 
 /**
  * Recovery tick for approvals decided while their execution stayed waiting
- * (crash between decision and resume/audit). Every step is idempotent, so
+ * (crash between decision and resume/audit), including approvals whose
+ * execution already advanced past APPROVED (SPEC 0272). Every step is idempotent, so
  * the tick converges without risking a second effect.
  */
+/**
+ * SPEC 0272: also approvals whose execution already advanced. The anti-join
+ * uses the expression of uq_audit_approval_decision (COALESCE(tenant_id, ''),
+ * approvalId, decision) so the index serves it; the age window keeps the tick
+ * away from a merely slow API and from the whole decided history.
+ * `minParam`/`maxParam` are the positional parameters of the minimum age (s)
+ * and of the maximum age (s, or NULL for no ceiling).
+ */
+function stuckDecisionsFrom(minParam: string, maxParam: string): string {
+  return `FROM operational_executions AS e
+       INNER JOIN runtime_approvals AS a
+         ON a.tenant_id = e.tenant_id AND a.approval_id = e.approval_id
+       WHERE e.tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
+          AND a.status IN ('APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED', 'REJECTED')
+          AND e.updated_at < now() - make_interval(secs => ${minParam}::double precision)
+          AND (${maxParam}::double precision IS NULL
+               OR e.updated_at > now() - make_interval(secs => ${maxParam}::double precision))
+          AND NOT EXISTS (
+            SELECT 1
+            FROM audit_events AS audit
+            WHERE audit.type = 'approval_decision'
+              AND COALESCE(audit.tenant_id, '') = COALESCE(e.tenant_id, '')
+              AND audit.payload->>'approvalId' = a.approval_id
+              AND audit.payload->>'decision' =
+                CASE WHEN a.status = 'REJECTED' THEN 'rejected' ELSE 'approved' END
+          )`
+}
+
+/**
+ * The persisted decision envelope `reconcileApprovalDecision` requires. Rows
+ * without it (history from before migration 0024, or lost) can never be
+ * recovered, so they are left out of the batch and only counted.
+ */
+const ENVELOPE_COMPLETE = `COALESCE(a.approver_id, '') <> ''
+          AND COALESCE(a.decision_actor_type, '') <> ''
+          AND COALESCE(a.decision_correlation_id, '') <> ''
+          AND COALESCE(a.decision_command_key, '') <> ''`
+
+/** Parameters: $1 limit, $2 minimum age (s), $3 maximum age (s) or NULL. */
+export const STUCK_APPROVAL_DECISIONS_SQL = `SELECT e.id AS execution_id, e.approval_id,
+               CASE WHEN a.status = 'REJECTED' THEN 'REJECTED' ELSE 'APPROVED' END AS decision
+       ${stuckDecisionsFrom('$2', '$3')}
+          AND ${ENVELOPE_COMPLETE}
+       ORDER BY e.updated_at ASC
+       LIMIT $1`
+
+/** Parameters: $1 minimum age (s), $2 maximum age (s) or NULL. */
+export const INCOMPLETE_ENVELOPE_COUNT_SQL = `SELECT count(*)::integer AS incomplete
+       ${stuckDecisionsFrom('$1', '$2')}
+          AND NOT (${ENVELOPE_COMPLETE})`
+
+/**
+ * Errors that belong to one row and repeat on every tick for it: the reconciler's
+ * own data errors, an execution that no longer accepts the resume
+ * (`invalid_action`, `conflict`) and an approval that is gone (`not_found`).
+ * Matched by type and `code`, never by message. Everything else (lease_lost,
+ * pg and pg-pool errors with or without a code, a plain Error) is not a row's
+ * fault and fails the tick.
+ */
+export function isRowDataError(error: unknown): boolean {
+  if (error instanceof ApprovalReconciliationDataError) return true
+  if (error instanceof OperationalExecutionError) {
+    return error.code === 'invalid_action' || error.code === 'conflict'
+  }
+  if (error instanceof ApprovalError) return error.code === 'not_found'
+  return false
+}
+
+export interface StuckDecisionOptions {
+  limit?: number
+  window?: StuckDecisionWindow
+  /** Test seam: replaces the audit append of the PostgreSQL repository. */
+  appendAudit?: (
+    event: Record<string, unknown> & { payload: unknown },
+    tenant: string
+  ) => Promise<unknown> | unknown
+  /** One line per row that could not be recovered; the tick goes on. */
+  onRowFailed?: (failure: { approvalId: string; reason: string }) => void
+  /** Rows in the window that have no complete envelope (manual handling). */
+  onIncompleteEnvelope?: (count: number) => void
+}
+
 export async function reconcileStuckApprovalDecisions(
   pool: Pool,
   tenantId: TenantId,
   runtime: OperationalHarnessWorkerRuntime,
-  limit = 25
+  options: StuckDecisionOptions = {}
 ): Promise<number> {
-  const stuck = await withTenantContext(pool, tenantId, (client) =>
-    client.query<{
+  const limit = options.limit ?? 25
+  const window = options.window ?? {
+    minAgeSeconds: DEFAULT_HOMOLOG_RECONCILE_MIN_AGE_SECONDS,
+    maxAgeSeconds: DEFAULT_HOMOLOG_RECONCILE_MAX_AGE_SECONDS
+  }
+  const onRowFailed =
+    options.onRowFailed ??
+    ((failure) =>
+      console.error(
+        JSON.stringify({
+          event: 'worker.homolog_reconcile_row_failed',
+          approvalId: failure.approvalId,
+          reason: failure.reason
+        })
+      ))
+  const onIncompleteEnvelope =
+    options.onIncompleteEnvelope ??
+    ((count) =>
+      console.error(
+        JSON.stringify({
+          event: 'worker.homolog_reconcile_incomplete_envelope',
+          count
+        })
+      ))
+  const stuck = await withTenantContext(pool, tenantId, async (client) => {
+    const incomplete = await client.query<{ incomplete: number }>(
+      INCOMPLETE_ENVELOPE_COUNT_SQL,
+      [window.minAgeSeconds, window.maxAgeSeconds]
+    )
+    const incompleteCount = Number(incomplete.rows[0]?.incomplete ?? 0)
+    if (incompleteCount > 0) onIncompleteEnvelope(incompleteCount)
+    return client.query<{
       execution_id: string
       approval_id: string
       decision: string
-    }>(
-      `SELECT e.id AS execution_id, e.approval_id,
-               CASE WHEN a.status = 'APPROVED' THEN 'APPROVED' ELSE 'REJECTED' END AS decision
-       FROM operational_executions AS e
-       INNER JOIN runtime_approvals AS a
-         ON a.tenant_id = e.tenant_id AND a.approval_id = e.approval_id
-       WHERE e.tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
-          AND a.status IN ('APPROVED', 'REJECTED')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM audit_events AS audit
-            WHERE audit.tenant_id = e.tenant_id
-              AND audit.type = 'approval_decision'
-              AND audit.payload->>'approvalId' = a.approval_id
-              AND audit.payload->>'decision' =
-                CASE WHEN a.status = 'APPROVED' THEN 'approved' ELSE 'rejected' END
-          )
-       ORDER BY e.updated_at ASC
-       LIMIT $1`,
-      [limit]
-    )
-  )
+    }>(STUCK_APPROVAL_DECISIONS_SQL, [
+      limit,
+      window.minAgeSeconds,
+      window.maxAgeSeconds
+    ])
+  })
   const audit = new TenantScopedPostgresRuntimeRepository(
     pool as unknown as PostgresPoolLike
   )
+  const appendAudit =
+    options.appendAudit ??
+    ((event: Record<string, unknown> & { payload: unknown }, tenant: string) =>
+      audit.appendAudit(event as never, tenant as never))
   let reconciled = 0
   for (const row of stuck.rows) {
-    const decision =
-      row.decision === 'APPROVED' ? 'APPROVED' : ('REJECTED' as const)
-    const approval = await runtime.approvalAuthority.get(
-      tenantId as string,
-      row.approval_id
-    )
-    await reconcileApprovalDecision(
-      {
-        getApproval: () => approval,
-        resolveExecution: (input) => runtime.store.resolveApproval(input),
-        appendAudit: (event, tenant) =>
-          audit.appendAudit(
-            {
-              ...event,
-              payload: {
-                ...(event.payload as Record<string, unknown>),
-                tenantId: tenant
-              }
-            },
-            tenant as never
-          )
-      },
-      {
-        tenantId: tenantId as string,
-        executionId: row.execution_id,
+    // One unrecoverable row (for example an approval from before the decision
+    // envelope was persisted) must never stop the rows behind it.
+    try {
+      const decision =
+        row.decision === 'APPROVED' ? 'APPROVED' : ('REJECTED' as const)
+      const approval = await runtime.approvalAuthority.get(
+        tenantId as string,
+        row.approval_id
+      )
+      await reconcileApprovalDecision(
+        {
+          getApproval: () => approval,
+          resolveExecution: (input) => runtime.store.resolveApproval(input),
+          appendAudit: (event, tenant) =>
+            appendAudit(
+              {
+                ...event,
+                payload: {
+                  ...(event.payload as Record<string, unknown>),
+                  tenantId: tenant
+                }
+              },
+              tenant
+            )
+        },
+        {
+          tenantId: tenantId as string,
+          executionId: row.execution_id,
+          approvalId: row.approval_id,
+          decision
+        }
+      )
+      reconciled += 1
+    } catch (error) {
+      // Only the row's own persistent problems are isolated (isRowDataError).
+      // Anything else (a connection that dropped, a server shutdown, pg-pool
+      // errors that carry no code, lease_lost) fails the whole tick so
+      // worker.homolog_sweep_failed fires.
+      if (!isRowDataError(error)) throw error
+      onRowFailed({
         approvalId: row.approval_id,
-        decision
-      }
-    )
-    reconciled += 1
+        reason: error instanceof Error ? error.message : 'unknown'
+      })
+    }
   }
   return reconciled
 }
 
 export async function runHomologSweepTick(
   runtime: OperationalHarnessWorkerRuntime,
-  tenantId: TenantId
+  tenantId: TenantId,
+  window?: StuckDecisionWindow
 ): Promise<HomologSweepResult> {
   const now = new Date()
   const approvals = await sweepExpiredApprovals({
@@ -211,7 +370,8 @@ export async function runHomologSweepTick(
     reconciled = await reconcileStuckApprovalDecisions(
       runtime.pool,
       tenantId,
-      runtime
+      runtime,
+      window ? { window } : {}
     )
   }
   return {
@@ -226,6 +386,7 @@ export async function runOperationalHarnessHomologWorker(
 ): Promise<void> {
   const { tenantId, sweepIntervalMs, healthIntervalMs } =
     parseHomologConfig(env)
+  const reconcileWindow = parseReconcileWindow(env)
   const runtime = createOperationalHarnessWorker(env)
   if (!runtime.pool) {
     await runtime.close()
@@ -366,7 +527,11 @@ export async function runOperationalHarnessHomologWorker(
       if (sweepNow - lastSweep >= sweepIntervalMs) {
         lastSweep = sweepNow
         try {
-          const sweep = await runHomologSweepTick(runtime, tenantId)
+          const sweep = await runHomologSweepTick(
+            runtime,
+            tenantId,
+            reconcileWindow
+          )
           telemetry.log('worker.homolog_sweep', {
             workerId,
             released: sweep.approvalsReleased,

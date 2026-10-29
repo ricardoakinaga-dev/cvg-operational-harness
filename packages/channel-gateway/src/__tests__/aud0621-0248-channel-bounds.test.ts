@@ -170,6 +170,9 @@ for (const [name, make] of Object.entries(kinds)) {
         }).send(OUTBOUND)
       ).rejects.toMatchObject({
         code: 'provider_rejected',
+        // A 2xx whose body is cut stays UNCERTAIN, not FAILED.
+        retryable: false,
+        effectUnknown: true,
         message: expect.stringContaining('exceeded the size limit')
       })
       expect(state.cancelled).toBe(true)
@@ -186,7 +189,11 @@ for (const [name, make] of Object.entries(kinds)) {
             }),
           maxResponseBytes: 8
         }).send(OUTBOUND)
-      ).rejects.toMatchObject({ code: 'provider_rejected' })
+      ).rejects.toMatchObject({
+        code: 'provider_rejected',
+        retryable: false,
+        effectUnknown: true
+      })
     })
 
     it('AC24: the bound transport cuts at the ceiling and honors the deadline', async () => {
@@ -209,7 +216,11 @@ for (const [name, make] of Object.entries(kinds)) {
           dnsLookup: undefined,
           maxResponseBytes: 4 * 1024
         }).send(OUTBOUND)
-      ).rejects.toMatchObject({ code: 'provider_rejected' })
+      ).rejects.toMatchObject({
+        code: 'provider_rejected',
+        retryable: false,
+        effectUnknown: true
+      })
       expect(written).toBeLessThan(512)
 
       const failing = await startServer((request, response) => {
@@ -226,7 +237,8 @@ for (const [name, make] of Object.entries(kinds)) {
         }).send(OUTBOUND)
       ).rejects.toMatchObject({
         code: 'provider_rejected',
-        retryable: true,
+        retryable: false,
+        effectUnknown: true,
         message: expect.stringContaining('status 503')
       })
 

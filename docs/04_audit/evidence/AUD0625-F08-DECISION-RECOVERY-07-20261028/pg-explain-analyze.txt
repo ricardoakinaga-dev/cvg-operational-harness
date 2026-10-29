@@ -1,0 +1,67 @@
+-- 10000 synthetic approvals/executions, half with their event; window 30 s .. 24 h
+-- natural plan
+Limit  (cost=3560.20..3598.46 rows=25 width=61) (actual time=5.921..7.629 rows=25 loops=1)
+  Buffers: shared hit=2369
+  ->  Nested Loop Anti Join  (cost=3560.20..16651.48 rows=8555 width=61) (actual time=5.920..7.626 rows=25 loops=1)
+        Buffers: shared hit=2369
+        ->  Nested Loop  (cost=3559.92..12709.75 rows=9777 width=90) (actual time=5.898..7.491 rows=50 loops=1)
+              Buffers: shared hit=2244
+              ->  Gather Merge  (cost=3559.50..4696.47 rows=9976 width=73) (actual time=5.877..7.300 rows=50 loops=1)
+                    Workers Planned: 1
+                    Workers Launched: 1
+                    Buffers: shared hit=2044
+                    ->  Sort  (cost=2559.49..2574.16 rows=5868 width=73) (actual time=2.874..2.876 rows=38 loops=2)
+                          Sort Key: e.updated_at
+                          Sort Method: quicksort  Memory: 1393kB
+                          Buffers: shared hit=2044
+                          Worker 0:  Sort Method: quicksort  Memory: 29kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..2192.20 rows=5868 width=73) (actual time=0.014..2.141 rows=4988 loops=2)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Rows Removed by Filter: 12
+                                Buffers: shared hit=2001
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.41..0.80 rows=1 width=61) (actual time=0.003..0.003 rows=1 loops=50)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED}'::text[])))
+                    Buffers: shared hit=200
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.29..0.40 rows=1 width=98) (actual time=0.002..0.002 rows=0 loops=50)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN (a.status = 'REJECTED'::text) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=125
+Planning:
+  Buffers: shared hit=210
+Planning Time: 0.635 ms
+Execution Time: 7.666 ms
+
+-- enable_seqscan = off (index availability)
+Limit  (cost=4354.12..4392.38 rows=25 width=61) (actual time=5.512..8.568 rows=25 loops=1)
+  Buffers: shared hit=2511
+  ->  Nested Loop Anti Join  (cost=4354.12..17445.40 rows=8555 width=61) (actual time=5.511..8.565 rows=25 loops=1)
+        Buffers: shared hit=2511
+        ->  Nested Loop  (cost=4353.83..13503.67 rows=9777 width=90) (actual time=5.490..8.440 rows=50 loops=1)
+              Buffers: shared hit=2386
+              ->  Gather Merge  (cost=4353.42..5490.39 rows=9976 width=73) (actual time=5.468..8.261 rows=50 loops=1)
+                    Workers Planned: 1
+                    Workers Launched: 1
+                    Buffers: shared hit=2186
+                    ->  Sort  (cost=3353.41..3368.08 rows=5868 width=73) (actual time=3.790..3.800 rows=330 loops=2)
+                          Sort Key: e.updated_at
+                          Sort Method: quicksort  Memory: 974kB
+                          Buffers: shared hit=2186
+                          Worker 0:  Sort Method: quicksort  Memory: 328kB
+                          ->  Parallel Bitmap Heap Scan on operational_executions e  (cost=793.92..2986.11 rows=5868 width=73) (actual time=0.766..3.065 rows=4988 loops=2)
+                                Recheck Cond: (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text))
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                                Rows Removed by Filter: 12
+                                Heap Blocks: exact=1545
+                                Buffers: shared hit=2178
+                                ->  Bitmap Index Scan on operational_executions_tenant_id_idempotency_key_key  (cost=0.00..791.42 rows=10001 width=0) (actual time=1.276..1.276 rows=10002 loops=1)
+                                      Index Cond: (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text))
+                                      Buffers: shared hit=177
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.41..0.80 rows=1 width=61) (actual time=0.003..0.003 rows=1 loops=50)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED}'::text[])))
+                    Buffers: shared hit=200
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.29..0.40 rows=1 width=98) (actual time=0.002..0.002 rows=0 loops=50)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN (a.status = 'REJECTED'::text) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=125
+Planning Time: 0.356 ms
+Execution Time: 8.604 ms

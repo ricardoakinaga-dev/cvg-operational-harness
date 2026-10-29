@@ -95,3 +95,14 @@ Cada linha tem `event`, `correlationId`/`workerId` e escopo
 `synthetic-local-only`. Correlação ponta a ponta: `meta.correlationId` da
 resposta == evento de auditoria persistido (prova em
 `homolog-correlation-postgres.test.ts`).
+
+## Recuperação do evento de decisão de aprovação (SPEC 0272)
+
+O tick do worker de homologação (`reconcileStuckApprovalDecisions`) grava o evento `approval_decision` que faltou depois de um crash entre a decisão e o append, inclusive quando a execução já avançou (`RESERVED`, `EXECUTING`, `EXECUTED`). O evento recuperado leva `recovered: true` e `observedApprovalStatus`.
+
+- Piso de espera: só considera execuções com `updated_at` mais velho que 30 s, para não correr contra uma API apenas lenta.
+- Teto: por padrão olha 24 h para trás. `CVG_HOMOLOG_RECONCILE_MAX_AGE_HOURS=<n>` muda o teto; `0` retira o teto.
+- Backfill avulso de lacunas antigas: suba o worker de homologação sintético com `CVG_HOMOLOG_RECONCILE_MAX_AGE_HOURS=0` pelo tempo de uma ou duas varreduras (25 linhas por tick) e volte ao valor padrão; o índice único `uq_audit_approval_decision` impede duplicidade.
+- Aprovação sem o envelope de decisão persistido (histórico anterior à migração 0024): fica fora do lote e só é contada; o tick registra `worker.homolog_reconcile_incomplete_envelope` com `count` para tratamento manual por decisão humana. Não ocupa as vagas das recuperáveis.
+- Erro de dado em uma linha (por exemplo `decision mismatch`): o tick registra `worker.homolog_reconcile_row_failed` com `approvalId` e `reason` e segue para as demais. Erro de infraestrutura (conexão perdida, `57P01`, classe `08`, `ECONNRESET`) derruba o tick e dispara `worker.homolog_sweep_failed`.
+- Aprovações `FAILED`, `CANCELLED` ou `EXPIRED` que passaram por `APPROVED` não são recuperadas (follow-up AUD0625-F08b).

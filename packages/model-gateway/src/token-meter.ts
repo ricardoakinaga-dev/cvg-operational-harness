@@ -52,6 +52,19 @@ export class TokenMeter {
   #requests = 0
   #inputTokens = 0
   #outputTokens = 0
+  #unreportedRequests = 0
+
+  /**
+   * SPEC 0267 §3.3: a call whose provider reported no counters. Counted
+   * apart; no token is added to the measured sums.
+   */
+  recordUnreported(): void {
+    this.#unreportedRequests = assertSum(this.#unreportedRequests, 1)
+  }
+
+  get unreportedRequests(): number {
+    return this.#unreportedRequests
+  }
 
   record(usage: ProviderUsage): TokenMeterSnapshot {
     if (!isValidProviderUsage(usage)) {
@@ -68,9 +81,14 @@ export class TokenMeter {
     return this.snapshot()
   }
 
-  /** Convenience: records the usage of a gateway `ModelResult`. */
+  /**
+   * Convenience: records the usage of a gateway `ModelResult`. A result whose
+   * `usageStatus` is `unreported` carries an accounting bound, not a
+   * measurement (SPEC 0267 §3.3): it is counted apart and adds no tokens.
+   */
   recordModelResult(result: {
     readonly usage: ProviderUsage
+    readonly usageStatus?: 'reported' | 'unreported'
   }): TokenMeterSnapshot {
     if (
       !result ||
@@ -80,6 +98,10 @@ export class TokenMeter {
       throw new TokenMeterError(
         'TokenMeter.recordModelResult requires a result with measured usage'
       )
+    }
+    if (result.usageStatus === 'unreported') {
+      this.recordUnreported()
+      return this.snapshot()
     }
     return this.record(result.usage)
   }

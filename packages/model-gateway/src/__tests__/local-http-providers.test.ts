@@ -130,7 +130,7 @@ describe('OpenAI-compatible provider against a local fake server', () => {
     })
   })
 
-  it('defaults usage to zero and maps HTTP failures', async () => {
+  it('leaves absent usage unreported and maps HTTP failures', async () => {
     const baseUrl = await startServer((_request, response) => {
       response.writeHead(500, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ error: 'unavailable' }))
@@ -164,7 +164,8 @@ describe('OpenAI-compatible provider against a local fake server', () => {
     })
     const result = await defaultUsage.execute(providerRequest())
     expect(result.text).toBe('')
-    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0 })
+    // SPEC 0267 §3.3: absent counters are unknown, never zero.
+    expect(result.usage).toBeUndefined()
     expect(result.finishReason).toBeUndefined()
   })
 
@@ -317,7 +318,7 @@ describe('Ollama provider against a local fake server', () => {
     })
   })
 
-  it('falls back to the legacy response field and zero usage', async () => {
+  it('falls back to the legacy response field and leaves usage unreported', async () => {
     const baseUrl = await startServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({ response: 'legacy answer' }))
@@ -329,7 +330,8 @@ describe('Ollama provider against a local fake server', () => {
     })
     const result = await provider.execute(providerRequest())
     expect(result.text).toBe('legacy answer')
-    expect(result.usage).toEqual({ inputTokens: 0, outputTokens: 0 })
+    // SPEC 0267 §3.3: absent counters are unknown, never zero.
+    expect(result.usage).toBeUndefined()
   })
 
   it('maps HTTP failures and malformed payloads from the loopback server', async () => {

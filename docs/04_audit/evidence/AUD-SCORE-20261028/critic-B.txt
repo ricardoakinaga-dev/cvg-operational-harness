@@ -1,0 +1,85 @@
+**Lane B: FAIL nos critérios de integridade da auditoria.** Há controles substanciais de identidade, tenant e aprovação, mas os caminhos conectados ainda permitem perder a trilha da decisão humana e persistir aprovação sem seu evento de emissão.
+
+Avaliação I1 por inspeção estática da fonte indicada como `61e5cf8f41d15cc41ad524f8a57476d4f6080131`. Não executei installs, testes, builds ou serviços; não editei arquivos nem criei agentes filhos. Não consultei relatórios anteriores de auditoria.
+
+**Achados por gravidade**
+
+1. **P1 — Recuperação pode perder definitivamente o evento da decisão após o início da execução. Confiança alta.**
+
+   A API confirma a decisão, chama `resolveApproval` e somente depois grava `approval_decision`: [server.ts:1453](/mnt/dados/cvg-work/aud-score-20261028/source/apps/api/src/server.ts:1453). Nesse intervalo, a execução já pode estar disponível ao worker.
+
+   Se ocorrer falha antes do append e a aprovação avançar para `RESERVED`, `EXECUTING`, `EXECUTED`, `FAILED` ou `UNCERTAIN`, a recuperação deixa de selecioná-la: seu SQL aceita apenas `APPROVED` e `REJECTED`, em [homolog-worker.ts:144](/mnt/dados/cvg-work/aud-score-20261028/source/apps/worker/src/homolog-worker.ts:144). Além disso, o reconciliador exige que o **status atual** seja exatamente o veredito, em [approval-reconciliation.ts:90](/mnt/dados/cvg-work/aud-score-20261028/source/packages/agent-core/src/approval-reconciliation.ts:90).
+
+   **Impacto:** a execução pode avançar sem que a recuperação automática recomponha o evento da decisão humana. O envelope causal continua na aprovação, mas isso não equivale ao evento ausente.
+
+   **Expectativa:** persistir decisão e evidência durável na mesma transação, ou recuperar pelo envelope imutável da decisão independentemente do estado posterior de execução.
+
+   O teste de falha após resume faz retry HTTP imediato, mantendo a aprovação em `APPROVED`; não exercita o avanço pelo worker antes da recuperação: [approval-decision-atomicity.test.ts:245](/mnt/dados/cvg-work/aud-score-20261028/source/apps/api/src/__tests__/approval-decision-atomicity.test.ts:245).
+
+2. **P1 — Emissão de capability approval e auditoria não são atômicas. Confiança alta.**
+
+   A rota persiste a aprovação em [server.ts:2159](/mnt/dados/cvg-work/aud-score-20261028/source/apps/api/src/server.ts:2159) e depois chama `appendPlatformAudit`, na linha 2170. O repositório de emissão faz um `INSERT` independente, sem incluir a auditoria: [platform-approval-repository.ts:68](/mnt/dados/cvg-work/aud-score-20261028/source/packages/persistence/src/platform-approval-repository.ts:68).
+
+   **Cenário:** `issue` conclui; o append falha; a API responde erro, mas a aprovação permanece `issued`. Com nonce explícito, repetir a requisição encontra a unicidade e recebe “Approval nonce already exists”, sem convergir para o resultado original.
+
+   **Impacto:** autorização persistida sem evento de emissão e resposta ambígua para o solicitante.
+
+   **Expectativa:** transação única para emissão e evento, ou outbox transacional com recuperação e replay idempotente. O consumo já apresenta desenho melhor: lock, transição e auditoria opcional dentro da mesma transação.
+
+3. **P1 — Desativação ou mudança de papel não invalida imediatamente permissões fora das rotas de caso. Confiança alta; limitação documentada.**
+
+   O hook aceita a identidade armazenada enquanto a sessão existir e não tiver expirado: [operator-session-hook.ts:71](/mnt/dados/cvg-work/aud-score-20261028/source/apps/api/src/operator-session-hook.ts:71). `requirePlatformScope` verifica permissão e tenant, mas não consulta principal corrente: [server.ts:4508](/mnt/dados/cvg-work/aud-score-20261028/source/apps/api/src/server.ts:4508).
+
+   Assim, uma sessão de Approver/Supervisor desativado pode continuar chegando à emissão de capability approvals durante sua validade. A própria especificação reconhece essa janela de até 15 minutos: [SPEC0254:312](/mnt/dados/cvg-work/aud-score-20261028/source/docs/02_spec/0254_oidc_login_case_principals.md:312).
+
+   **Impacto:** revogação desigual entre superfícies da mesma API.
+
+   **Expectativa:** validar principal/versão nas operações sensíveis fora de caso ou oferecer invalidação global das sessões do operador. Trata-se de lacuna assumida pela fatia documental, não de divergência escondida da implementação.
+
+4. **P2 — Migração de deduplicação pode recusar histórico legítimo de aprovações. Confiança alta.**
+
+   A migração agrupa **todos** os eventos `approval_decision` por `approvalId` e `decision`, inclusive quando essas propriedades estão ausentes: [0021_approval_decision_audit_dedupe.sql:32](/mnt/dados/cvg-work/aud-score-20261028/source/packages/persistence/migrations/0021_approval_decision_audit_dedupe.sql:32).
+
+   Entretanto, decisões de atendimento usam `approvalRequestId` e `status`: [attendance-approval.ts:65](/mnt/dados/cvg-work/aud-score-20261028/source/packages/persistence/src/attendance-approval.ts:65). Duas decisões legítimas no mesmo tenant entram no mesmo grupo `(tenant,NULL,NULL)` e provocam a exceção de duplicidade. O índice UNIQUE criado adiante possui semântica diferente para valores nulos.
+
+   **Impacto:** upgrade bloqueado por eventos distintos, sem duplicidade da chave pretendida.
+
+   **Expectativa:** alinhar a detecção de duplicatas à população efetivamente deduplicável, preservando eventos de outros formatos. Falta demonstrar migração sobre histórico sintético misto e populado.
+
+**Limitação transacional adicional**
+
+A autorização de mutações por caso encerra seu snapshot antes da escrita: [case-routes.ts:409](/mnt/dados/cvg-work/aud-score-20261028/source/apps/api/src/case-authorization/case-routes.ts:409). Uma requisição autorizada pode concluir depois do commit da revogação. Isso está explicitamente permitido pela SPEC0251, §I4; não classifico como violação desse contrato. Ainda impede atribuir completude à revogação no momento do efeito.
+
+**Notas inteiras recomendadas**
+
+| Área | Nota | Confiança | Fundamentação e limite |
+|---|---:|---|---|
+| Identidade e autenticação | **85** | Alta | OIDC com PKCE, nonce, state durável, assinatura, audience, MFA e sessão opaca; execução não verificada. |
+| Autorização e revogação | **73** | Alta | RBAC, tenant e grants por caso conectados; principal corrente não cobre todas as operações sensíveis. |
+| Policy e fail-closed | **82** | Média | Engine ativo nega contexto/grant inválido; exceção de policy vira negação. `packages/policy` legado não comprova sozinho o caminho ativo. |
+| Aprovação e idempotência | **79** | Alta | Binding por payload/versão, separação de atores, reservas e fencing; emissão não converge após falha de auditoria. |
+| Auditoria e causalidade | **64** | Alta | Envelope causal, sanitização e dedupe presentes; recuperação incompleta e emissão não atômica. |
+| Persistência e integridade | **78** | Alta | Locks, CAS e transações concretos; migração apresenta falso positivo sobre histórico válido. |
+| Isolamento de tenant | **86** | Média-alta | Escopo explícito, FORCE RLS, inventário e limpeza de conexão; comportamento real do PostgreSQL não executado nesta rodada. |
+
+Sem média agregada: os critérios obrigatórios abaixo permanecem independentes das notas.
+
+**Critérios de aceite desta revisão**
+
+`PASS` aqui significa atendimento por inspeção estática; não significa teste executado.
+
+| Critério | Resultado |
+|---|---|
+| OIDC verifica identidade antes de produzir principal e sessão | **PASS** |
+| Contexto/grant inválido e falha de policy negam o caminho inspecionado | **PASS** |
+| Binding de aprovação, reserva e geração persistida | **PASS** |
+| Tenant vinculado à identidade e às operações persistidas | **PASS** |
+| Recuperação da decisão auditada após avanço da execução | **FAIL** |
+| Emissão de capability approval atomicamente auditada e repetível | **FAIL** |
+| Revogação uniforme nas operações sensíveis | **FAIL** — lacuna documental explícita |
+| Migração aceita eventos distintos dos formatos existentes | **FAIL** |
+| Testes unitários, PostgreSQL, concorrência e falhas reais | **NOT_RUN** |
+
+**Maior lacuna:** a auditoria da autorização ainda depende da ordem temporal entre commits separados, retries e avanço da execução. Há mecanismos fortes nos componentes, mas a composição não garante a trilha completa da decisão.
+
+Nenhuma conclusão concede aceite operacional ou liberação de produção. A comparação PRE/POST dos hashes fica com o Lead, conforme solicitado.

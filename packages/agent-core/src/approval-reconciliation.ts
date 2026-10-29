@@ -13,6 +13,26 @@
 
 export type ApprovalDecision = 'APPROVED' | 'REJECTED'
 
+/**
+ * A row that cannot be reconciled because of its own data: not decided yet, a
+ * decision that disagrees with the record, or an incomplete persisted
+ * envelope. Callers may isolate these per row; any other error (connection
+ * loss, server shutdown, a failing port) must propagate.
+ */
+export class ApprovalReconciliationDataError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ApprovalReconciliationDataError'
+  }
+}
+
+/** Statuses an APPROVED approval moves through while its execution advances. */
+export const ADVANCED_APPROVED_STATUSES: ReadonlySet<string> = new Set([
+  'RESERVED',
+  'EXECUTING',
+  'EXECUTED'
+])
+
 export interface ReconciliationApproval {
   readonly approvalId: string
   readonly status: string
@@ -83,12 +103,21 @@ export async function reconcileApprovalDecision(
 ): Promise<ApprovalReconciliationReport> {
   const approval = await ports.getApproval(input.tenantId, input.approvalId)
   if (approval.status === 'PENDING' || approval.status === 'REQUESTED') {
-    throw new Error(
+    throw new ApprovalReconciliationDataError(
       `reconciliation requires a decided approval (status=${approval.status})`
     )
   }
-  if (approval.status !== input.decision) {
-    throw new Error(
+  // SPEC 0272: once the execution advanced, the approval leaves APPROVED
+  // (RESERVED/EXECUTING/EXECUTED) but the decision stays `approved`. A later
+  // state never authorises the opposite decision.
+  const advanced = ADVANCED_APPROVED_STATUSES.has(approval.status)
+  if (!advanced && approval.status !== input.decision) {
+    throw new ApprovalReconciliationDataError(
+      `reconciliation decision mismatch (recorded=${approval.status} requested=${input.decision})`
+    )
+  }
+  if (advanced && input.decision !== 'APPROVED') {
+    throw new ApprovalReconciliationDataError(
       `reconciliation decision mismatch (recorded=${approval.status} requested=${input.decision})`
     )
   }
@@ -97,22 +126,28 @@ export async function reconcileApprovalDecision(
   const correlationId = approval.decisionCorrelationId
   const commandKey = approval.decisionCommandKey
   if (!actorId || !actorType || !correlationId || !commandKey) {
-    throw new Error(
+    throw new ApprovalReconciliationDataError(
       'reconciliation requires a complete persisted approval decision envelope'
     )
   }
   const steps: string[] = []
-  const execution = await ports.resolveExecution({
-    tenantId: input.tenantId,
-    executionId: input.executionId,
-    approvalId: input.approvalId,
-    actorId,
-    decision: input.decision,
-    ...(approval.decisionReason !== undefined
-      ? { reason: approval.decisionReason }
-      : {})
-  })
-  steps.push(`execution:${execution.state}`)
+  // The resume only applies while the execution still waits for the decision;
+  // an advanced execution is never resumed a second time.
+  const execution: ReconciliationExecution = advanced
+    ? { id: input.executionId, state: 'ADVANCED' }
+    : await ports.resolveExecution({
+        tenantId: input.tenantId,
+        executionId: input.executionId,
+        approvalId: input.approvalId,
+        actorId,
+        decision: input.decision,
+        ...(approval.decisionReason !== undefined
+          ? { reason: approval.decisionReason }
+          : {})
+      })
+  steps.push(
+    advanced ? 'execution:skipped_advanced' : `execution:${execution.state}`
+  )
   await ports.appendAudit(
     {
       type: 'approval_decision',
@@ -127,7 +162,11 @@ export async function reconcileApprovalDecision(
         reason: approval.decisionReason ?? null,
         payloadHash: approval.payloadHash,
         commandKey,
-        operationKey: approval.operationKey ?? null
+        operationKey: approval.operationKey ?? null,
+        // SPEC 0272: marks an event written by the recovery path (the API
+        // writes previousState/nextState; recovery does not know them).
+        recovered: true,
+        observedApprovalStatus: approval.status
       }
     },
     input.tenantId

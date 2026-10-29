@@ -34,6 +34,7 @@ import {
   type ChannelEffectRecord
 } from './effect-journal.ts'
 import { fetchWithResolvedAddress } from './adapters/ssrf-node.ts'
+import { statusEffectOptions } from './adapters/bounded-body.ts'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const TEMP_PREFIX = '.cvg-fs-tmp-'
@@ -343,6 +344,19 @@ function createExecutor(
       signal.throwIfAborted()
       if (!response.ok) {
         await response.body?.cancel()
+        // SPEC 0273 (invariant 1 of SPEC 0268): a 5xx proves the upload reached
+        // the destination but not that it had no effect, so it stays UNCERTAIN
+        // and needs reconciliation. A download is a GET with nothing to
+        // reconcile, and 4xx/429 are definitive refusals: both stay FAILED.
+        if (
+          operation === 'exam.upload' &&
+          statusEffectOptions(response.status).effectUnknown
+        ) {
+          await uncertain()
+          return failed(
+            `effect_uncertain: reconcile before retry (HTTP ${response.status})`
+          )
+        }
         if (
           (await journal.fail(identity, leaseOwner, 'provider_rejected')) !==
           'committed'

@@ -145,6 +145,9 @@ export interface AppProps {
   navigate?: (url: string) => void
 }
 
+/** Most extra conversation pages "Abrir caso" walks before giving up. */
+const maxCaseSearchPages = 20
+
 export function App({
   identityMode,
   sessionBootstrap,
@@ -175,6 +178,10 @@ export function App({
   const [conversations, setConversations] = useState<
     PanelState<ConversationView[]>
   >(loading([]))
+  const [conversationPageInfo, setConversationPageInfo] =
+    useState<ListPageInfo | null>(null)
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] =
+    useState(false)
   const [messages, setMessages] = useState<PanelState<TimelineItem[]>>(
     loading([])
   )
@@ -542,6 +549,8 @@ export function App({
 
     let active = true
     setConversations(loading([]))
+    setConversationPageInfo(null)
+    setIsLoadingMoreConversations(false)
     setMessages(loading([]))
     setApprovals(loading([]))
     setTasks(loading([]))
@@ -569,6 +578,7 @@ export function App({
         if (!active || !isCurrentIdentity(scope)) return
         const firstConversation = page.items[0] ?? null
         setConversations(loaded(page.items))
+        setConversationPageInfo(page.pageInfo)
         setSelectedConversationId(firstConversation?.id ?? null)
         setSelectedSessionId(firstConversation?.openSessionId ?? null)
         if (!firstConversation) {
@@ -821,11 +831,83 @@ export function App({
       })
   }
 
-  const openApprovalCase = (sessionId: string) => {
-    const conversation = conversations.data.find(
-      (item) => item.openSessionId === sessionId
-    )
-    if (conversation) selectConversation(conversation)
+  /**
+   * SPEC 0269 — appends the next conversation page. Returns the grown list and
+   * the page info, `'stale'` when the view changed meanwhile (the page is
+   * discarded) or `'failed'` when the request failed.
+   */
+  const fetchMoreConversations = async (
+    loadedItems: ConversationView[],
+    pageInfo: ListPageInfo
+  ): Promise<
+    { items: ConversationView[]; pageInfo: ListPageInfo } | 'stale' | 'failed'
+  > => {
+    const identity = currentOperatorIdentity()
+    const scope = viewScopeToken
+    if (!identity) return 'stale'
+    try {
+      const page = await apiClient.listConversations(identity, {
+        limit: pageInfo.limit,
+        offset: pageInfo.offset + pageInfo.limit
+      })
+      if (!isCurrentViewScope(scope)) return 'stale'
+      const known = new Set(loadedItems.map((item) => item.id))
+      const items = [
+        ...loadedItems,
+        ...page.items.filter((item) => !known.has(item.id))
+      ]
+      setConversations(loaded(items))
+      setConversationPageInfo(page.pageInfo)
+      return { items, pageInfo: page.pageInfo }
+    } catch {
+      return isCurrentViewScope(scope) ? 'failed' : 'stale'
+    }
+  }
+
+  const loadMoreConversations = async () => {
+    if (!conversationPageInfo?.hasNextPage || isLoadingMoreConversations) return
+    const scope = viewScopeToken
+    setIsLoadingMoreConversations(true)
+    try {
+      await fetchMoreConversations(conversations.data, conversationPageInfo)
+    } finally {
+      if (isCurrentViewScope(scope)) setIsLoadingMoreConversations(false)
+    }
+  }
+
+  const openApprovalCase = async (sessionId: string) => {
+    let items = conversations.data
+    let pageInfo = conversationPageInfo
+    let conversation = items.find((item) => item.openSessionId === sessionId)
+    // The case may sit past the loaded pages: keep paging until it appears,
+    // up to a ceiling so a missing case cannot walk a huge list.
+    let pagesFetched = 0
+    while (
+      !conversation &&
+      pageInfo?.hasNextPage &&
+      pagesFetched < maxCaseSearchPages
+    ) {
+      const next = await fetchMoreConversations(items, pageInfo)
+      // A changed view owns the screen now: say nothing about the old one.
+      if (next === 'stale') return
+      if (next === 'failed') {
+        setApprovalMessage('Não foi possível carregar mais conversas.')
+        return
+      }
+      pagesFetched += 1
+      items = next.items
+      pageInfo = next.pageInfo
+      conversation = items.find((item) => item.openSessionId === sessionId)
+    }
+    if (conversation) {
+      selectConversation(conversation)
+    } else {
+      setApprovalMessage(
+        pageInfo?.hasNextPage
+          ? 'Caso não encontrado nas conversas carregadas.'
+          : 'Caso não encontrado entre as conversas.'
+      )
+    }
   }
 
   const refreshAudit = async (scope = viewScopeToken) => {
@@ -1320,6 +1402,9 @@ export function App({
           error={conversations.error ?? messages.error}
           isLoading={conversations.isLoading}
           isTimelineLoading={!conversations.isLoading && messages.isLoading}
+          pageInfo={conversationPageInfo}
+          isLoadingMore={isLoadingMoreConversations}
+          onLoadMore={() => void loadMoreConversations()}
           onSelectConversation={selectConversation}
         />
         <ApprovalsPanel
@@ -1341,7 +1426,8 @@ export function App({
           openableSessionIds={conversations.data.flatMap((conversation) =>
             conversation.openSessionId ? [conversation.openSessionId] : []
           )}
-          onOpenCase={openApprovalCase}
+          searchUnloadedCases={conversationPageInfo?.hasNextPage ?? false}
+          onOpenCase={(sessionId) => void openApprovalCase(sessionId)}
           actionId={approvalActionId}
           error={approvals.error}
           isLoading={approvals.isLoading}
