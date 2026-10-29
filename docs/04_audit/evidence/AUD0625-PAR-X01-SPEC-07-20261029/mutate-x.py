@@ -87,6 +87,27 @@ SLICES = {
   ('stdin-cap', D+'service.ts', "if (request.stdin.length > limits.maxStdinBytes) bad('stdin size')", ""),
   ('output-room', D+'service.ts', "chunk.length > room ? chunk.subarray(0, Math.max(0, room)) : chunk", "chunk"),
  ]),
+ 's3': (['tests/aud0625-par-x01-red.test.ts','packages/sandbox/src/__tests__/pdsh-011-sandbox-local.test.ts','tests/aud0625-process-profile.test.ts','tests/aud0625-contained-preabort.test.ts','tests/par-x01-spawn-boundary.test.ts','packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts'], [
+  ('ad-overflow', 'packages/sandbox/src/run.ts', "outputOverflow: 'drop',", ""),
+  ('ad-timeout', 'packages/sandbox/src/run.ts', "return { exitCode: 'timeout', ...text, ...detail }", "return { exitCode: 'spawn_failed', ...text, ...detail }"),
+  ('ad-cancelled', 'packages/sandbox/src/run.ts', "return { exitCode: 'cancelled', ...text, ...detail }", "return { exitCode: 'spawn_failed', ...text, ...detail }"),
+  ('ad-exit', 'packages/sandbox/src/run.ts', "return { exitCode: outcome.exitCode ?? 'spawn_failed', ...text, ...detail }", "return { exitCode: 0, ...text, ...detail }"),
+  ('ad-stderr', 'packages/sandbox/src/run.ts', "stderr: text.stderr || outcome.secondaryErrors.join('; '),", "stderr: text.stderr,"),
+  ('ad-signal', 'packages/sandbox/src/run.ts', "...(request.signal ? { signal: request.signal } : {})\n      })\n      outcome", "\n      })\n      outcome"),
+  ('ad-cleanup', 'packages/sandbox/src/run.ts', "cleanup: outcome.cleanup,", ""),
+  ('ad-stdin', 'packages/sandbox/src/run.ts', "...(stdin !== undefined ? { stdin } : {}),", ""),
+  ('ad-cwd', 'packages/sandbox/src/run.ts', "...(request.cwd !== undefined ? { cwd: request.cwd } : {}),\n        mode: 'oneshot'", "mode: 'oneshot'"),
+  ('ad-timeout-val', 'packages/sandbox/src/run.ts', "lifetimeMs: timeoutMs,", "lifetimeMs: 3_600_000,"),
+  ('ad-cap-val', 'packages/sandbox/src/run.ts', "maxOutputBytes,\n          maxStdinBytes", "maxOutputBytes: 64 * 1024 * 1024,\n          maxStdinBytes"),
+  ('ad-bwrap', 'packages/sandbox/src/run.ts', "serviceFor(request.bwrapPath)", "serviceFor(undefined)"),
+  ('ad-catch', 'packages/sandbox/src/run.ts', "stderr: error instanceof Error ? error.message : 'process_service_unavailable',", "stderr: '',"),
+  ('sh-cancelled', 'packages/sandbox/src/shell-tool.ts', "if (result.exitCode === 'cancelled') {", "if (false) {"),
+  ('probe-env', 'packages/sandbox/src/capabilities.ts', "env: {},", ""),
+  ('guard-execa', 'tests/par-x01-spawn-boundary.test.ts', "|(?:from\\s+|require\\s*\\(\\s*)['\"]execa['\"]/", "/"),
+  ('guard-bun', 'tests/par-x01-spawn-boundary.test.ts', "|\\bBun\\.spawn(?:Sync)?\\b", ""),
+  ('guard-tests', 'tests/par-x01-spawn-boundary.test.ts', "!/\\.(?:test|spec)\\./.test(entry.name) &&", ""),
+  ('guard-skip-dist', 'tests/par-x01-spawn-boundary.test.ts', "'node_modules', 'dist', ", "'node_modules', "),
+ ]),
 }
 sl = sys.argv[1]
 test, M = SLICES[sl]
@@ -104,7 +125,8 @@ for name, F, a, b in M:
             res.append({'mutant': name, 'result': 'NOT_APPLIED'}); continue
         mutated = src[:m.start()] + b + src[m.end():]
     open(F, 'w').write(mutated)
-    r = subprocess.run(['npx','vitest','run',test,'--maxWorkers=1'],capture_output=True,text=True,env=dict(os.environ))
+    tests = [test] if isinstance(test, str) else test
+    r = subprocess.run(['npx','vitest','run',*tests,'--maxWorkers=1'],capture_output=True,text=True,env=dict(os.environ))
     subprocess.run(['git','checkout','--',F])
     res.append({'mutant': name, 'result': 'KILLED' if r.returncode != 0 else 'SURVIVED'})
 print(json.dumps(res, indent=1))
