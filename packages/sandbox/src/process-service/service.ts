@@ -11,6 +11,7 @@ import { ProcessServiceError } from './errors.ts'
 import { DEFAULT_LIMIT_CAPS, validateProcessLimits } from './limits.ts'
 import {
   DEFAULT_PROC_ROOT,
+  directChildren,
   inPidNamespace,
   readStartTime,
   sameProcess,
@@ -287,8 +288,25 @@ function supervise(s: Supervision): ProcessHandle {
     const alive = (): boolean =>
       !closed && child.exitCode === null && child.signalCode === null
     if (alive()) {
-      if (limits.graceMs > 0 && cause !== 'output_limit') {
-        signalIfSame(child.pid, childStart, 'SIGTERM', true, 'group')
+      // The polite request goes to the payload (the namespace init is only bubblewrap's reaper,
+      // which ignores SIGTERM, and a SIGTERM to the launcher would take the payload down with it
+      // before it could react).
+      if (
+        limits.graceMs > 0 &&
+        cause !== 'output_limit' &&
+        nsInode !== undefined
+      ) {
+        for (const pid of directChildren(
+          s.observe(nsInode, initPid).members,
+          initPid!,
+          procRoot
+        ))
+          if (inPidNamespace(pid, nsInode, procRoot, initPid))
+            try {
+              process.kill(pid, 'SIGTERM')
+            } catch {
+              /* already gone */
+            }
         await Promise.race([closedPromise, delay(limits.graceMs)])
       }
       if (!closed) {

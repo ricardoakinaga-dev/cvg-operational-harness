@@ -161,3 +161,12 @@ export function inPidNamespace(
     return descendsFrom(pid, initPid, procRoot) === true
   }
 }
+
+/** Namespace members whose parent (host view) is the namespace init: the payload itself. */
+export function directChildren(
+  members: readonly number[],
+  initPid: number,
+  procRoot: string = DEFAULT_PROC_ROOT
+): number[] {
+  return members.filter((pid) => parentOf(pid, procRoot) === initPid)
+}

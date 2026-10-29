@@ -444,6 +444,145 @@ describe('PAR-X01 slice 2: process service engine', () => {
     }, 30_000)
   })
 
+  describe('timers, grace and launcher faults', () => {
+    it('disarms the startup timer once the namespace is reported', async () => {
+      const outcome = await (
+        await service.launch(
+          request('setTimeout(()=>process.exit(0),1500)', {
+            limits: limits({ startupMs: 700 })
+          })
+        )
+      ).wait()
+      expect(outcome.cause).toBe('exit')
+    }, 30_000)
+
+    it('gives the payload its grace period to stop by itself, then forces it', async () => {
+      const file = join(workspace, `graceful-${randomBytes(4).toString('hex')}`)
+      const handler = `process.on('SIGTERM',()=>{require('node:fs').writeFileSync(${JSON.stringify(file)},'bye');process.exit(0)});setInterval(()=>{},1000)`
+      const controller = new AbortController()
+      const graceful = await service.launch(
+        request(handler, {
+          signal: controller.signal,
+          limits: limits({ graceMs: 3000 })
+        })
+      )
+      await new Promise((r) => setTimeout(r, 600))
+      controller.abort()
+      const outcome = await graceful.wait()
+      expect(outcome.cause).toBe('cancelled')
+      expect(existsSync(file)).toBe(true)
+      clean(outcome)
+      // With no grace the same payload is killed before it can say goodbye.
+      rmSync(file, { force: true })
+      const hard = new AbortController()
+      const abrupt = await service.launch(
+        request(handler, {
+          signal: hard.signal,
+          limits: limits({ graceMs: 0 })
+        })
+      )
+      await new Promise((r) => setTimeout(r, 600))
+      hard.abort()
+      clean(await abrupt.wait())
+      expect(existsSync(file)).toBe(false)
+    }, 30_000)
+
+    const fakeLauncher = (script: (statusFd: number) => string) =>
+      createProcessService({
+        observe: () => ({ members: [], unverified: 0 }),
+        spawn: ((
+          _exe: string,
+          _args: string[],
+          options: { stdio: unknown[] }
+        ) => {
+          const statusFd = options.stdio.length - 1
+          return realSpawn(process.execPath, ['-e', script(statusFd)], {
+            stdio: options.stdio.map(() => 'pipe') as never,
+            detached: true
+          })
+        }) as never
+      })
+
+    it('a launcher that exits without ever naming a child is spawn_failed, from its own status not its text', async () => {
+      const svc = fakeLauncher(
+        () => "process.stderr.write('all fine, exit 0\\n');process.exit(0)"
+      )
+      const outcome = await (await svc.launch(request('x'))).wait()
+      expect(outcome.cause).toBe('spawn_failed')
+      expect(outcome.secondaryErrors.join()).toContain('launcher_exit_0')
+      clean(outcome)
+    }, 30_000)
+
+    it('garbage on the status channel is a containment fault, not an exit', async () => {
+      const svc = fakeLauncher(
+        (fd) => `require('node:fs').writeSync(${fd},'oops');process.exit(0)`
+      )
+      const outcome = await (await svc.launch(request('x'))).wait()
+      expect(outcome.cause).toBe('spawn_failed')
+      expect(outcome.secondaryErrors).toContain('status_channel_invalid')
+      expect(outcome.secondaryErrors).toContain('namespace_unknown')
+      expect(outcome.cleanup.state).toBe('cleanup_failed')
+    }, 30_000)
+
+    it('a launcher killed by a signal after naming its child is cause signal', async () => {
+      const svc = fakeLauncher(
+        (fd) =>
+          `require('node:fs').writeSync(${fd},'{ "child-pid": '+process.pid+', "pid-namespace": 4026999999 }\\n');setTimeout(()=>process.kill(process.pid,'SIGKILL'),200)`
+      )
+      const outcome = await (await svc.launch(request('x'))).wait()
+      expect(outcome.cause).toBe('signal')
+      expect(outcome.signal).toBe('SIGKILL')
+      expect(outcome.exitCode).toBeNull()
+    }, 30_000)
+
+    it('SIGKILLs a namespace member the observer still sees, after re-checking it', async () => {
+      const fakeProc = mkdtempSync(join(base, 'fakeproc2-'))
+      const victim = realSpawn(
+        process.execPath,
+        ['-e', 'setInterval(()=>{},1000)'],
+        {
+          stdio: 'ignore'
+        }
+      )
+      mkdirSync(join(fakeProc, String(victim.pid), 'ns'), { recursive: true })
+      // The fake /proc says the victim sits in the launch's namespace (and nowhere else).
+      const { symlinkSync } = await import('node:fs')
+      symlinkSync(
+        'pid:[4026999999]',
+        join(fakeProc, String(victim.pid), 'ns', 'pid')
+      )
+      let victimGone = false
+      victim.once('exit', () => (victimGone = true))
+      const svc = createProcessService({
+        procRoot: fakeProc,
+        observe: () => ({
+          members: victimGone ? [] : [victim.pid!],
+          unverified: 0
+        }),
+        spawn: ((
+          _exe: string,
+          _args: string[],
+          options: { stdio: unknown[] }
+        ) => {
+          const statusFd = options.stdio.length - 1
+          return realSpawn(
+            process.execPath,
+            [
+              '-e',
+              `require('node:fs').writeSync(${statusFd},'{ "child-pid": '+process.pid+', "pid-namespace": 4026999999 }\\n');process.exit(0)`
+            ],
+            { stdio: options.stdio.map(() => 'pipe') as never, detached: true }
+          )
+        }) as never
+      })
+      const outcome = await (
+        await svc.launch(request('x', { limits: limits({ cleanupMs: 3000 }) }))
+      ).wait()
+      expect(victimGone).toBe(true)
+      expect(outcome.cleanup.state).toBe('clean')
+    }, 30_000)
+  })
+
   describe('no signal without identity (I9)', () => {
     let fakeProc: string
     const sentinel = () =>
