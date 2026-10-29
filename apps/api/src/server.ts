@@ -171,6 +171,11 @@ import {
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
+import {
+  assertSessionBinding,
+  readCurrentPrincipal,
+  SessionBindingError
+} from './operator-session-binding.ts'
 import type { OidcTransport } from './oidc-authority.ts'
 import {
   parseOperatorLoginConfig,
@@ -598,11 +603,21 @@ export function buildServer(options: BuildServerOptions = {}) {
       consoleOrigin: options.operatorLogin.consoleOrigin
     })
   }
+  // SPEC 0262: the principal rules shared by the session binding and the case policy.
+  const principalPolicy = {
+    identityMode,
+    authorityVersion:
+      options.operatorLogin?.authorityVersion ??
+      options.casePrincipalAuthority?.authorityVersion ??
+      null
+  }
   if (identityMode === 'trusted' && options.operatorSessionStore) {
     installOperatorSessionHook({
       app,
       cookiePolicy: operatorCookiePolicy,
       operatorSessionStore: options.operatorSessionStore,
+      caseAuthority,
+      principalPolicy,
       sessionIdentityByHeaders,
       sessionRecordByHeaders,
       sessionStoreFailureByHeaders
@@ -861,13 +876,7 @@ export function buildServer(options: BuildServerOptions = {}) {
 
   const caseRouteDeps: CaseRouteDependencies = {
     caseAuthority,
-    principalPolicy: {
-      identityMode,
-      authorityVersion:
-        options.operatorLogin?.authorityVersion ??
-        options.casePrincipalAuthority?.authorityVersion ??
-        null
-    },
+    principalPolicy,
     operationalExecution,
     ...(options.executionSteps
       ? { executionSteps: options.executionSteps }
@@ -1020,11 +1029,32 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
       // Rotation keeps the session family (SPEC 0144, AUD-0601 F02): logout
       // with any digest of the lineage then revokes every successor.
+      // SPEC 0262 §3: the cookie binds the principal revision read now, from
+      // the data plane. A missing/inactive principal is a 401, an outage a 503.
+      let principalRevision: number
+      try {
+        principalRevision = (
+          await readCurrentPrincipal(caseAuthority, principalPolicy, identity)
+        ).revision
+      } catch (error) {
+        if (error instanceof SessionBindingError && error.status === 401) {
+          throw new DomainError(
+            'unauthorized',
+            'Operator principal is not current; sign in again'
+          )
+        }
+        throw new DomainError(
+          'configuration_error',
+          'Operator principal is unavailable'
+        )
+      }
       const sameOperator =
         existing !== undefined &&
         existing.identity.tenantId === identity.tenantId &&
         existing.identity.operatorId === identity.operatorId &&
-        existing.identity.role === identity.role
+        existing.identity.role === identity.role &&
+        // A moved revision is a new family (switchIdentity), never a rotation.
+        existing.principalRevision === principalRevision
       const rotate =
         sameOperator && options.operatorSessionStore.replace !== undefined
       // Any other presented cookie — another identity, or a rotated/stale
@@ -1036,7 +1066,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         operatorCookiePolicy
       )
       const retireLineage = !rotate && presentedSessionId !== null
-      const next = { identity, expiresAt: Number(claims.exp) * 1000 }
+      const next = {
+        identity,
+        expiresAt: Number(claims.exp) * 1000,
+        principalRevision
+      }
       const store = options.operatorSessionStore
       let record: OperatorSessionRecord
       try {
@@ -1057,6 +1091,29 @@ export function buildServer(options: BuildServerOptions = {}) {
         return fail(
           'configuration_error',
           'Operator session store is unavailable',
+          correlationId
+        )
+      }
+      // SPEC 0262 §6.2: re-read the principal before Set-Cookie; a moved
+      // revision retires the family just created and no cookie is emitted.
+      try {
+        await assertSessionBinding(caseAuthority, principalPolicy, record)
+      } catch (error) {
+        try {
+          await store.revoke(record.sessionId)
+        } catch {
+          // The family without a disclosed token is retained; no cookie.
+        }
+        if (error instanceof SessionBindingError && error.status === 401) {
+          throw new DomainError(
+            'unauthorized',
+            'Operator principal is not current; sign in again'
+          )
+        }
+        reply.code(503)
+        return fail(
+          'configuration_error',
+          'Operator principal is unavailable',
           correlationId
         )
       }

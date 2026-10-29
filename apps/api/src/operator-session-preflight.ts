@@ -3,9 +3,9 @@ import { resolve } from 'node:path'
 import type { Client, Pool } from 'pg'
 
 type OperatorSessionFunctionName =
-  | 'operator_session_create'
-  | 'operator_session_get'
-  | 'operator_session_replace'
+  | 'operator_session_create_v2'
+  | 'operator_session_get_v2'
+  | 'operator_session_replace_v2'
   | 'operator_session_revoke'
   | 'oidc_state_reserve'
   | 'oidc_state_consume'
@@ -39,9 +39,17 @@ async function expectedFunctionBodies(
     ),
     'utf8'
   )
-  const rendered = `${template}\n${oidcStateTemplate}`
-    .replaceAll('__AUTH_SCHEMA__', `"${schema}"`)
-    .replaceAll('__OWNER_ROLE__', `"${owner.replaceAll('"', '""')}"`)
+  const principalRevisionTemplate = await readFile(
+    resolve(
+      process.cwd(),
+      'packages/persistence/migrations/operator-session/0002_principal_revision.sql'
+    ),
+    'utf8'
+  )
+  const rendered =
+    `${template}\n${oidcStateTemplate}\n${principalRevisionTemplate}`
+      .replaceAll('__AUTH_SCHEMA__', `"${schema}"`)
+      .replaceAll('__OWNER_ROLE__', `"${owner.replaceAll('"', '""')}"`)
   const bodies = {} as Record<OperatorSessionFunctionName, string>
   for (const name of Object.keys(
     functionContracts
@@ -64,17 +72,17 @@ const functionContracts: Record<
     result: string
   }
 > = {
-  operator_session_create: {
-    arguments: 'bytea,text,text,text,timestamptz',
+  operator_session_create_v2: {
+    arguments: 'bytea,text,text,text,bigint,timestamptz',
     result: 'void'
   },
-  operator_session_get: {
+  operator_session_get_v2: {
     arguments: 'bytea',
     result:
-      'TABLE(tenant_id text, operator_id text, role text, expires_at timestamp with time zone)'
+      'TABLE(tenant_id text, operator_id text, role text, principal_revision bigint, expires_at timestamp with time zone)'
   },
-  operator_session_replace: {
-    arguments: 'bytea,bytea,text,text,text,timestamptz',
+  operator_session_replace_v2: {
+    arguments: 'bytea,bytea,text,text,text,bigint,timestamptz',
     result: 'void'
   },
   operator_session_revoke: {
@@ -342,6 +350,7 @@ export async function assertPostgresOperatorSessionBoundary(
     ['operator_sessions.tenant_id', ['text', true, null]],
     ['operator_sessions.operator_id', ['text', true, null]],
     ['operator_sessions.role', ['text', true, null]],
+    ['operator_sessions.principal_revision', ['bigint', true, '0']],
     ['operator_sessions.created_at', ['timestamp with time zone', true, null]],
     ['operator_sessions.expires_at', ['timestamp with time zone', true, null]],
     ['operator_sessions.revoked_at', ['timestamp with time zone', false, null]],
@@ -580,6 +589,13 @@ export async function assertPostgresOperatorSessionBoundary(
       [
         'operator_sessions',
         "CHECK (((expires_at > created_at) AND (expires_at <= (created_at + '00:15:00'::interval))))"
+      ]
+    ],
+    [
+      'operator_sessions_principal_revision_check',
+      [
+        'operator_sessions',
+        "CHECK (((principal_revision >= 0) AND (principal_revision <= '9007199254740991'::bigint)))"
       ]
     ],
     [

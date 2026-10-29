@@ -93,13 +93,17 @@ function decide(
   return { kind: 'refuse', reasonCode: 'principal_drift' } // row 9
 }
 
+/**
+ * Returns the principal record that is current after the production (SPEC
+ * 0262 §3): the one read on a `none` decision, the confirmed one on a write.
+ */
 export async function produceVerifiedPrincipal(
   authority: Pick<
     CaseAuthorityPort,
     'readSnapshot' | 'applyVerifiedPrincipalState'
   >,
   input: ProduceVerifiedPrincipalInput
-): Promise<void> {
+): Promise<CasePrincipalRecord> {
   const current = parseOidcAuthorityVersion(input.authorityVersion)
   if (!current) throw new Error('OIDC authority version is invalid')
   const tenantId = input.tenantId as TenantId
@@ -114,12 +118,16 @@ export async function produceVerifiedPrincipal(
       throw new PrincipalProducerError(503, 'principal_unavailable')
     }
     const decision = decide(principal, input, current)
-    if (decision.kind === 'none') return
+    if (decision.kind === 'none') {
+      // `none` only exists for a present, active principal (row 8).
+      return principal as CasePrincipalRecord
+    }
     if (decision.kind === 'refuse') {
       throw new PrincipalProducerError(401, decision.reasonCode)
     }
+    let written: CasePrincipalRecord
     try {
-      await authority.applyVerifiedPrincipalState({
+      written = await authority.applyVerifiedPrincipalState({
         tenantId,
         operatorId: input.operatorId,
         role: decision.role,
@@ -141,7 +149,7 @@ export async function produceVerifiedPrincipal(
     if (decision.refuseWith) {
       throw new PrincipalProducerError(401, decision.refuseWith)
     }
-    return
+    return written
   }
   throw new PrincipalProducerError(503, 'principal_conflict')
 }

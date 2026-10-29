@@ -68,18 +68,34 @@ export interface OperatorSessionRecord {
   sessionId: string
   identity: OperatorIdentity
   expiresAt: number
+  /**
+   * SPEC 0262 §3: the `case_principals.revision` the cookie was issued under.
+   * Server-side only (never a DTO or header field); 1..MAX_SAFE_INTEGER.
+   */
+  principalRevision: number
+}
+
+/** SPEC 0262 §6.2: zero marks a legacy row and is never a valid binding. */
+export function assertPrincipalRevision(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error('Operator session principal revision is invalid')
+  }
+  return value
+}
+
+export interface OperatorSessionCreateInput {
+  identity: OperatorIdentity
+  expiresAt: number
+  principalRevision: number
 }
 
 export interface OperatorSessionStore {
-  create(input: {
-    identity: OperatorIdentity
-    expiresAt: number
-  }): Promise<OperatorSessionRecord>
+  create(input: OperatorSessionCreateInput): Promise<OperatorSessionRecord>
   get(sessionId: string): Promise<OperatorSessionRecord | null>
   revoke(sessionId: string): Promise<void>
   replace?(
     previousSessionId: string,
-    input: { identity: OperatorIdentity; expiresAt: number }
+    input: OperatorSessionCreateInput
   ): Promise<OperatorSessionRecord>
   /**
    * Atomically retires the whole family of `previousSessionId` (any digest
@@ -88,7 +104,7 @@ export interface OperatorSessionStore {
    */
   switchIdentity?(
     previousSessionId: string,
-    input: { identity: OperatorIdentity; expiresAt: number }
+    input: OperatorSessionCreateInput
   ): Promise<OperatorSessionRecord>
 }
 
@@ -127,7 +143,8 @@ export function createInMemoryOperatorSessionStore(
       const record: OperatorSessionRecord = {
         sessionId: createOpaqueOperatorSessionId(),
         identity,
-        expiresAt: input.expiresAt
+        expiresAt: input.expiresAt,
+        principalRevision: assertPrincipalRevision(input.principalRevision)
       }
       records.set(record.sessionId, record)
       return cloneRecord(record)
@@ -213,6 +230,7 @@ function cloneRecord(record: OperatorSessionRecord): OperatorSessionRecord {
   return {
     sessionId: record.sessionId,
     identity: { ...record.identity },
-    expiresAt: record.expiresAt
+    expiresAt: record.expiresAt,
+    principalRevision: record.principalRevision
   }
 }

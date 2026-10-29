@@ -134,7 +134,7 @@ export async function createProductionOperatorSessionBootstrap(
       // A random digest never creates/revokes a session or exposes its data.
       await client.query(
         healthQuery(
-          `SELECT * FROM "${authSchemaName}".operator_session_get($1)`,
+          `SELECT * FROM "${authSchemaName}".operator_session_get_v2($1)`,
           [probeDigest]
         )
       )

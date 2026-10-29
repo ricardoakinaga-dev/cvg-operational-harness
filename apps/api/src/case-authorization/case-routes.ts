@@ -35,6 +35,7 @@ import {
   type CaseAuthorityPort,
   type CaseKind,
   type AuthorizedMutationUnit,
+  type CasePrincipalRecord,
   type CaseReadSnapshot,
   type CoreParentPlan
 } from '@cvg/persistence'
@@ -101,6 +102,27 @@ function notFound(): DomainError {
  * identifier; `case_principals` is the authority for active/role/version.
  * A role that differs from the session is refused, never merged or promoted.
  */
+/**
+ * SPEC 0262 §3: the one definition of "the principal is current" for a
+ * trusted identity. Shared by the case policy and the session binding.
+ */
+export function principalIsCurrent(
+  principal: CasePrincipalRecord | null,
+  identity: OperatorIdentity,
+  policy: CasePrincipalPolicy & { readonly authorityVersion: string }
+): principal is CasePrincipalRecord {
+  return !(
+    !principal ||
+    !principal.active ||
+    principal.role !== identity.role ||
+    principal.authorityVersion !== policy.authorityVersion ||
+    // §3.1: synthetic fixture principals exist only in the controlled test
+    // profile; a trusted deployment accepts only the verified adapter.
+    (process.env.NODE_ENV !== 'test' &&
+      principal.identitySource !== 'verified_adapter')
+  )
+}
+
 export async function resolveCaseReadScope(
   snapshot: CaseReadSnapshot,
   identity: OperatorIdentity,
@@ -115,14 +137,10 @@ export async function resolveCaseReadScope(
       )
     }
     if (
-      !principal ||
-      !principal.active ||
-      principal.role !== identity.role ||
-      principal.authorityVersion !== policy.authorityVersion ||
-      // §3.1: synthetic fixture principals exist only in the controlled test
-      // profile; a trusted deployment accepts only the verified adapter.
-      (process.env.NODE_ENV !== 'test' &&
-        principal.identitySource !== 'verified_adapter')
+      !principalIsCurrent(principal, identity, {
+        ...policy,
+        authorityVersion: policy.authorityVersion
+      })
     ) {
       throw new DomainError(
         'unauthorized',
