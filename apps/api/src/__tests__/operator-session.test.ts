@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { OperatorIdentity } from '@cvg/shared'
+import type { CaseAuthorityPort, CaseReadSnapshot } from '@cvg/persistence'
 import { buildServer } from '../server.ts'
 import {
   provisionPrincipal,
@@ -52,11 +53,17 @@ const PRINCIPALS = [
   }
 ] as const
 
-async function buildTrusted(options: Record<string, unknown>) {
+async function buildTrusted(
+  options: Record<string, unknown>
+): Promise<
+  ReturnType<typeof buildServer> & { caseAuthority: CaseAuthorityPort }
+> {
   const app = buildServer({
     ...options,
     casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
-  } as never)
+  } as never) as unknown as ReturnType<typeof buildServer> & {
+    caseAuthority: CaseAuthorityPort
+  }
   for (const principal of PRINCIPALS) {
     await provisionPrincipal(app, {
       tenantId: principal.tenantId as never,
@@ -486,26 +493,33 @@ describe('REM21-005 trusted operator session API', () => {
     expect(second.statusCode).toBe(200)
     expect(calls).toEqual({ replace: 1, switchIdentity: 0 })
     const b = cookieOf(second)
+    const caseAuthority = (
+      app as unknown as { caseAuthority: CaseAuthorityPort }
+    ).caseAuthority
     // A principal that moves between the session boundary and the handler
     // (after the hook's read) is never a rotation of the old family.
     const spy = vi
-      .spyOn(app.caseAuthority, 'readSnapshot')
-      .mockImplementationOnce(async (...args) => {
+      .spyOn(caseAuthority, 'readSnapshot')
+      .mockImplementationOnce(async (...args: unknown[]) => {
         const result = await (
-          Object.getPrototypeOf(app.caseAuthority).readSnapshot as (
+          Object.getPrototypeOf(caseAuthority).readSnapshot as (
             ...a: unknown[]
           ) => Promise<unknown>
-        ).apply(app.caseAuthority, args)
-        const row = await app.caseAuthority.readSnapshot(
+        ).apply(caseAuthority, args)
+        const row = await caseAuthority.readSnapshot(
           identity.tenantId as never,
-          (snapshot) => snapshot.principal(identity.operatorId)
+          (snapshot: CaseReadSnapshot) =>
+            snapshot.principal(identity.operatorId)
         )
-        await provisionPrincipal(app, {
-          tenantId: identity.tenantId as never,
-          operatorId: identity.operatorId,
-          role: 'Supervisor',
-          expectedRevision: row!.revision
-        })
+        await provisionPrincipal(
+          { caseAuthority },
+          {
+            tenantId: identity.tenantId as never,
+            operatorId: identity.operatorId,
+            role: 'Supervisor',
+            expectedRevision: row!.revision
+          }
+        )
         return result as never
       })
     const racing = await login(b)
@@ -514,16 +528,19 @@ describe('REM21-005 trusted operator session API', () => {
     expect(calls).toEqual({ replace: 1, switchIdentity: 1 })
     const racingCookie = cookieOf(racing)
     // The principal moves (re-registered under a new matrix version).
-    const current = await app.caseAuthority.readSnapshot(
+    const current = await caseAuthority.readSnapshot(
       identity.tenantId as never,
-      (snapshot) => snapshot.principal(identity.operatorId)
+      (snapshot: CaseReadSnapshot) => snapshot.principal(identity.operatorId)
     )
-    await provisionPrincipal(app, {
-      tenantId: identity.tenantId as never,
-      operatorId: identity.operatorId,
-      role: 'Supervisor',
-      expectedRevision: current!.revision
-    })
+    await provisionPrincipal(
+      { caseAuthority },
+      {
+        tenantId: identity.tenantId as never,
+        operatorId: identity.operatorId,
+        role: 'Supervisor',
+        expectedRevision: current!.revision
+      }
+    )
     // The cookie issued under the older revision is refused at the request.
     const stale = await app.inject({
       method: 'GET',

@@ -436,6 +436,51 @@ describe('PostgreSQL operator session boundary', () => {
   )
 
   itWithPostgres(
+    'SPEC 0262 §6.2/R10: a decoy overload, a revived unbound function or a loosened revision constraint refuses serving',
+    async () => {
+      await withAuthDatabase(
+        async ({ schema, productSchema, pool, admin, sessionRole }) => {
+          const verify = () =>
+            assertPostgresOperatorSessionBoundary(pool, {
+              authSchemaName: schema,
+              expectedSessionRole: sessionRole,
+              productSchemaName: productSchema
+            })
+          await verify()
+          // A permissive alias of the removed unbound getter.
+          await admin.query(
+            `CREATE FUNCTION ${schema}.operator_session_get(p_digest bytea)
+             RETURNS TABLE(tenant_id text, operator_id text, role text, expires_at timestamptz)
+             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+             AS 'BEGIN RETURN; END;'`
+          )
+          await expect(verify()).rejects.toThrow('function inventory')
+          await admin.query(
+            `DROP FUNCTION ${schema}.operator_session_get(bytea)`
+          )
+          await verify()
+          // A decoy overload of the v2 creator.
+          await admin.query(
+            `CREATE FUNCTION ${schema}.operator_session_create_v2(p_digest bytea)
+             RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+             SET search_path = pg_catalog, pg_temp AS 'BEGIN RETURN; END;'`
+          )
+          await expect(verify()).rejects.toThrow('function inventory')
+          await admin.query(
+            `DROP FUNCTION ${schema}.operator_session_create_v2(bytea)`
+          )
+          await verify()
+          // The revision constraint is part of the pinned inventory.
+          await admin.query(
+            `ALTER TABLE ${schema}.operator_sessions DROP CONSTRAINT operator_sessions_principal_revision_check`
+          )
+          await expect(verify()).rejects.toThrow('session check constraints')
+        }
+      )
+    }
+  )
+
+  itWithPostgres(
     'rejects missing, altered, partial, and extra auth indexes at startup',
     async () => {
       await withAuthDatabase(
