@@ -35,6 +35,7 @@ import { createTrustedOperatorIdentityResolver } from '../operator-identity.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 import {
   CONTROLLED_TEST_TENANT,
+  buildTrustedServer,
   grantCase,
   provisionPrincipal,
   putAssignment
@@ -1112,19 +1113,148 @@ describe('SPEC0251 S6 — principal policy and fail-closed composition (memory)'
       const session = await login(`${role.toLowerCase()}.trusted`, role)
       for (const route of routes) {
         const response = await route.run(session)
-        // The session boundary answers before the route, role matrix included.
-        const expected = 503
-        expect(response.statusCode, `${route.name} as ${role}`).toBe(expected)
-        if (expected === 503) {
-          expect(response.json().error.code).toBe('configuration_error')
-          expect(response.headers['cache-control']).toBe('no-store')
-        }
+        // The session boundary answers before the route, role matrix included;
+        // the matrix with a current principal is the companion test below.
+        expect(response.statusCode, `${route.name} as ${role}`).toBe(503)
+        expect(response.json().error.code).toBe('configuration_error')
+        expect(response.headers['cache-control']).toBe('no-store')
       }
     }
     expect(persisted(app)).toBe(before)
     expect((await authority.get(TENANT, execution.approvalId)).status).toBe(
       'REQUESTED'
     )
+  })
+
+  it('trusted identity with a current principal keeps the role matrix: 403 outside the permitted roles (companion of the 503 case)', async () => {
+    const key = 'spec0251-trusted-signing-key-abcdefghijklmnopqrstuvwxyz'
+    const store = createInMemoryOperationalExecutionStore()
+    const authority = new DurableApprovalEngine()
+    const sessions = createInMemoryOperatorSessionStore()
+    const roles: Role[] = ['Operator', 'Approver', 'Supervisor', 'Admin']
+    const app = track(
+      (await buildTrustedServer(
+        buildServer as never,
+        {
+          identityMode: 'trusted',
+          operatorIdentityResolver: createTrustedOperatorIdentityResolver({
+            secret: key
+          }),
+          operatorSessionStore: sessions,
+          operationalExecution: store,
+          operationalApprovalAuthority: authority
+        },
+        roles.map((role) => ({
+          tenantId: TENANT,
+          operatorId: `${role.toLowerCase()}.trusted`,
+          role
+        }))
+      )) as unknown as App
+    )
+    const x = await seedConversation(app, 'TRUSTED_X')
+    const taskX = seedTask(app, x.sessionId)
+    const approvalX = seedApproval(app, x.sessionId)
+    const execution = await waitingExecution(
+      store,
+      authority,
+      x.conversationId,
+      x.sessionId
+    )
+    await app.caseAuthority.registerExecutionLink(
+      TENANT,
+      execution.executionId,
+      {
+        kind: 'core',
+        conversationId: x.conversationId,
+        sessionId: x.sessionId
+      },
+      true
+    )
+    // SPEC 0262 §3: without the producer authority /v1/session itself is 503,
+    // so the cookie is planted in the store directly: the protected paths must
+    // still be 503 for every role, never trusting the session alone.
+    const login = async (operatorId: string, role: Role) => {
+      const record = await sessions.create({
+        identity: { operatorId, role, tenantId: TENANT },
+        expiresAt: Date.now() + 60_000,
+        principalRevision: 1
+      })
+      return { cookie: `cvg_operator_session=${record.sessionId}` }
+    }
+    const everyone: Role[] = ['Operator', 'Approver', 'Supervisor', 'Admin']
+    const routes: Array<{
+      name: string
+      permitted: Role[]
+      run: (headers: Record<string, string>) => Promise<Response>
+    }> = [
+      {
+        name: 'GET /v1/tasks',
+        permitted: everyone,
+        run: (headers) =>
+          app.inject({ method: 'GET', url: '/v1/tasks', headers })
+      },
+      {
+        name: 'GET /v1/approvals',
+        permitted: everyone,
+        run: (headers) =>
+          app.inject({ method: 'GET', url: '/v1/approvals', headers })
+      },
+      {
+        name: 'PATCH /v1/tasks/:taskId/status',
+        permitted: ['Operator'],
+        run: (headers) => patchTask(app, taskX.id, headers)
+      },
+      {
+        name: 'POST /v1/tasks',
+        permitted: ['Operator'],
+        run: (headers) =>
+          post(app, '/v1/tasks', headers, taskPayload(x.sessionId))
+      },
+      {
+        name: 'POST /v1/journeys/tasks',
+        permitted: ['Operator'],
+        run: (headers) =>
+          post(app, '/v1/journeys/tasks', headers, journeyPayload(x.sessionId))
+      },
+      {
+        name: 'POST /v1/approvals',
+        permitted: everyone,
+        run: (headers) =>
+          post(app, '/v1/approvals', headers, approvalPayload(x.sessionId))
+      },
+      {
+        name: 'POST /v1/approvals/:id/decision',
+        permitted: ['Approver', 'Supervisor'],
+        run: (headers) =>
+          post(app, `/v1/approvals/${approvalX.id}/decision`, headers, {
+            decision: 'approved'
+          })
+      },
+      {
+        name: 'POST /v1/executions/:id/approvals/:id/decision',
+        permitted: ['Approver', 'Supervisor'],
+        run: (headers) => decideRuntime(app, execution, headers)
+      }
+    ]
+    for (const role of everyone) {
+      const session = await login(`${role.toLowerCase()}.trusted`, role)
+      for (const route of routes) {
+        const beforeCall = persisted(app)
+        const response = await route.run(session)
+        const label = `${route.name} as ${role}`
+        if (route.permitted.includes(role)) {
+          // Role allowed: whatever happens next is the case layer's (an
+          // unassigned Operator/Approver sees 404), never 401/403/503.
+          expect([200, 202, 400, 404, 409], label).toContain(
+            response.statusCode
+          )
+        } else {
+          expect(response.statusCode, label).toBe(403)
+          expect(response.json().error.code, label).toBe('forbidden')
+          expect(persisted(app), `${label} must not write`).toBe(beforeCall)
+        }
+      }
+    }
   })
 })
 
