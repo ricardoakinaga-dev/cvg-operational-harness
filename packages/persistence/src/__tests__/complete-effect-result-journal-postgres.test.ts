@@ -516,6 +516,160 @@ describe('SPEC 0225 f3 — journal adapter, storage version 1', () => {
     )
   })
 
+  describe('J06/J07 credential cutover', () => {
+    const other = () => `j225o_${randomBytes(4).toString('hex')}`
+    async function withOtherLogin<T>(
+      grant: string,
+      run: (name: string, otherPassword: string) => Promise<T>
+    ): Promise<T> {
+      const name = other()
+      const otherPassword = randomBytes(16).toString('hex')
+      await admin.query(
+        `CREATE ROLE ${name} LOGIN PASSWORD '${otherPassword}' NOSUPERUSER
+           NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`
+      )
+      try {
+        await admin.query(`GRANT USAGE ON SCHEMA "${schema}" TO ${name}`)
+        if (grant)
+          await admin.query(
+            `GRANT ${grant} ON "${schema}".operational_effect_journal TO ${name}`
+          )
+        return await run(name, otherPassword)
+      } finally {
+        await admin.query(`DROP OWNED BY ${name}`)
+        await admin.query(`DROP ROLE ${name}`)
+      }
+    }
+    const clientAs = async (name: string, otherPassword: string) => {
+      const client = new Client({
+        ...serviceUrl(),
+        user: name,
+        password: otherPassword,
+        options: `-c search_path=${schema}`
+      })
+      await client.connect()
+      return client
+    }
+    itWithPostgres(
+      'an old credential with no grant is denied before any row is visible',
+      async () => {
+        await withOtherLogin('', async (name, pw) => {
+          const client = await clientAs(name, pw)
+          try {
+            await expect(
+              client.query('SELECT * FROM operational_effect_journal')
+            ).rejects.toMatchObject({ code: '42501' })
+          } finally {
+            await client.end()
+          }
+        })
+      }
+    )
+    itWithPostgres(
+      'an inherited login that can still read the table fails the activation check until revoked',
+      async () => {
+        await withOtherLogin('SELECT', async () => {
+          expect(await failure(journal(1).get(tenant, 'legacy-null'))).toBe(
+            'JOURNAL_STORAGE_MODE'
+          )
+        })
+        expect(await journal(1).get(tenant, 'nothing')).toBeNull()
+      }
+    )
+    itWithPostgres(
+      'an unqualified principal (superuser) cannot serve version 1',
+      async () => {
+        const privileged = new Pool({
+          connectionString: testDatabaseUrl,
+          max: 1,
+          options: `-c search_path=${schema}`
+        })
+        try {
+          expect(
+            await failure(
+              new PostgresOperationalEffectJournal(privileged, {
+                resultStorage: { version: 1 }
+              }).get(tenant, 'x')
+            )
+          ).toBe('JOURNAL_STORAGE_MODE')
+        } finally {
+          await privileged.end()
+        }
+      }
+    )
+    itWithPostgres(
+      'another role cannot insert version 1 and the bound principal cannot insert version 0',
+      async () => {
+        await withOtherLogin('SELECT,INSERT,UPDATE', async (name, pw) => {
+          const client = await clientAs(name, pw)
+          try {
+            await client.query('SELECT set_config($1,$2,false)', [
+              'cvg.tenant_id',
+              tenant
+            ])
+            await expect(
+              client.query(
+                `INSERT INTO operational_effect_journal
+                   (tenant_id,operation_key,proposal_hash,state,attempt_id,
+                    result_storage_version)
+                 VALUES ($1,$2,$3,'RESERVED','x',1)`,
+                [tenant, key(), hash]
+              )
+            ).rejects.toMatchObject({ code: '42501' })
+            // Forged session settings do not activate anything.
+            await client.query("SET cvg.journal_result_storage = 'on'")
+            await expect(
+              client.query(
+                `INSERT INTO operational_effect_journal
+                   (tenant_id,operation_key,proposal_hash,state,attempt_id,
+                    result_storage_version)
+                 VALUES ($1,$2,$3,'RESERVED','x',1)`,
+                [tenant, key(), hash]
+              )
+            ).rejects.toMatchObject({ code: '42501' })
+          } finally {
+            await client.end()
+          }
+        })
+        const principal = await pool.connect()
+        try {
+          await principal.query('SELECT set_config($1,$2,false)', [
+            'cvg.tenant_id',
+            tenant
+          ])
+          await expect(
+            principal.query(
+              `INSERT INTO operational_effect_journal
+                 (tenant_id,operation_key,proposal_hash,state,attempt_id)
+               VALUES ($1,$2,$3,'RESERVED','x')`,
+              [tenant, key(), hash]
+            )
+          ).rejects.toMatchObject({ code: '42501' })
+        } finally {
+          principal.release()
+        }
+      }
+    )
+    itWithPostgres(
+      'the owner cannot rewrite or delete a confirmed version-1 row',
+      async () => {
+        const { operationKey } = await confirmed({ keep: 'me' })
+        await expect(
+          admin.query(
+            `UPDATE operational_effect_journal SET error='x' WHERE operation_key=$1`,
+            [operationKey]
+          )
+        ).rejects.toMatchObject({ code: '23514' })
+        await expect(
+          admin.query(
+            `DELETE FROM operational_effect_journal WHERE operation_key=$1`,
+            [operationKey]
+          )
+        ).rejects.toMatchObject({ code: '42501' })
+      }
+    )
+  })
+
   describe('mode/readiness mismatch fails before any write', () => {
     itWithPostgres(
       'the legacy adapter is refused on an activated schema',
