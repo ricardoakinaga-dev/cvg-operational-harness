@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { MAX_ATTEMPTS } from '../domain.ts'
 import { DispatchError } from '../transport-limits.ts'
-import { previewToken } from '../preview-receipt.ts'
+import { previewContentSha256, previewToken } from '../preview-receipt.ts'
 import { ShiftStore } from '../store.ts'
 import {
   ANA,
@@ -269,5 +269,79 @@ describe('F13 token: exact confirmation', () => {
     await env.deliver(wahaPayload('m1', ANA, 'Thor leito 3'))
     await env.deliver(wahaPayload('ok1', ANA, `ok nota ${tokenOf(env)}`))
     expect(env.store.lastActiveNote(ANA)?.confirmed).toBe(false)
+  })
+})
+
+describe('F13 token: binds every part of the proposed content', () => {
+  it('changes when the source, organized fields, warnings or tasks change', async () => {
+    const env = setup()
+    await env.deliver(wahaPayload('m1', ANA, 'Thor leito 3'))
+    const note = env.store.lastActiveNote(ANA)!
+    const tasks = env.store.tasksOfNote(note.id)
+    const base = previewContentSha256(note, tasks)
+    expect(
+      previewContentSha256(structuredClone(note), structuredClone(tasks))
+    ).toBe(base)
+    const variants: Array<[string, () => string]> = [
+      [
+        'rawText',
+        () => previewContentSha256({ ...note, rawText: 'outra' }, tasks)
+      ],
+      [
+        'organized',
+        () =>
+          previewContentSha256(
+            {
+              ...note,
+              organized: { ...note.organized!, duvidas: ['uma dúvida'] }
+            },
+            tasks
+          )
+      ],
+      [
+        'unverifiedNumbers',
+        () => previewContentSha256({ ...note, unverifiedNumbers: ['9'] }, tasks)
+      ],
+      [
+        'blockingIssues',
+        () => previewContentSha256({ ...note, blockingIssues: ['x'] }, tasks)
+      ],
+      [
+        'completedIds',
+        () => previewContentSha256({ ...note, completedIds: ['y'] }, tasks)
+      ],
+      [
+        'task.description',
+        () =>
+          previewContentSha256(note, [{ ...tasks[0]!, description: 'outra' }])
+      ],
+      [
+        'task.dueAt',
+        () =>
+          previewContentSha256(note, [
+            { ...tasks[0]!, dueAt: '2030-01-01T00:00:00.000Z' }
+          ])
+      ],
+      [
+        'task.patientId',
+        () => previewContentSha256(note, [{ ...tasks[0]!, patientId: '77' }])
+      ],
+      [
+        'task.patient',
+        () => previewContentSha256(note, [{ ...tasks[0]!, patient: 'Rex' }])
+      ],
+      ['task list', () => previewContentSha256(note, [])]
+    ]
+    for (const [name, hash] of variants) {
+      expect(hash(), name).not.toBe(base)
+    }
+  })
+
+  it('takes the revision from the correction chain, not from the note id', async () => {
+    const env = setup()
+    await env.deliver(wahaPayload('m1', ANA, 'Thor leito 3'))
+    await env.deliver(wahaPayload('m2', ANA, 'corrigir Thor leito 4'))
+    await env.deliver(wahaPayload('m3', ANA, 'corrigir Thor leito 5'))
+    expect(tokenOf(env)).toMatch(/-r3-[0-9a-f]{8}$/)
   })
 })
