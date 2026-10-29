@@ -33,9 +33,22 @@ export const ADVANCED_APPROVED_STATUSES: ReadonlySet<string> = new Set([
   'EXECUTED'
 ])
 
+/**
+ * SPEC 0274: terminal statuses an approval reaches after a decision (FAILED
+ * from RESERVED/EXECUTING, EXPIRED from any non-terminal state, including
+ * APPROVED and REJECTED). The status no longer says what was decided, so the
+ * recorded decision comes from `approvedAt`/`rejectedAt`.
+ */
+export const TERMINAL_DECIDED_STATUSES: ReadonlySet<string> = new Set([
+  'FAILED',
+  'EXPIRED'
+])
+
 export interface ReconciliationApproval {
   readonly approvalId: string
   readonly status: string
+  readonly approvedAt?: string
+  readonly rejectedAt?: string
   readonly approverId?: string
   readonly decisionActorType?: 'Approver' | 'Supervisor'
   readonly decisionReason?: string
@@ -111,7 +124,24 @@ export async function reconcileApprovalDecision(
   // (RESERVED/EXECUTING/EXECUTED) but the decision stays `approved`. A later
   // state never authorises the opposite decision.
   const advanced = ADVANCED_APPROVED_STATUSES.has(approval.status)
-  if (!advanced && approval.status !== input.decision) {
+  // SPEC 0274: FAILED/EXPIRED keep the decision only in approvedAt/rejectedAt.
+  // Neither (never decided) or both (incoherent record) is a data error.
+  const terminal = TERMINAL_DECIDED_STATUSES.has(approval.status)
+  if (terminal) {
+    const hasApproved = approval.approvedAt !== undefined
+    const hasRejected = approval.rejectedAt !== undefined
+    if (hasApproved === hasRejected) {
+      throw new ApprovalReconciliationDataError(
+        `reconciliation requires exactly one recorded decision (status=${approval.status})`
+      )
+    }
+    const recorded: ApprovalDecision = hasApproved ? 'APPROVED' : 'REJECTED'
+    if (recorded !== input.decision) {
+      throw new ApprovalReconciliationDataError(
+        `reconciliation decision mismatch (recorded=${recorded} requested=${input.decision})`
+      )
+    }
+  } else if (!advanced && approval.status !== input.decision) {
     throw new ApprovalReconciliationDataError(
       `reconciliation decision mismatch (recorded=${approval.status} requested=${input.decision})`
     )
@@ -133,20 +163,27 @@ export async function reconcileApprovalDecision(
   const steps: string[] = []
   // The resume only applies while the execution still waits for the decision;
   // an advanced execution is never resumed a second time.
+  // A terminal approval is never resumed either (SPEC 0274 invariant 3).
   const execution: ReconciliationExecution = advanced
     ? { id: input.executionId, state: 'ADVANCED' }
-    : await ports.resolveExecution({
-        tenantId: input.tenantId,
-        executionId: input.executionId,
-        approvalId: input.approvalId,
-        actorId,
-        decision: input.decision,
-        ...(approval.decisionReason !== undefined
-          ? { reason: approval.decisionReason }
-          : {})
-      })
+    : terminal
+      ? { id: input.executionId, state: 'TERMINAL' }
+      : await ports.resolveExecution({
+          tenantId: input.tenantId,
+          executionId: input.executionId,
+          approvalId: input.approvalId,
+          actorId,
+          decision: input.decision,
+          ...(approval.decisionReason !== undefined
+            ? { reason: approval.decisionReason }
+            : {})
+        })
   steps.push(
-    advanced ? 'execution:skipped_advanced' : `execution:${execution.state}`
+    advanced
+      ? 'execution:skipped_advanced'
+      : terminal
+        ? 'execution:skipped_terminal'
+        : `execution:${execution.state}`
   )
   await ports.appendAudit(
     {
