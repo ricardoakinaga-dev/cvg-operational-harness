@@ -81,3 +81,15 @@ Mutantes "retry apesar da falha de acerto" e "relança no acerto do caminho de e
 **P3.** Regressão nova: a janela do perfil de fallback recusa antes do provider dele (mata o M3 do Codex).
 
 Resultado: 22 testes C02; model-gateway 296/296.
+
+## Correção do P2 restante (re-revisão R2 do Codex, GBrain 19558)
+
+O `settlementFailed` só bloqueava o retry dentro do perfil. O laço externo de `generate` ainda via um erro repetível (por exemplo, `provider_connection_reset`) e caía para o perfil de fallback. Assim, continuava gastando depois de um acerto que falhou, e no caso em que a falha acontecia uma vez só chegava a devolver sucesso.
+
+Correção: com `settlementFailed`, depois do evento terminal da tentativa (que já leva a causa e o uso), a requisição inteira para com `internal_error` não repetível. Fallback e retry ficam bloqueados. Nenhum código de erro novo.
+
+Testes:
+- duas regressões, vermelhas no código anterior: o store falha uma vez ou sempre, e o resultado é uma chamada só, nenhum fallback e um terminal;
+- um controle positivo: com o store saudável, o corte é repetido e o fallback atende (`fallbackUsed`).
+
+Mutantes "sem parada da requisição" e "parada repetível": mortos. 25 testes C02; model-gateway 299/299.

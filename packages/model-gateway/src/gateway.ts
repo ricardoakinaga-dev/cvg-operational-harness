@@ -630,6 +630,16 @@ export class ModelGateway {
           }
           continue
         }
+        // SPEC 0285 (review R2 P2): an attempt whose cost could not be settled
+        // stops the whole request, fallback included; its terminal event above
+        // already carries the cause and the usage.
+        if (settlementFailed) {
+          throw new ModelGatewayError(
+            'internal_error',
+            'Model call stopped: its cost could not be settled',
+            { retryable: false }
+          )
+        }
         throw gatewayError
       } finally {
         clearTimeout(timeoutHandle)
