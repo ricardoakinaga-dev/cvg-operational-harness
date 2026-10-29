@@ -76,6 +76,7 @@ export async function* readStreamFrames(
   let totalBytes = 0
   let events = 0
   let dataLines: string[] = []
+  let eventBytes = 0
   let finished = false
 
   const countEvent = () => {
@@ -114,6 +115,7 @@ export async function* readStreamFrames(
         if (dataLines.length > 0) {
           frames.push(dataLines.join('\n'))
           dataLines = []
+          eventBytes = 0
         }
         continue
       }
@@ -123,10 +125,13 @@ export async function* readStreamFrames(
       if (field === 'data') {
         let value = colon < 0 ? '' : line.slice(colon + 1)
         if (value.startsWith(' ')) value = value.slice(1)
-        dataLines.push(value)
-        const size = dataLines.reduce((n, l) => n + Buffer.byteLength(l), 0)
-        if (size > limits.maxEventBytes)
+        // A running size, including the "\n" the join puts between lines:
+        // linear in the lines of one event, and an empty line still counts.
+        eventBytes += Buffer.byteLength(value) + (dataLines.length > 0 ? 1 : 0)
+        if (eventBytes > limits.maxEventBytes) {
           throw tooLarge(providerId, 'event size')
+        }
+        dataLines.push(value)
       }
     }
     if (Buffer.byteLength(pending) > limits.maxEventBytes) {

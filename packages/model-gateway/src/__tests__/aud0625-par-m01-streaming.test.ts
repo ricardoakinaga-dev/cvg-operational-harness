@@ -858,6 +858,43 @@ describe('PAR-M01 §6.1 — SSE reader edge cases', () => {
     expect(cancelled).toBe(true)
   })
 
+  it('counts the newline the join adds, so empty data lines still reach the event ceiling', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end('data\n'.repeat(12_000))
+    })
+    await expect(
+      run(server.url, { maxStreamEventBytes: 10_000 })
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+  })
+
+  it('the event size restarts with every event, so many small events are fine', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      for (let i = 0; i < 40; i += 1) {
+        response.write(sseData(openAiChunk('x'.repeat(60))))
+      }
+      response.end(sseData(openAiChunk('', 'stop')))
+    })
+    const events = await run(server.url, { maxStreamEventBytes: 400 })
+    expect(textOf(events)).toBe('x'.repeat(60 * 40))
+  })
+
+  it('has a cost linear in the data lines of one event', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end(`${'data\n'.repeat(50_000)}\n`)
+    })
+    const started = Date.now()
+    await expect(
+      run(server.url, {
+        maxResponseBytes: 64 * 1024 * 1024,
+        maxStreamEventBytes: 10 * 1024 * 1024
+      })
+    ).rejects.toMatchObject({ kind: 'malformed_response' })
+    expect(Date.now() - started).toBeLessThan(1_000)
+  }, 20_000)
+
   it('stops at the single-event size ceiling', async () => {
     const server = await startServer((response) => {
       response.writeHead(200, SSE_HEADERS)
