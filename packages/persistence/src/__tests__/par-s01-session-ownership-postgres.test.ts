@@ -720,6 +720,13 @@ describe.skipIf(!url)(
             formatVersion: 1
           })
         ).rejects.toBeDefined()
+        // The sequence itself stops (NO CYCLE); uniqueness is a separate backstop.
+        await expect(
+          admin.query(
+            `INSERT INTO ${q('session_streams')} (tenant_id,session_id,format_version) VALUES ($1,'beyond2',1)`,
+            [tenantA]
+          )
+        ).rejects.toThrow(/reached maximum value/)
         expect(
           (
             await admin.query(
@@ -727,6 +734,62 @@ describe.skipIf(!url)(
             )
           ).rows[0].count
         ).toBe('0')
+        await admin.query(`ALTER SEQUENCE ${seq} RESTART WITH 1000000`)
+      })
+      it('refuses a duplicated lock id even when forced past the identity', async () => {
+        await expect(
+          admin.query(
+            `INSERT INTO ${q('session_streams')} (tenant_id,session_id,format_version,writer_lock_id)
+             OVERRIDING SYSTEM VALUE SELECT $1,'dup',1,writer_lock_id FROM ${q('session_streams')} WHERE session_id='historic'`,
+            [tenantA]
+          )
+        ).rejects.toMatchObject({ code: '23505' })
+      })
+      it('refuses a bad cursor at the statement, not only at COMMIT', async () => {
+        await legacy().openSession({
+          tenantId: tenantA,
+          sessionId: 'stmt1',
+          formatVersion: 1
+        })
+        const c = await ownerConnection()
+        try {
+          await c.query('BEGIN')
+          await c.query("SELECT set_config('cvg.tenant_id',$1,true)", [tenantA])
+          await expect(c.query(...advance('stmt1', 9))).rejects.toMatchObject({
+            code: '23514'
+          })
+          await c.query('ROLLBACK')
+        } finally {
+          await c.end()
+        }
+      })
+      it('refuses a new stream whose cursor is ahead of its (empty) body, at COMMIT', async () => {
+        await expect(
+          tx(admin, tenantA, [
+            [
+              `INSERT INTO ${q('session_streams')} (tenant_id,session_id,format_version,next_sequence) VALUES ($1,'ahead',1,5)`,
+              [tenantA]
+            ]
+          ])
+        ).rejects.toMatchObject({ code: '23514' })
+      })
+      it('leaves the guard functions without PUBLIC execute and with a pinned search_path', async () => {
+        const fns = [
+          'session_stream_default_header',
+          'guard_session_event_insert',
+          'guard_session_stream_update',
+          'reject_session_stream_removal',
+          'check_session_cursor_at_commit'
+        ]
+        for (const fn of fns) {
+          const r = await admin.query(
+            `SELECT has_function_privilege($1, p.oid, 'EXECUTE') AS can, p.proconfig
+               FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$2 AND p.proname=$3`,
+            [role, schema, fn]
+          )
+          expect(r.rows[0].can).toBe(false)
+          expect(String(r.rows[0].proconfig)).toContain(`search_path=${schema}`)
+        }
       })
     })
   }
