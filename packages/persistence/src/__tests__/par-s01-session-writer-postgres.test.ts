@@ -536,8 +536,10 @@ describe.skipIf(!url)('PAR-S01 slice 4: append, flush, close, loss', () => {
     })
     it.each([
       ['08006', 'connection failure'],
-      ['55P03', 'lock not available']
-    ])(
+      ['57P01', 'administrator shutdown'],
+      ['55P03', 'lock not available'],
+      [undefined, 'a driver error without a SQLSTATE']
+    ] as Array<[string | undefined, string]>)(
       'code %s (%s) during a write makes the handle lost and destroys the connection',
       async (code) => {
         let armed = false
@@ -553,14 +555,14 @@ describe.skipIf(!url)('PAR-S01 slice 4: append, flush, close, loss', () => {
               log
             )
           )
-        ).create(hdr(`k1${code}`))
+        ).create(hdr(`k1${code ?? 'none'}`))
         armed = true
-        await expect(w.append([ev(`k1${code}`, 1)])).rejects.toBeInstanceOf(
-          SessionOwnershipLostError
-        )
-        await expect(w.append([ev(`k1${code}`, 1)])).rejects.toBeInstanceOf(
-          SessionOwnershipLostError
-        )
+        await expect(
+          w.append([ev(`k1${code ?? 'none'}`, 1)])
+        ).rejects.toBeInstanceOf(SessionOwnershipLostError)
+        await expect(
+          w.append([ev(`k1${code ?? 'none'}`, 1)])
+        ).rejects.toBeInstanceOf(SessionOwnershipLostError)
         expect(log).toContain('<destroy>')
         armed = false
         await w.close()
