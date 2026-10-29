@@ -1,3 +1,4 @@
+-- Owner role of this schema (no new policy is needed here): __OWNER_ROLE__
 -- SPEC 0262 §6.2: binds every operator session to the principal revision it was
 -- issued under. Rendered only by runOperatorSessionMigrations. Zero marks a
 -- legacy row: it is never a current binding and `operator_session_get_v2`

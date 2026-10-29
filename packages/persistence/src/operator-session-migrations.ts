@@ -25,6 +25,12 @@ const functionNames = [
   'operator_session_replace_v2',
   'operator_session_revoke'
 ] as const
+/** What migration 0002 defines. */
+const revisionFunctionNames = [
+  'operator_session_create_v2',
+  'operator_session_get_v2',
+  'operator_session_replace_v2'
+] as const
 /** What migration 0000 itself defines (the unbound v1 entry points are dropped by 0002). */
 const baseFunctionNames = [
   'operator_session_create',
@@ -231,7 +237,7 @@ export async function runOperatorSessionMigrations(
         schemaName,
         ownerName
       )
-      extractOperatorSessionFunctionBodies(rendered)
+      extractOperatorSessionFunctionBodies(rendered, revisionFunctionNames)
       await client.query(rendered)
       await client.query(
         `INSERT INTO ${quotedSchema}.schema_migrations (version, checksum)

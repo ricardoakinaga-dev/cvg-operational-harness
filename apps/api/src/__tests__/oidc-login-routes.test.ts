@@ -82,6 +82,9 @@ interface SpySessions extends OperatorSessionStore {
   created: number
   revoked: string[]
   failCreate: boolean
+  /** Runs right after the store accepted a create (before the route continues). */
+  afterCreate?: () => Promise<void>
+  lastPrincipalRevision?: number
 }
 
 function spySessions(): SpySessions {
@@ -94,6 +97,8 @@ function spySessions(): SpySessions {
       if (store.failCreate) throw new Error('synthetic session outage')
       const record = await inner.create(input)
       store.created += 1
+      store.lastPrincipalRevision = input.principalRevision
+      await store.afterCreate?.()
       return record
     },
     get: (sessionId) => inner.get(sessionId),
@@ -910,6 +915,40 @@ describe('SPEC0254 O6 — producer through the callback (memory)', () => {
       (await principal(h, expectedOperatorId(ISSUER, user.sub)))?.revision
     ).toBe(1)
     expect(principalAudits(h)).toHaveLength(1)
+  })
+
+  it('SPEC 0262 §6.2: a principal that moves after the session was created retires the new family and sets no cookie', async () => {
+    const h = await harness()
+    const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
+    const operatorId = expectedOperatorId(ISSUER, user.sub)
+    const flow = await begin(h, user)
+    h.sessions.afterCreate = async () => {
+      const current = await principal(h, operatorId)
+      await h.app.caseAuthority.applyVerifiedPrincipalState({
+        tenantId: current!.tenantId,
+        operatorId,
+        role: current!.role,
+        active: current!.active,
+        expectedRevision: current!.revision,
+        authorityVersion: current!.authorityVersion,
+        proofRef: 'synthetic-proof:moved',
+        identitySource: 'verified_adapter'
+      })
+    }
+    const response = await callback(h, flow.callbackPath, flow.pending)
+    expectLanding(response, LANDED_NEGADO)
+    expect(touchesOperationalCookie(response)).toBe(false)
+    expect(h.sessions.created).toBe(1)
+    expect(h.sessions.revoked).toHaveLength(1)
+  })
+
+  it('binds the created session to the revision of the principal the login made current', async () => {
+    const h = await harness()
+    const user = h.idp.addUser({ groups: ['synthetic-a-operator'] })
+    await login(h, user)
+    const current = await principal(h, expectedOperatorId(ISSUER, user.sub))
+    expect(current?.revision).toBe(1)
+    expect(h.sessions.lastPrincipalRevision).toBe(1)
   })
 
   it('lands on indisponivel without a session after two principal conflicts in a row', async () => {

@@ -433,4 +433,89 @@ describe('REM21-005 trusted operator session API', () => {
     expect(forgedRole.statusCode).toBe(403)
     await operatorApp.close()
   })
+
+  it('SPEC 0262 §3/§6.2: same revision rotates the family; a moved revision starts a new one and old cookies die', async () => {
+    const inner = createInMemoryOperatorSessionStore()
+    const calls = { replace: 0, switchIdentity: 0 }
+    let counter = 0
+    const store: OperatorSessionStore = {
+      create: (input) => inner.create(input),
+      get: (id) => inner.get(id),
+      revoke: (id) => inner.revoke(id),
+      async replace(previous, input) {
+        calls.replace += 1
+        await inner.revoke(previous)
+        return inner.create(input)
+      },
+      async switchIdentity(previous, input) {
+        calls.switchIdentity += 1
+        counter += 1
+        await inner.revoke(previous)
+        return inner.create(input)
+      }
+    }
+    const resolver = createTrustedOperatorIdentityResolver({
+      secret: key,
+      now: () => now
+    })
+    const app = await buildTrusted({
+      identityMode: 'trusted',
+      operatorIdentityResolver: resolver,
+      operatorSessionStore: store
+    })
+    const login = (cookie?: string) =>
+      app.inject({
+        method: 'GET',
+        url: '/v1/session',
+        headers: {
+          ...(cookie ? { cookie } : {}),
+          'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+            identity,
+            key,
+            () => now,
+            120
+          )
+        }
+      })
+    const cookieOf = (response: { headers: Record<string, unknown> }) =>
+      String(response.headers['set-cookie']).split(';', 1)[0]!
+    const first = await login()
+    expect(first.statusCode).toBe(200)
+    const a = cookieOf(first)
+    const second = await login(a)
+    expect(second.statusCode).toBe(200)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 0 })
+    const b = cookieOf(second)
+    // The principal moves (re-registered under a new matrix version).
+    const current = await app.caseAuthority.readSnapshot(
+      identity.tenantId as never,
+      (snapshot) => snapshot.principal(identity.operatorId)
+    )
+    await provisionPrincipal(app, {
+      tenantId: identity.tenantId as never,
+      operatorId: identity.operatorId,
+      role: 'Supervisor',
+      expectedRevision: current!.revision
+    })
+    // The cookie issued under the older revision is refused at the request.
+    const stale = await app.inject({
+      method: 'GET',
+      url: PROTECTED_PROBE,
+      headers: { cookie: b }
+    })
+    expect(stale.statusCode).toBe(401)
+    expect(String(stale.headers['set-cookie'])).toContain('Max-Age=0')
+    // A new bootstrap on the moved revision is a new family, never a rotation.
+    const third = await login(b)
+    expect(third.statusCode).toBe(200)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 1 })
+    expect(counter).toBe(1)
+    const fresh = await app.inject({
+      method: 'GET',
+      url: PROTECTED_PROBE,
+      headers: { cookie: cookieOf(third) }
+    })
+    expect(fresh.statusCode).toBe(200)
+    await app.close()
+  })
 })
