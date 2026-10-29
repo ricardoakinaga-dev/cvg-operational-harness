@@ -504,3 +504,177 @@ describe('PAR-C02 review regressions (Codex 17895, note 0285b)', () => {
     expectReconstructed(w.events, w.meter)
   })
 })
+
+describe('PAR-C02 review regressions (Codex 18867/19102): a failing settlement store', () => {
+  /** Reservations (≤ 0.001) pass; settlement deltas fail `failures` times (Infinity = always). */
+  class FlakySettlementStore extends InMemoryCostBudgetStore {
+    constructor(private failures: number) {
+      super()
+    }
+    override consume(scopeKey: string, amountUsd: number): void {
+      if (amountUsd > 0.001 && this.failures > 0) {
+        this.failures -= 1
+        throw new Error('synthetic settlement store outage')
+      }
+      super.consume(scopeKey, amountUsd)
+    }
+  }
+
+  function budgeted(attempts: Attempt[], failures: number, maxRetries = 1) {
+    const events: ModelGatewayEvent[] = []
+    const meter = new TokenMeter()
+    let calls = 0
+    const gateway = new ModelGateway({
+      providers: [
+        {
+          id: 'fake',
+          location: 'local',
+          models: ['fake-v1'],
+          execute: async () => {
+            throw new Error('unreachable')
+          },
+          executeStream: (req: ProviderRequest) => {
+            calls += 1
+            return (attempts[calls - 1] ?? attempts[attempts.length - 1]!)(
+              req,
+              calls
+            )
+          }
+        } as never
+      ],
+      profiles: {
+        fast: profile({ maxRetries, estimatedCostUsd: 0.001 })
+      },
+      prompts: registry(),
+      clock: () => NOW,
+      sleep: async () => undefined,
+      meter,
+      budget: {
+        store: new FlakySettlementStore(failures),
+        limits: { tenant: 100 }
+      },
+      onEvent: (event) => events.push(event)
+    })
+    return { gateway, events, meter, calls: () => calls }
+  }
+
+  const terminals = (events: ModelGatewayEvent[]) =>
+    events.filter(
+      (e) => e.type === 'model.call.completed' || e.type === 'model.call.failed'
+    )
+
+  it('reported usage is counted once and logged as measured when settlement fails', async () => {
+    const w = budgeted([ok, ok], 1)
+    await expect(w.gateway.generate(request())).rejects.toBeDefined()
+    expect(w.calls()).toBe(1)
+    expect(w.meter.snapshot()).toMatchObject({
+      requests: 1,
+      inputTokens: 7,
+      outputTokens: 3
+    })
+    expect(w.meter.unreportedRequests).toBe(0)
+    const ends = terminals(w.events)
+    expect(ends).toHaveLength(1)
+    expect(ends[0]).toMatchObject({
+      type: 'model.call.failed',
+      attempt: 1,
+      inputTokens: 7,
+      outputTokens: 3
+    })
+    expect(ends[0]?.detail).toBeUndefined()
+    const log = reconstruct(w.events)
+    expect(log).toMatchObject({
+      reportedRequests: 1,
+      inputTokens: 7,
+      outputTokens: 3,
+      unreportedRequests: 0
+    })
+  })
+
+  it('an unreported success is counted once when settlement fails', async () => {
+    const w = budgeted(
+      [
+        async function* () {
+          yield { type: 'delta', text: 'sem contagem' }
+          yield { type: 'finish', reason: 'stop' }
+        }
+      ],
+      1
+    )
+    await expect(w.gateway.generate(request())).rejects.toBeDefined()
+    expect(w.meter.unreportedRequests).toBe(1)
+    const ends = terminals(w.events)
+    expect(ends).toHaveLength(1)
+    expect(ends[0]?.detail?.split(',')).toContain('usage_unreported')
+    expect(reconstruct(w.events).unreportedRequests).toBe(1)
+  })
+
+  it('a store that always fails still ends every started attempt with one terminal', async () => {
+    const w = budgeted([ok], Number.POSITIVE_INFINITY, 2)
+    await expect(w.gateway.generate(request())).rejects.toBeDefined()
+    const started = w.events.filter((e) => e.type === 'model.call.started')
+    expect(started).toHaveLength(1)
+    expect(terminals(w.events)).toHaveLength(1)
+    expect(w.calls()).toBe(1)
+  })
+
+  it('a cut after output whose settlement fails is counted once, logged, and not retried', async () => {
+    const w = budgeted([cutAfterOutput, ok], 1, 2)
+    await expect(w.gateway.generate(request())).rejects.toBeDefined()
+    expect(w.calls()).toBe(1)
+    expect(w.meter.unreportedRequests).toBe(1)
+    const ends = terminals(w.events)
+    expect(ends).toHaveLength(1)
+    expect(ends[0]).toMatchObject({
+      type: 'model.call.failed',
+      detail: 'usage_unreported'
+    })
+    expect(w.events.some((e) => e.type === 'model.retry.scheduled')).toBe(false)
+  })
+})
+
+describe('PAR-C02 review P3 (Codex 19102): the fallback profile has its own window', () => {
+  it('a fallback whose window does not fit is refused before its provider is called', async () => {
+    const events: ModelGatewayEvent[] = []
+    const calls: string[] = []
+    const gateway = new ModelGateway({
+      providers: [
+        {
+          id: 'fake',
+          location: 'local',
+          models: ['fake-v1', 'fake-v2'],
+          execute: async () => {
+            throw new Error('unreachable')
+          },
+          executeStream: (req: ProviderRequest) => {
+            calls.push(req.model)
+            return failBeforeOutput(req, calls.length)
+          }
+        } as never
+      ],
+      profiles: {
+        fast: profile({ fallbackProfile: 'balanced' }),
+        balanced: profile({
+          name: 'balanced',
+          model: 'fake-v2',
+          contextWindow: 8
+        })
+      },
+      routing: { allowFallback: true },
+      prompts: registry(),
+      clock: () => NOW,
+      sleep: async () => undefined,
+      onEvent: (event) => events.push(event)
+    })
+    await expect(gateway.generate(request())).rejects.toMatchObject({
+      code: 'invalid_request'
+    })
+    expect(events.some((e) => e.type === 'model.routing.fallback')).toBe(true)
+    expect(calls).toEqual(['fake-v1'])
+    expect(
+      events.filter(
+        (e) => e.type === 'model.call.started' && e.profile === 'balanced'
+      )
+    ).toHaveLength(0)
+  })
+})

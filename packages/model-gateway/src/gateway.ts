@@ -369,6 +369,8 @@ export class ModelGateway {
     // The reservation covers the first accounted attempt only; every later
     // executed attempt is charged in full (SPEC 0267 §3.3, no refunds).
     let reservationSettled = false
+    // SPEC 0285 (review P2): a settlement store that failed stops retries.
+    let settlementFailed = false
 
     while (attempt < attemptsAllowed) {
       attempt += 1
@@ -464,15 +466,23 @@ export class ModelGateway {
         } else {
           this.#meter?.record(usage)
         }
+        // SPEC 0285 (review P2): the attempt is accounted before the fallible
+        // settlement port, so a store failure never charges it a second time
+        // and the terminal event still carries what was measured.
+        accounted = { usage, costUsd, status: usageStatus }
         if (this.#budget) {
-          this.#budget.settle({
-            reservedKeys,
-            estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
-            actualCostUsd: costUsd
-          })
+          try {
+            this.#budget.settle({
+              reservedKeys,
+              estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
+              actualCostUsd: costUsd
+            })
+          } catch (error) {
+            settlementFailed = true
+            throw error
+          }
         }
         reservationSettled = true
-        accounted = { usage, costUsd, status: usageStatus }
 
         const output = this.#parseOutput(providerResult, structuredOutput)
         this.#circuit.onSuccess(circuitKey)
@@ -533,15 +543,23 @@ export class ModelGateway {
             this.#computeCost(profile, usage)
           )
           this.#meter?.recordUnreported()
-          if (this.#budget) {
-            this.#budget.settle({
-              reservedKeys,
-              estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
-              actualCostUsd: costUsd
-            })
-          }
-          reservationSettled = true
           accounted = { usage, costUsd, status: 'unreported' }
+          if (this.#budget) {
+            try {
+              this.#budget.settle({
+                reservedKeys,
+                estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
+                actualCostUsd: costUsd
+              })
+              reservationSettled = true
+            } catch {
+              // The attempt is already counted; the terminal event below must
+              // still be emitted, and no further attempt may spend unsettled.
+              settlementFailed = true
+            }
+          } else {
+            reservationSettled = true
+          }
         }
         if (this.#countsAgainstCircuit(gatewayError)) {
           this.#circuit.onFailure(circuitKey)
@@ -570,7 +588,10 @@ export class ModelGateway {
               }
             : {})
         })
-        const canRetry = gatewayError.retryable && attempt < attemptsAllowed
+        const canRetry =
+          !settlementFailed &&
+          gatewayError.retryable &&
+          attempt < attemptsAllowed
         if (canRetry) {
           const delayMs = computeRetryDelayMs({
             attempt,

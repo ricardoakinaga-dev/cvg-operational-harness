@@ -57,3 +57,27 @@ A revisão achou um P2 no oráculo de reconstrução e no texto da §4 da SPEC; 
 - Entraram duas regressões: falha com uso reportado; sucesso sem contagem acima do teto, com as duas flags.
 - A nota técnica [0285b](../../../02_spec/0285b_attempt_usage_reconstruction_invariant_note.md) corrige a redação da invariante, sem editar a SPEC aprovada.
 - Resultado: 17 testes C02.
+
+## Correção do P2 de runtime e do P3 (revisão final do Codex, GBrain 18867 e 19102)
+
+**P2.** Quando o `CostBudgetStore` falhava no acerto (`settle`), o gateway errava de três formas:
+- o uso já medido era cobrado de novo como sem contagem;
+- o evento terminal perdia os 7/3 medidos;
+- com o store sempre falhando, a tentativa ficava sem evento terminal.
+
+A ordem vinha do M01, mas quebrava a invariante da D1. Correção em `gateway.ts`:
+- o `accounted` é gravado **antes** da porta falível de acerto, nos dois caminhos;
+- a falha de acerto no caminho de erro não interrompe a emissão do terminal;
+- uma falha de acerto (`settlementFailed`) bloqueia novas tentativas, para não gastar sem acerto.
+
+Quatro regressões, todas vermelhas no código anterior:
+- uso reportado com o store falhando uma vez;
+- sucesso sem contagem com o store falhando uma vez;
+- store que falha sempre (um terminal por tentativa iniciada);
+- corte depois de saída com o acerto falhando (contado uma vez e sem retry).
+
+Mutantes "retry apesar da falha de acerto" e "relança no acerto do caminho de erro": mortos.
+
+**P3.** Regressão nova: a janela do perfil de fallback recusa antes do provider dele (mata o M3 do Codex).
+
+Resultado: 22 testes C02; model-gateway 296/296.
