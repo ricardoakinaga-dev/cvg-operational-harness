@@ -15,6 +15,7 @@ export {
   assertSyntheticEnvironment,
   CREDENTIAL_NAMES,
   expectedSyntheticRequest,
+  governedInstruction,
   LIMITS,
   SCENARIOS
 } from './contract.js'
