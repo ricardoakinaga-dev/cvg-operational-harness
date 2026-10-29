@@ -5,6 +5,7 @@
  * dispatch instead of falling back to a volatile key.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -245,6 +246,28 @@ describe('export approval request keeps one logical operation (AC06)', () => {
     click(button)
     click(button)
     click(button)
+    release()
+    await screen.findByText(
+      'Solicitacao de export registrada para aprovacao humana.'
+    )
+    expect(keys).toHaveLength(1)
+  })
+
+  it('two clicks inside the same act dispatch ONE request (the synchronous guard, not the disabled button)', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const keys = mockApi([
+      () => gate.then(() => ok({ id: 'approval_export_1', status: 'pending' }))
+    ])
+    const button = await openConsole()
+    // React cannot re-render between the two clicks: only the ref blocks the 2nd.
+    act(() => {
+      button.click()
+      button.click()
+    })
+    expect(keys).toHaveLength(1)
     release()
     await screen.findByText(
       'Solicitacao de export registrada para aprovacao humana.'
