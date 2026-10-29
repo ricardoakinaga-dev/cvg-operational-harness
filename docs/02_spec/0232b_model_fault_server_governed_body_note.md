@@ -2,7 +2,7 @@
 
 R1, 29/10/2026. Task `AUD0625-F06B-D9-20261029`, follow-up F06b (T2, só teste) da
 [SPEC 0267](0267_model_gateway_prompt_binding_classification_usage.md). Estado
-`PROPOSED_FOR_AUTHOR_REVIEW`: **o oráculo é contrato congelado da
+`APPROVED_BY_INTEGRATOR`: **o oráculo é contrato congelado da
 [SPEC 0232](0232_private_model_fault_server.md)** (candidata `26d866c3`, SHA-256
 `8f8ecd2934fd3dbfd7b82141efb6a97e2a653782eefe10ef8c177b01a408fe93`), então
 nada foi alterado em `tests/support/model-fault-server/` antes da aprovação do
@@ -60,7 +60,11 @@ Aceitar os dois corpos no mesmo plano (união): enfraquece o oráculo, porque um
 corpo errado em um dos formatos passaria. O campo opcional mantém um só corpo
 exato por plano.
 
-## Decisão pedida ao autor
+## Decisão do autor/integrador (29/10/2026)
+
+Aprovada por delegação, como integrador, pelo Claude DF em mensagem de sessão cruzada de 29/10/2026 (resposta à nota 0232b): extensão aditiva `governedSystem?: true`, com o campo ausente preservando digests e corpo byte a byte, e os controles acima. A implementação é T2, só teste.
+
+## Decisão pedida ao autor (histórico)
 
 Aprovar a mudança aditiva acima como extensão do contrato 0232, com o digest
 congelado preservado para planos sem o campo. Sem a aprovação, nada em
