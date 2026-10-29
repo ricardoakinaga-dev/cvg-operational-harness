@@ -365,7 +365,9 @@ describe('F13 receipt: what a failed presentation records', () => {
         if (calls === 2) return unavailable()
       }
     })
-    await env.deliver(wahaPayload('m1', ANA, 'Vinte pacientes sintéticos longos'))
+    await env.deliver(
+      wahaPayload('m1', ANA, 'Vinte pacientes sintéticos longos')
+    )
     expect(calls).toBe(2) // nothing is sent after the failure
     const id = env.store.lastActiveNote(ANA)!.id
     const last = env.store.previewState(id)!.last!

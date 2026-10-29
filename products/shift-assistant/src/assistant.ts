@@ -22,6 +22,7 @@ import {
   RETRY_DELAYS_MS,
   samePhone
 } from './domain.ts'
+import { checkAssociation } from './source-evidence.ts'
 import { evaluateHealth, type AssistantHealth } from './health.ts'
 import {
   formatLocalTime,
@@ -895,7 +896,12 @@ export class ShiftAssistant {
     const unverified = unverifiedNumbers(organized, rawText)
     const resolved = this.#resolvePatientIds(organized)
     const tasks: Task[] = []
-    const issues = [...resolved.blocking]
+    const issues = [
+      ...resolved.blocking,
+      ...checkAssociation(rawText, resolved.organized).map(
+        (issue) => issue.message
+      )
+    ]
     let nextNumber = this.#store.nextTaskNumber()
     for (const pending of resolved.organized.pendencias) {
       const binding = bindPatient(pending, resolved.organized)

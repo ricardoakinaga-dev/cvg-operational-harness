@@ -14,11 +14,7 @@ import {
 // of the draft must belong to the patient, field and unit of the source.
 // Synthetic data only; no provider, channel or model is contacted.
 //
-// Slice 1 (receipt and token) is in force. `red` still marks the association
-// fidelity defects of slice 2: `it.fails` passes while the defect is present
-// and turns red when it is fixed, so the fix must drop the marker. With
-// F13_RAW=1 the same bodies run as plain tests and print the failing assertion.
-const red = process.env.F13_RAW === '1' ? it : it.fails
+// Slices 1 (receipt and token) and 2 (association by tuple) are in force.
 
 const PARTS_LIMIT = 32 * 1024
 
@@ -168,22 +164,19 @@ describe('F13 preview receipt: no confirmation without a presented preview', () 
 })
 
 describe('F13 association fidelity: values keep patient, field and unit', () => {
-  red(
-    'blocks a dose swapped between two patients with the same numbers',
-    async () => {
-      const { env, draft, after } = await draftThenOk(
-        { organize: async () => SWAP_DOSES },
-        SOURCE_DOSES
-      )
-      // Both numbers (1 and 2) exist in the source, so the set check is silent.
-      expect(draft?.unverifiedNumbers).toEqual([])
-      expect(draft?.blockingIssues?.length ?? 0).toBeGreaterThan(0)
-      expect(after?.confirmed).toBe(false)
-      expect(env.store.openTasks(ANA)).toHaveLength(0)
-    }
-  )
+  it('blocks a dose swapped between two patients with the same numbers', async () => {
+    const { env, draft, after } = await draftThenOk(
+      { organize: async () => SWAP_DOSES },
+      SOURCE_DOSES
+    )
+    // Both numbers (1 and 2) exist in the source, so the set check is silent.
+    expect(draft?.unverifiedNumbers).toEqual([])
+    expect(draft?.blockingIssues?.length ?? 0).toBeGreaterThan(0)
+    expect(after?.confirmed).toBe(false)
+    expect(env.store.openTasks(ANA)).toHaveLength(0)
+  })
 
-  red('blocks a value whose unit differs from the source', async () => {
+  it('blocks a value whose unit differs from the source', async () => {
     const wrongUnit: Organized = {
       pacientes: [
         {
@@ -206,7 +199,7 @@ describe('F13 association fidelity: values keep patient, field and unit', () => 
     expect(after?.confirmed).toBe(false)
   })
 
-  red('blocks two measurements assigned to each other fields', async () => {
+  it('blocks two measurements assigned to each other fields', async () => {
     const swappedFields: Organized = {
       pacientes: [
         {
