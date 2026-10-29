@@ -27,8 +27,11 @@ M=[
  ('M23 suppressed send records a receipt',SA+'assistant.ts',"          if (recorded.length === 0) {\n            this.#logger.info('shift.reply.suppressed', {})\n            return\n          }","          if (false) {\n            return\n          }"),
 ]
 TESTS=['products/shift-assistant/src/__tests__/preview-receipt-journal.test.ts','products/shift-assistant/src/__tests__/preview-receipt-reliability.test.ts','products/shift-assistant/src/__tests__/confirmation-reliability.test.ts','products/shift-assistant/src/__tests__/shift-assistant.test.ts']
+import sys
+ONLY=set(sys.argv[2:])
 res=[]
 for name,f,old,new in M:
+    if ONLY and name.split()[0] not in ONLY: continue
     src=open(f).read()
     if src.count(old)!=1:
         res.append({'mutant':name,'status':'NOT_APPLIED','count':src.count(old)}); print(name,'NOT_APPLIED',src.count(old)); continue
