@@ -34,6 +34,7 @@ import {
   isCaseResourceId,
   type CaseAuthorityPort,
   type CaseKind,
+  type AuthorizedMutationUnit,
   type CaseReadSnapshot,
   type CoreParentPlan
 } from '@cvg/persistence'
@@ -418,21 +419,56 @@ export async function authorizeCaseMutation(
     await readExecutionForCaller(deps, identity, tenantId, target.executionId)
     return
   }
-  await deps.caseAuthority.readSnapshot(tenantId, async (snapshot) => {
-    const scope = await resolveCaseReadScope(
-      snapshot,
-      identity,
-      deps.principalPolicy
-    )
-    const located =
-      target.kind === 'task'
-        ? await snapshot.taskCase(target.taskId)
-        : target.kind === 'approval_request'
-          ? await snapshot.approvalRequestCase(target.approvalRequestId)
-          : await snapshot.coreSessionCase(target.sessionId)
-    if (!located || !(await canReadCase(snapshot, scope, located.caseId))) {
-      throw new CaseAuthorityError('case_not_found', CASE_NOT_FOUND_MESSAGE)
-    }
+  await deps.caseAuthority.readSnapshot(tenantId, (snapshot) =>
+    assertCaseMutationOnSnapshot(snapshot, deps, identity, target)
+  )
+}
+
+/**
+ * The case policy of a mutation, evaluated on a given snapshot. Shared by the
+ * pre-check above and by the authorization unit (SPEC 0262), so both apply the
+ * very same decision.
+ */
+export async function assertCaseMutationOnSnapshot(
+  snapshot: CaseReadSnapshot,
+  deps: CaseRouteDependencies,
+  identity: OperatorIdentity,
+  target: Exclude<CaseMutationTarget, { kind: 'execution' }>
+): Promise<void> {
+  const scope = await resolveCaseReadScope(
+    snapshot,
+    identity,
+    deps.principalPolicy
+  )
+  const located =
+    target.kind === 'task'
+      ? await snapshot.taskCase(target.taskId)
+      : target.kind === 'approval_request'
+        ? await snapshot.approvalRequestCase(target.approvalRequestId)
+        : await snapshot.coreSessionCase(target.sessionId)
+  if (!located || !(await canReadCase(snapshot, scope, located.caseId))) {
+    throw new CaseAuthorityError('case_not_found', CASE_NOT_FOUND_MESSAGE)
+  }
+}
+
+/**
+ * SPEC 0262 §4: the authorization decision and the write share one unit. The
+ * principal/grant are retained until the write resolves (PostgreSQL: locks to
+ * COMMIT; memory: the authority queue), so a revocation that wins the order
+ * denies the write and one that loses waits for it.
+ */
+export async function runAuthorizedCaseMutation<T>(
+  deps: CaseRouteDependencies,
+  identity: OperatorIdentity,
+  tenantId: TenantId,
+  target: Exclude<CaseMutationTarget, { kind: 'execution' }>,
+  write: (unit: AuthorizedMutationUnit) => Promise<T>
+): Promise<T> {
+  return deps.caseAuthority.runAuthorizedMutation(tenantId, {
+    operatorId: identity.operatorId,
+    authorize: (snapshot) =>
+      assertCaseMutationOnSnapshot(snapshot, deps, identity, target),
+    write
   })
 }
 

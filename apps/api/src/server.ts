@@ -190,6 +190,7 @@ import {
   mapCaseMutationError,
   presentExecutionForCaller,
   registerCaseAuthorizationRoutes,
+  runAuthorizedCaseMutation,
   resolveCaseReadScope,
   submitExecutionWithCase,
   toSafeCaseError,
@@ -1882,16 +1883,32 @@ export function buildServer(options: BuildServerOptions = {}) {
           'Atomic creation is not available in this persistence composition'
         )
       }
-      const created = await persistence.apiCreation.createTaskWithAudit(
-        {
-          actor: identity
-            ? { actorType: identity.role, actorId: identity.operatorId }
-            : { actorType: 'System', actorId: 'api' },
-          correlationId,
-          task: input
-        },
-        tenantId
-      )
+      const taskCommand = {
+        actor: identity
+          ? { actorType: identity.role, actorId: identity.operatorId }
+          : { actorType: 'System' as const, actorId: 'api' },
+        correlationId,
+        task: input
+      }
+      const taskCreation = persistence.apiCreation
+      // SPEC 0262: with an authenticated identity the case policy runs in the
+      // same unit as the write (locks held to COMMIT / authority queue).
+      const created = identity
+        ? await runAuthorizedCaseMutation(
+            caseRouteDeps,
+            identity,
+            tenantId,
+            { kind: 'core_session', sessionId: input.sessionId },
+            async (unit) =>
+              taskCreation.createTaskWithAudit(
+                taskCommand,
+                tenantId,
+                unit.authorizeOnClient
+                  ? { authorize: unit.authorizeOnClient }
+                  : undefined
+              )
+          )
+        : await taskCreation.createTaskWithAudit(taskCommand, tenantId)
       const task = created.resource
       emitRuntimeLog({
         event: 'task.created',
@@ -2036,19 +2053,36 @@ export function buildServer(options: BuildServerOptions = {}) {
           'Atomic creation is not available in this persistence composition'
         )
       }
-      const created = await persistence.apiCreation.createApprovalWithAudit(
-        {
-          actor: requester
-            ? { actorType: requester.role, actorId: requester.operatorId }
-            : identity
-              ? { actorType: identity.role, actorId: identity.operatorId }
-              : { actorType: 'System', actorId: 'api' },
-          correlationId,
-          idempotencyKey: creationKey,
-          request: requestedApproval
-        },
-        tenantId
-      )
+      const approvalCommand = {
+        actor: requester
+          ? { actorType: requester.role, actorId: requester.operatorId }
+          : identity
+            ? { actorType: identity.role, actorId: identity.operatorId }
+            : { actorType: 'System' as const, actorId: 'api' },
+        correlationId,
+        idempotencyKey: creationKey,
+        request: requestedApproval
+      }
+      const approvalCreation = persistence.apiCreation
+      const created = identity
+        ? await runAuthorizedCaseMutation(
+            caseRouteDeps,
+            identity,
+            tenantId,
+            { kind: 'core_session', sessionId: requestedApproval.sessionId },
+            async (unit) =>
+              approvalCreation.createApprovalWithAudit(
+                approvalCommand,
+                tenantId,
+                unit.authorizeOnClient
+                  ? { authorize: unit.authorizeOnClient }
+                  : undefined
+              )
+          )
+        : await approvalCreation.createApprovalWithAudit(
+            approvalCommand,
+            tenantId
+          )
       const approval = created.resource
       emitRuntimeLog({
         event: 'approval.created',

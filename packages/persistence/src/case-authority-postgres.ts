@@ -19,6 +19,7 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
   CASE_AUTHORITY_POLICY_VERSION,
   CaseAuthorityError,
+  type AuthorizedMutationInput,
   assertActorPrincipalCurrent,
   assertAssignmentWriteInput,
   assertRegistryQuery,
@@ -778,6 +779,70 @@ export class PostgresCaseAuthority implements CaseAuthorityPort {
         })
       })
       return principal
+    })
+  }
+
+  /**
+   * SPEC 0262 §4 steps 1-2: runs INSIDE the caller's open transaction (READ
+   * COMMITTED, tenant context set, unit deadlines applied). The actor's
+   * principal row and every assignment row of that actor are locked
+   * `FOR SHARE` and stay locked until COMMIT. A revocation or principal
+   * change takes `FOR UPDATE` on the same rows, so it either committed
+   * before (and the policy below sees it) or waits for this unit. The policy
+   * itself runs on a snapshot bound to this very client.
+   */
+  async authorizeOnClient(
+    rawTenantId: TenantId,
+    operatorId: string,
+    client: PostgresQueryable,
+    authorize: (snapshot: CaseReadSnapshot) => Promise<void>
+  ): Promise<void> {
+    const tenantId = TenantIdSchema.parse(rawTenantId)
+    try {
+      await applyUnitDeadlines(client)
+      await client.query(
+        `SELECT 1 FROM case_principals
+          WHERE tenant_id = $1 AND operator_id = $2
+            FOR SHARE`,
+        [tenantId, operatorId]
+      )
+      await client.query(
+        `SELECT 1 FROM case_assignments
+          WHERE tenant_id = $1 AND operator_id = $2
+            FOR SHARE`,
+        [tenantId, operatorId]
+      )
+      await authorize(this.snapshot(tenantId, client))
+    } catch (error) {
+      guard(error)
+    }
+  }
+
+  /**
+   * The PostgreSQL unit is owned by the writer's transaction (see
+   * `PostgresApiCreation`): it receives this authority's hook and runs it
+   * before the operation lock. A shared queryable client has no exclusive
+   * transactional pool, so the mutation is refused (SPEC 0262 §4.1).
+   */
+  async runAuthorizedMutation<T>(
+    rawTenantId: TenantId,
+    input: AuthorizedMutationInput<T>
+  ): Promise<T> {
+    const tenantId = TenantIdSchema.parse(rawTenantId)
+    if (!this.pool) {
+      throw new CaseAuthorityError(
+        'case_authority_unavailable',
+        'A transactional pool is required for authorized mutations'
+      )
+    }
+    return input.write({
+      authorizeOnClient: (client) =>
+        this.authorizeOnClient(
+          tenantId,
+          input.operatorId,
+          client,
+          input.authorize
+        )
     })
   }
 

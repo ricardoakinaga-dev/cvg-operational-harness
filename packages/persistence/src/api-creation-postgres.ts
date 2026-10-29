@@ -18,6 +18,7 @@ import {
   creationKeyDigest,
   taskCreationAudit,
   taskRequestDigest,
+  type ApiCreationOptions,
   type ApiCreationPort,
   type ApiCreationResult,
   type ApiCreationRoute,
@@ -51,6 +52,8 @@ function lockText(
 export interface CreationTransactionHooks {
   /** Test seam: runs after the tenant context was cleared, before COMMIT. */
   beforeCommit?: (client: PostgresPoolClient) => Promise<void>
+  /** Test seam: runs after the authorization hook, before the operation lock. */
+  afterAuthorize?: (client: PostgresPoolClient) => Promise<void>
 }
 
 /**
@@ -71,7 +74,8 @@ export async function runCreationTransaction<T>(
   route: ApiCreationRoute,
   keyDigest: string,
   operation: (client: PostgresPoolClient) => Promise<T>,
-  hooks: CreationTransactionHooks = {}
+  hooks: CreationTransactionHooks = {},
+  authorize?: (client: PostgresPoolClient) => Promise<void>
 ): Promise<T> {
   const tenantId = TenantIdSchema.parse(rawTenantId)
   const client = await pool.connect()
@@ -79,9 +83,20 @@ export async function runCreationTransaction<T>(
   const release = (error?: Error): void => {
     if (released) return
     released = true
+    emitter.off?.('error', onClientError)
     client.release(error)
   }
   let commitSent = false
+  // A backend that dies while the client is checked out is reported by the
+  // client itself, not by the pool (which only watches idle clients). Without a
+  // listener that event is an uncaught exception that would take the process
+  // down; the pending query already rejects, which drives the failure path.
+  const emitter = client as unknown as {
+    on?: (event: 'error', listener: (error: Error) => void) => unknown
+    off?: (event: 'error', listener: (error: Error) => void) => unknown
+  }
+  const onClientError = (): void => undefined
+  emitter.on?.('error', onClientError)
   const clearTenantContext = async (): Promise<void> => {
     await client.query('SELECT set_config($1, $2, false)', [
       CVG_TENANT_CONTEXT_SETTING,
@@ -101,6 +116,10 @@ export async function runCreationTransaction<T>(
       CVG_TENANT_CONTEXT_SETTING,
       tenantId
     ])
+    // SPEC 0262 §4: principal/grant first (locks held until COMMIT), then the
+    // operation lock, then the resource and the receipt.
+    if (authorize) await authorize(client)
+    await hooks.afterAuthorize?.(client)
     await client.query(
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       [lockText(tenantId, route, keyDigest)]
@@ -211,7 +230,8 @@ export class PostgresApiCreation implements ApiCreationPort {
 
   async createTaskWithAudit(
     command: CreateTaskWithAuditCommand,
-    rawTenantId?: TenantId
+    rawTenantId?: TenantId,
+    options: ApiCreationOptions = {}
   ): Promise<ApiCreationResult<TaskRecord>> {
     const tenantId = this.requireTenant(rawTenantId)
     assertCreationKey(command.task.idempotencyKey, '/v1/tasks')
@@ -291,13 +311,15 @@ export class PostgresApiCreation implements ApiCreationPort {
         })
         return { outcome: 'created', resource: task } as const
       },
-      this.hooks
+      this.hooks,
+      options.authorize
     )
   }
 
   async createApprovalWithAudit(
     command: CreateApprovalWithAuditCommand,
-    rawTenantId?: TenantId
+    rawTenantId?: TenantId,
+    options: ApiCreationOptions = {}
   ): Promise<ApiCreationResult<ApprovalRequestRecord>> {
     const tenantId = this.requireTenant(rawTenantId)
     assertCreationKey(command.idempotencyKey)
@@ -366,7 +388,8 @@ export class PostgresApiCreation implements ApiCreationPort {
         })
         return { outcome: 'created', resource: approval } as const
       },
-      this.hooks
+      this.hooks,
+      options.authorize
     )
   }
 

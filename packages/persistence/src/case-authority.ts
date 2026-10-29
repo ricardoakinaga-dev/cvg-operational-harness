@@ -287,11 +287,40 @@ export interface CaseReadSnapshot {
   ): Promise<CasePage<CaseAssignmentRecord>>
 }
 
+/**
+ * SPEC 0262 §4/§7 — what the writer of an authorized mutation receives. On
+ * PostgreSQL `authorizeOnClient` is the hook the creation transaction runs
+ * AFTER its tenant context and BEFORE the operation lock: it locks the actor's
+ * principal and assignments (`FOR SHARE`, held until COMMIT) and evaluates the
+ * same policy on that client. On memory the whole unit already runs inside the
+ * authority queue, so no hook is needed.
+ */
+export interface AuthorizedMutationUnit {
+  readonly authorizeOnClient?: (client: PostgresQueryable) => Promise<void>
+}
+
+export interface AuthorizedMutationInput<T> {
+  readonly operatorId: string
+  /** Policy check evaluated on the snapshot of this unit (throws to deny). */
+  readonly authorize: (snapshot: CaseReadSnapshot) => Promise<void>
+  /** The write; runs with the authorization retained until it resolves. */
+  readonly write: (unit: AuthorizedMutationUnit) => Promise<T>
+}
+
 export interface CaseAuthorityPort extends PrincipalProvisioningPort {
   readonly kind: 'memory' | 'postgres'
   readSnapshot<T>(
     tenantId: TenantId,
     operation: (snapshot: CaseReadSnapshot) => Promise<T>
+  ): Promise<T>
+  /**
+   * SPEC 0262: the authorization decision and the write share one unit of
+   * failure and one commit order. A revocation that wins the order denies the
+   * write; a write that commits first completes before the revocation applies.
+   */
+  runAuthorizedMutation<T>(
+    tenantId: TenantId,
+    input: AuthorizedMutationInput<T>
   ): Promise<T>
   putAssignment(
     input: CaseAssignmentWriteInput
@@ -617,6 +646,24 @@ export class InMemoryCaseAuthority implements CaseAuthorityPort {
   ): Promise<T> {
     const tenantId = TenantIdSchema.parse(rawTenantId)
     return this.queue.run(() => operation(this.snapshot(tenantId)))
+  }
+
+  /**
+   * SPEC 0262 §7: the decision and the writer run inside the SAME queue as
+   * `readSnapshot`, `putAssignment` and `applyVerifiedPrincipalState`, so a
+   * revocation waits for the write to resolve and never interleaves with it.
+   * The callback must not call back into this authority (the queue is not
+   * reentrant): it receives a snapshot, not the authority.
+   */
+  runAuthorizedMutation<T>(
+    rawTenantId: TenantId,
+    input: AuthorizedMutationInput<T>
+  ): Promise<T> {
+    const tenantId = TenantIdSchema.parse(rawTenantId)
+    return this.queue.run(async () => {
+      await input.authorize(this.snapshot(tenantId))
+      return input.write({})
+    })
   }
 
   private conversation(tenantId: TenantId, conversationId: string) {
