@@ -106,12 +106,6 @@ async function preflight(
   pool: PostgresPoolLike,
   options: PostgresSessionPersistenceOptions
 ): Promise<number> {
-  const schema = options.schemaName
-  const fail = (reason: string): never => {
-    throw new SessionMigrationRequiredError(
-      `Session persistence preflight: ${reason}`
-    )
-  }
   let client: PostgresPoolClient
   try {
     client = await pool.connect()
@@ -120,6 +114,28 @@ async function preflight(
       'Session database unavailable',
       undefined,
       { cause }
+    )
+  }
+  try {
+    return await qualify(client, options)
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * The same checks run on the read connection (once) and on EVERY writer lease before it
+ * writes: the writer may use another role, database or cluster. Returns the first part of
+ * the advisory key, (oid(session_streams) - 2^31), as seen by THIS session.
+ */
+async function qualify(
+  client: PostgresQueryable,
+  options: PostgresSessionPersistenceOptions
+): Promise<number> {
+  const schema = options.schemaName
+  const fail = (reason: string): never => {
+    throw new SessionMigrationRequiredError(
+      `Session persistence preflight: ${reason}`
     )
   }
   try {
@@ -176,10 +192,26 @@ async function preflight(
       'session_streams_writer_guard',
       'session_streams_cursor_at_commit',
       'session_streams_no_delete',
+      'session_streams_no_truncate',
+      'session_events_no_truncate',
       'session_streams_default_header'
     ])
       if (!enabled.has(required))
         return fail(`trigger ${required} is not enabled`)
+    const constraints = await client.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint WHERE convalidated AND conrelid = $1::oid`,
+      [streamsOid]
+    )
+    const valid = new Set(constraints.rows.map((c) => c.conname))
+    for (const required of [
+      'session_streams_writer_lock_id_key',
+      'session_streams_writer_lock_id_positive',
+      'session_streams_header_cut_paired',
+      'session_streams_header_size',
+      'session_streams_cut_range'
+    ])
+      if (!valid.has(required))
+        return fail(`constraint ${required} is not valid`)
     const role = await client.query<{
       rolsuper: boolean
       rolbypassrls: boolean
@@ -216,8 +248,6 @@ async function preflight(
         cause: error
       }
     )
-  } finally {
-    client.release()
   }
 }
 
@@ -374,6 +404,16 @@ class PostgresSessionPersistence implements SessionPersistence {
       timeoutMs: this.options.acquireTimeoutMs ?? OPERATION_TIMEOUT_MS,
       ...(signal ? { signal } : {})
     })
+    try {
+      const base = await qualify(lease, this.options)
+      if (base !== this.keyBase)
+        throw new SessionMigrationRequiredError(
+          'Session persistence preflight: the writer connection does not see the same session tables'
+        )
+    } catch (error) {
+      await lease.destroy()
+      throw error
+    }
     return lease
   }
   async #begin(runner: Runner): Promise<void> {

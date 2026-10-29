@@ -1254,5 +1254,168 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
       )
       await r.close()
     })
+
+    it('qualifies EVERY writer connection: a superuser or owner writer is refused, and the slot comes back', async () => {
+      const names = [`${role}_wsu`, `${role}_wow`]
+      const urlFor = (name: string) => {
+        const u = new URL(url!)
+        u.username = name
+        u.password = password
+        return u.toString()
+      }
+      try {
+        await admin.query(
+          `CREATE ROLE ${names[0]} LOGIN SUPERUSER PASSWORD '${password}'`
+        )
+        await admin.query(
+          `CREATE ROLE ${names[1]} LOGIN NOSUPERUSER NOBYPASSRLS INHERIT PASSWORD '${password}'`
+        )
+        await admin.query(`GRANT postgres TO ${names[1]}`)
+        await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${names[1]}`)
+        await admin.query(
+          `GRANT SELECT, INSERT ON ${schema}.session_events, ${schema}.session_streams TO ${names[1]}`
+        )
+        await admin.query(
+          `GRANT SELECT ON ${schema}.schema_migrations TO ${names[1]}`
+        )
+        const cases: Array<[string, RegExp]> = [
+          [names[0]!, /superuser or bypasses/],
+          [names[1]!, /owns the session tables/]
+        ]
+        await seed('w0', 0)
+        for (const [name, message] of cases) {
+          const bad = createPgPhysicalSessionPool({
+            connectionString: urlFor(name)
+          })
+          const svc = await service(tenantA, 1, bad)
+          // Twice with capacity 1: the first refusal must have returned the slot.
+          for (let i = 0; i < 2; i++) {
+            await expect(svc.create(hdr(`w1${name}`))).rejects.toThrow(message)
+            await expect(svc.open('w0', 'write')).rejects.toThrow(message)
+          }
+          expect(
+            (
+              await admin.query(
+                `SELECT count(*) FROM ${schema}.session_streams WHERE session_id=$1`,
+                [`w1${name}`]
+              )
+            ).rows[0].count
+          ).toBe('0')
+          expect(await advisoryHolders('w0')).toBe(0)
+          await waitFor(
+            async () =>
+              Number(
+                (
+                  await admin.query(
+                    `SELECT count(*) FROM pg_stat_activity WHERE usename=$1`,
+                    [name]
+                  )
+                ).rows[0].count
+              ) === 0
+          )
+        }
+      } finally {
+        for (const n of names) {
+          await admin.query(`REVOKE postgres FROM ${n}`).catch(() => undefined)
+          await admin
+            .query(
+              `REVOKE ALL ON ${schema}.session_events, ${schema}.session_streams, ${schema}.schema_migrations FROM ${n}`
+            )
+            .catch(() => undefined)
+          await admin
+            .query(`REVOKE USAGE ON SCHEMA ${schema} FROM ${n}`)
+            .catch(() => undefined)
+          await admin.query(`DROP ROLE IF EXISTS ${n}`)
+        }
+      }
+    })
+    it('refuses a writer connection that points at another database with the same migrations', async () => {
+      const other = `pars01db_${suffix}`
+      await admin.query(`CREATE DATABASE ${other}`)
+      const u = new URL(url!)
+      u.pathname = `/${other}`
+      const otherAdmin = new Client({ connectionString: u.toString() })
+      await otherAdmin.connect()
+      try {
+        await runSessionEventMigrations(otherAdmin, { schemaName: schema })
+        await otherAdmin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
+        await otherAdmin.query(
+          `GRANT SELECT, INSERT ON ${schema}.session_events, ${schema}.session_streams TO ${role}`
+        )
+        await otherAdmin.query(
+          `GRANT UPDATE (next_sequence) ON ${schema}.session_streams TO ${role}`
+        )
+        await otherAdmin.query(
+          `GRANT SELECT ON ${schema}.schema_migrations TO ${role}`
+        )
+        const ru = new URL(roleUrl)
+        ru.pathname = `/${other}`
+        const svc = await service(
+          tenantA,
+          2,
+          createPgPhysicalSessionPool({ connectionString: ru.toString() })
+        )
+        await expect(svc.create(hdr('w2'))).rejects.toThrow(
+          /does not see the same session tables/
+        )
+        await expect(svc.open('w2', 'write')).rejects.toThrow(
+          /does not see the same session tables/
+        )
+        expect(
+          (
+            await otherAdmin.query(
+              `SELECT count(*) FROM ${schema}.session_streams`
+            )
+          ).rows[0].count
+        ).toBe('0')
+      } finally {
+        await otherAdmin.end()
+        await admin.query(`DROP DATABASE IF EXISTS ${other} WITH (FORCE)`)
+      }
+    })
+    it('also requires the truncate guards and validated constraints', async () => {
+      const open = () =>
+        createPostgresSessionPersistence(physical, readPool, {
+          tenantId: tenantA,
+          schemaName: schema,
+          maxOpenWriters: 1
+        })
+      for (const [table, trigger] of [
+        ['session_streams', 'session_streams_no_truncate'],
+        ['session_events', 'session_events_no_truncate']
+      ]) {
+        await admin.query(
+          `ALTER TABLE ${schema}.${table} DISABLE TRIGGER ${trigger}`
+        )
+        try {
+          await expect(open()).rejects.toThrow(
+            new RegExp(`trigger ${trigger} is not enabled`)
+          )
+        } finally {
+          await admin.query(
+            `ALTER TABLE ${schema}.${table} ENABLE TRIGGER ${trigger}`
+          )
+        }
+      }
+      await admin.query(
+        `ALTER TABLE ${schema}.session_streams DROP CONSTRAINT session_streams_cut_range`
+      )
+      await admin.query(
+        `ALTER TABLE ${schema}.session_streams ADD CONSTRAINT session_streams_cut_range CHECK (inherited_event_count IS NULL OR inherited_event_count >= 0) NOT VALID`
+      )
+      try {
+        await expect(open()).rejects.toThrow(
+          /constraint session_streams_cut_range is not valid/
+        )
+      } finally {
+        await admin.query(
+          `ALTER TABLE ${schema}.session_streams DROP CONSTRAINT session_streams_cut_range`
+        )
+        await admin.query(
+          `ALTER TABLE ${schema}.session_streams ADD CONSTRAINT session_streams_cut_range CHECK (inherited_event_count IS NULL OR inherited_event_count BETWEEN 0 AND 9007199254740991)`
+        )
+      }
+      await expect(open()).resolves.toBeDefined()
+    })
   })
 })
