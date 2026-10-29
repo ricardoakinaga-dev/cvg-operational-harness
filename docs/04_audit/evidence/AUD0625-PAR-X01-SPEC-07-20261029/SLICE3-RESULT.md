@@ -20,4 +20,4 @@ Abort após o launch (de 6164 ms para uma devolução em segundos, `cause: cance
 ## Provas
 
 - RED agora verdes (6), guarda (10 testes, inclui o scanner), shell (+1: `cancelled`), oráculos F02/F05/preabort/containment/pdsh-011/012/013 inalterados e verdes (273 + os novos).
-- Mutação: ver `mutations-x3.json`.
+- Mutação (`mutate-x.py s3`): 19 mutantes, 19 mortos. Três sobreviveram na 1ª rodada e viraram testes: o mapeamento `cancelled` do adaptador, a mensagem quando o serviço recusa o pedido, e o ambiente da sonda. O último achou uma regressão minha: com `env: {}` o `bwrap` deixava de ser procurado no `PATH` do chamador; a sonda agora repassa só o `PATH`.

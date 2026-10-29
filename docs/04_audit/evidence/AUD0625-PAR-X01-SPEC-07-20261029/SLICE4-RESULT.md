@@ -12,4 +12,4 @@ Código: `packages/sandbox/src/process-service/service.ts`, `types.ts`; teste `t
 ## Provas
 
 - 15 testes persistentes/dispose em bubblewrap real (echo bidirecional, tetos de stdin, árvore com neto parada por `stop`, lifetime não renovado por saída nem por escrita, flood segurado e retomado, stop com saída segurada, consumidor que sai, dispose com dois lançamentos e árvore provada vazia, dispose vazio/repetido/concorrente, `cleanupFailed` separado) + 36 do motor (+1: stop logo após o launch fica `clean`).
-- Mutação: ver `mutations-x4.json`.
+- Mutação (`mutate-x.py s4`): 20 mutantes, 18 mortos, 2 equivalentes justificados (`pers-stdin-ended`: depois do `end` o stream já rejeita a escrita; `teardown-release`: o Node retoma stdio pausado na saída do filho, o `resume` explícito é defesa em profundidade).

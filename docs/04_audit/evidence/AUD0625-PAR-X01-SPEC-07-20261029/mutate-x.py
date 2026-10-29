@@ -87,7 +87,7 @@ SLICES = {
   ('stdin-cap', D+'service.ts', "if (request.stdin.length > limits.maxStdinBytes) bad('stdin size')", ""),
   ('output-room', D+'service.ts', "chunk.length > room ? chunk.subarray(0, Math.max(0, room)) : chunk", "chunk"),
  ]),
- 's3': (['tests/aud0625-par-x01-red.test.ts','packages/sandbox/src/__tests__/pdsh-011-sandbox-local.test.ts','tests/aud0625-process-profile.test.ts','tests/aud0625-contained-preabort.test.ts','tests/par-x01-spawn-boundary.test.ts','packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts'], [
+ 's3': (['tests/aud0625-par-x01-red.test.ts','packages/sandbox/src/__tests__/pdsh-011-sandbox-local.test.ts','tests/aud0625-process-profile.test.ts','tests/aud0625-contained-preabort.test.ts','tests/par-x01-spawn-boundary.test.ts','packages/sandbox/src/__tests__/pdsh-013-shell-tool.test.ts','tests/par-x01-process-service.test.ts'], [
   ('ad-overflow', 'packages/sandbox/src/run.ts', "outputOverflow: 'drop',", ""),
   ('ad-timeout', 'packages/sandbox/src/run.ts', "return { exitCode: 'timeout', ...text, ...detail }", "return { exitCode: 'spawn_failed', ...text, ...detail }"),
   ('ad-cancelled', 'packages/sandbox/src/run.ts', "return { exitCode: 'cancelled', ...text, ...detail }", "return { exitCode: 'spawn_failed', ...text, ...detail }"),
@@ -102,7 +102,7 @@ SLICES = {
   ('ad-bwrap', 'packages/sandbox/src/run.ts', "serviceFor(request.bwrapPath)", "serviceFor(undefined)"),
   ('ad-catch', 'packages/sandbox/src/run.ts', "stderr: error instanceof Error ? error.message : 'process_service_unavailable',", "stderr: '',"),
   ('sh-cancelled', 'packages/sandbox/src/shell-tool.ts', "if (result.exitCode === 'cancelled') {", "if (false) {"),
-  ('probe-env', 'packages/sandbox/src/capabilities.ts', "env: {},", ""),
+  ('probe-env', 'packages/sandbox/src/capabilities.ts', "env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },", ""),
   ('guard-execa', 'tests/par-x01-spawn-boundary.test.ts', "|(?:from\\s+|require\\s*\\(\\s*)['\"]execa['\"]/", "/"),
   ('guard-bun', 'tests/par-x01-spawn-boundary.test.ts', "|\\bBun\\.spawn(?:Sync)?\\b", ""),
   ('guard-tests', 'tests/par-x01-spawn-boundary.test.ts', "!/\\.(?:test|spec)\\./.test(entry.name) &&", ""),
