@@ -19,7 +19,7 @@
   - 0274, F08b (BUILD D9, SPEC DF): `7ef71bee`, revisão DF `APPROVE`, PG 24/24.
   - F06b (D9, T2 só teste): nota 0232b e `469b38ef`; servidor de falhas 57/57.
   - Sandbox (Codex AUD0625): F01/0277 `e6a701ca`, F05/0276 `3e1602f4`, F02/0275 `f4e799b8`, mais docs `5f310fef`. Revisões D9 `APPROVE` em `dba0602c`, `0e52a96c` e `4b95bb56`. F05 global, K08 e X01 seguem abertos. A versão do `shell.run` passa a `v1:<digest do perfil>`, então o fingerprint de composição muda por perfil.
-  - 0278, F03b, e 0279, F08e (DF): fase 1 em `abbe84e0` e BUILD em `879b4e03`. Mutações 10/10 e PG 13/13. A revisão D9 está em curso; as duas só entram na onda com `APPROVE`.
+  - 0278, F03b, e 0279, F08e (DF): fase 1 em `abbe84e0` e BUILD em `879b4e03`. Mutações 10/10 e PG 13/13. Revisão D9 `APPROVE` nas duas (`af3d8cb0`), com a matriz de 5 chamadores × 11 estados, PG 13/13 e 9 mutações próprias. Achado novo, fora do escopo da 0278: F03c (P2), em que `exam.upload` (`readUpload`) também lê um hardlink para fora e envia o conteúdo ao host permitido. Está na fase 1 com a D9, como SPEC 0281.
   - CI: os jobs do `verify.yml` foram fixados em `ubuntu-24.04` (`6628d684`), porque o `ubuntu-latest` passou a ser o 26.04 e o Playwright 1.59.1 não instala lá.
   - 0262, U04/F16 (sessão 07): BUILD em 5 fatias, para a onda seguinte.
 
@@ -35,7 +35,7 @@
   - F08c, opcional.
   - 0257: O1 (o resolve falha depois de um 2xx e o próximo clique reusa a chave) e O2 (JSON corrompido no sessionStorage).
   - F13, F18 e F19 continuam com o Codex.
-- `next_action`: com os 5 checks verdes, merge do #31 e depois do #32; atualizar `claude/aud0625-wave2` com a `main`, juntar a 0278/0279 se a D9 aprovar, rodar os gates e abrir o PR da segunda onda.
+- `next_action`: com os 5 checks verdes, merge do #31 e depois do #32; atualizar `claude/aud0625-wave2` com a `main`, rodar os gates e abrir o PR da segunda onda.
 
 # AUD-SCORE-20261028 — auditoria 0625 entregue (Codex) — 28/10/2026
 
