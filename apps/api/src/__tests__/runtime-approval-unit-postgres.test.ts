@@ -324,26 +324,33 @@ describe(
       }
     )
 
-    itWithPostgres(
-      'persisted decision without causality is a 409 and nothing is filled in from the retry (R15)',
-      async () => {
-        const h = await harness()
-        try {
-          await h.unit.decide(h.command())
-          await h.setup.pool.query(
-            `UPDATE runtime_approvals SET decision_command_key = NULL WHERE approval_id = $1`,
-            [h.fixture.approvalId]
-          )
-          const before = await h.snapshot()
-          await expect(
-            h.unit.decide(h.command({ commandKey: 'retry-key' }))
-          ).rejects.toMatchObject({ code: 'conflict' })
-          expect(await h.snapshot()).toEqual(before)
-        } finally {
-          await teardown(h.setup)
+    for (const column of [
+      'approver_id',
+      'decision_actor_type',
+      'decision_correlation_id',
+      'decision_command_key'
+    ]) {
+      itWithPostgres(
+        `persisted decision without ${column} is a 409 and nothing is filled in from the retry (R15)`,
+        async () => {
+          const h = await harness()
+          try {
+            await h.unit.decide(h.command())
+            await h.setup.pool.query(
+              `UPDATE runtime_approvals SET ${column} = NULL WHERE approval_id = $1`,
+              [h.fixture.approvalId]
+            )
+            const before = await h.snapshot()
+            await expect(
+              h.unit.decide(h.command({ commandKey: 'retry-key' }))
+            ).rejects.toMatchObject({ code: 'conflict' })
+            expect(await h.snapshot()).toEqual(before)
+          } finally {
+            await teardown(h.setup)
+          }
         }
-      }
-    )
+      )
+    }
 
     itWithPostgres(
       'legacy gap: decision persisted but execution still waiting and no event completes only what is missing with the original decision (R15)',
