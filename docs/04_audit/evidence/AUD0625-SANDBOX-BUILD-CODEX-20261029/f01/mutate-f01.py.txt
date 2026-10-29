@@ -1,0 +1,21 @@
+from pathlib import Path
+import json,subprocess,hashlib
+r=Path('/mnt/dados/cvg-work/aud0625-sandbox-build-codex-20261029');c=r/'candidate';p=c/'packages/harness/src/capability-boundary.ts';original=p.read_text();rows=[]
+mutations={
+ 'omit-mode':[("? { sandbox: sandbox as SandboxMode }","? {}")],
+ 'accept-invalid':[("throw invalidDescriptor('Capability sandbox mode is invalid')","void 0")],
+ 'invoke-accessor':[("throw invalidDescriptor('Capability sandbox must be a data property')","void 0"),("const sandbox: unknown = sandboxProperty?.value","const sandbox: unknown = descriptor.sandbox")],
+ 'keep-NONE':[("sandbox !== undefined && sandbox !== 'NONE'","sandbox !== undefined")],
+ 'drop-executable-mode':[("...descriptor,\n    execute:","...descriptor,\n    sandbox: undefined,\n    execute:")]
+}
+try:
+ for name,replacements in mutations.items():
+  source=original
+  for before,after in replacements:
+   assert source.count(before)==1,(name,before,source.count(before));source=source.replace(before,after)
+  p.write_text(source);report=r/('f01-mutant-'+name+'-vitest.json')
+  cmd=['python3',str(r/'run.py'),'f01-mutant-'+name,'90','node','node_modules/vitest/vitest.mjs','run','tests/aud0625-sandbox-authority-red.test.ts','--no-file-parallelism','--maxWorkers=2','--reporter=json','--outputFile='+str(report)]
+  result=subprocess.run(cmd);d=json.loads(report.read_text());row={'name':name,'exit':result.returncode,'failed':d['numFailedTests'],'passed':d['numPassedTests'],'mutant_sha256':hashlib.sha256(source.encode()).hexdigest(),'failed_names':[x['fullName'] for s in d['testResults'] for x in s['assertionResults'] if x['status']=='failed']};rows.append(row);assert result.returncode==1 and row['failed']>0,row
+finally:
+ p.write_text(original);assert p.read_text()==original;(r/'f01-mutations.json').write_text(json.dumps({'source_sha256':hashlib.sha256(original.encode()).hexdigest(),'restored':True,'mutations':rows},indent=2)+'\n')
+print(json.dumps({'killed':len(rows),'total':len(mutations),'restored':True}))
