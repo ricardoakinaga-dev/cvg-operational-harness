@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import type {
   ModelGatewayEvent,
   ModelGatewayRequest,
@@ -128,7 +129,12 @@ const cutAfterOutput: Attempt = async function* () {
 const failedEvents = (events: ModelGatewayEvent[]) =>
   events.filter((e) => e.type === 'model.call.failed')
 
-/** What the log alone says was consumed: reported tokens and unknown attempts. */
+/**
+ * What the log alone says was consumed (SPEC 0285 §4, as corrected by note
+ * 0285b): every terminal event that carries tokens counts, completed or
+ * failed; `detail` is a comma-separated flag list, and a terminal flagged
+ * `usage_unreported` is an unknown attempt, never measured tokens.
+ */
 function reconstruct(events: ModelGatewayEvent[]) {
   let inputTokens = 0
   let outputTokens = 0
@@ -140,15 +146,15 @@ function reconstruct(events: ModelGatewayEvent[]) {
       event.type !== 'model.call.failed'
     )
       continue
-    if (event.detail === 'usage_unreported') {
+    if (event.inputTokens === undefined) continue
+    const flags = (event.detail ?? '').split(',')
+    if (flags.includes('usage_unreported')) {
       unreportedRequests += 1
       continue
     }
-    if (event.type === 'model.call.completed') {
-      reportedRequests += 1
-      inputTokens += event.inputTokens ?? 0
-      outputTokens += event.outputTokens ?? 0
-    }
+    reportedRequests += 1
+    inputTokens += event.inputTokens
+    outputTokens += event.outputTokens ?? 0
   }
   return { inputTokens, outputTokens, reportedRequests, unreportedRequests }
 }
@@ -444,5 +450,57 @@ describe('PAR-C02 BUILD (SPEC 0285)', () => {
           })
       ).toThrow(ModelGatewayError)
     }
+  })
+})
+
+describe('PAR-C02 review regressions (Codex 17895, note 0285b)', () => {
+  const expectReconstructed = (
+    events: ModelGatewayEvent[],
+    meter: TokenMeter
+  ) => {
+    const log = reconstruct(events)
+    const snap = meter.snapshot()
+    expect(log.unreportedRequests).toBe(meter.unreportedRequests)
+    expect(log.reportedRequests).toBe(snap.requests)
+    expect(log.inputTokens).toBe(snap.inputTokens)
+    expect(log.outputTokens).toBe(snap.outputTokens)
+  }
+
+  it('a failed attempt whose usage the provider reported is reconstructed as measured', async () => {
+    const w = world([ok])
+    await expect(
+      w.gateway.generate({
+        ...request(),
+        structuredOutput: {
+          schemaName: 'c02',
+          schema: z.object({ never: z.literal(true) })
+        }
+      })
+    ).rejects.toMatchObject({ code: 'schema_invalid' })
+    const failed = failedEvents(w.events)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({ inputTokens: 7, outputTokens: 3 })
+    expect(w.meter.snapshot().requests).toBe(1)
+    expectReconstructed(w.events, w.meter)
+  })
+
+  it('an unreported success over the cost ceiling keeps both flags and stays unknown', async () => {
+    const w = world(
+      [
+        async function* () {
+          yield { type: 'delta', text: 'sem contagem' }
+          yield { type: 'finish', reason: 'stop' }
+        }
+      ],
+      { maxCostUsd: 0.0001 }
+    )
+    await w.gateway.generate(request())
+    const completed = w.events.find((e) => e.type === 'model.call.completed')
+    expect(completed?.detail?.split(',')).toEqual([
+      'usage_unreported',
+      'cost_ceiling_exceeded'
+    ])
+    expect(w.meter.unreportedRequests).toBe(1)
+    expectReconstructed(w.events, w.meter)
   })
 })
