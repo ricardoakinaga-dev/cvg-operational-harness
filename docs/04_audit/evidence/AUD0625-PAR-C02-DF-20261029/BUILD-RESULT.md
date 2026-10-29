@@ -49,3 +49,11 @@ Recibo [human-decisions-18](../USER-DECISIONS-20261028/human-decisions-18.json),
 ## Limites
 
 Os da SPEC §11: a estimativa pode errar para os dois lados, e a pressão de sessão ancorada fica com o PAR-C01.
+
+## Correção da revisão do Codex (GBrain 17895)
+
+A revisão achou um P2 no oráculo de reconstrução e no texto da §4 da SPEC; o gateway estava certo. O oráculo ignorava falhas com uso reportado (por exemplo, `schema_invalid` depois de 7/3) e comparava `detail` por igualdade, em vez de procurar a flag numa lista separada por vírgulas.
+- O `reconstruct` do teste foi corrigido.
+- Entraram duas regressões: falha com uso reportado; sucesso sem contagem acima do teto, com as duas flags.
+- A nota técnica [0285b](../../../02_spec/0285b_attempt_usage_reconstruction_invariant_note.md) corrige a redação da invariante, sem editar a SPEC aprovada.
+- Resultado: 17 testes C02.
