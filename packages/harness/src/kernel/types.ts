@@ -15,6 +15,7 @@ import type {
   SandboxHandle,
   TelemetrySink,
   ToolDefinition,
+  ToolDescriptor,
   ToolInvocation,
   ToolRegistry,
   ToolResult
@@ -152,7 +153,7 @@ export interface ModelCallState {
  * There is no "allow" result, so no later registration undoes a denial.
  */
 export type ToolGuard = (
-  call: Readonly<ToolCallState>
+  call: ToolCallView
 ) => GuardVerdict | Promise<GuardVerdict>
 
 /** A denial reason, optionally with its stop reason; `undefined` abstains. */
@@ -167,34 +168,55 @@ export type GuardVerdict =
 
 export type Next<T> = () => Promise<T>
 
+/** Detached observations; core adapter writer contexts stay private. */
+export interface TurnView {
+  readonly input: Readonly<Omit<RuntimeInput, 'signal'>>
+  readonly startedAt: number
+  readonly signal: Readonly<Pick<AbortSignal, 'aborted'>>
+  readonly budget: Readonly<Pick<TurnBudget, 'remainingMs'>>
+  readonly metadata: Readonly<TurnMetadata>
+}
+export interface ToolCallView {
+  readonly turn: TurnView
+  readonly tool: Readonly<ToolDescriptor>
+  readonly invocation: Readonly<ToolInvocation>
+  readonly needsApproval: boolean
+  readonly policyDecision?: Readonly<PolicyDecision>
+  readonly executionRef?: string
+}
+export interface ModelCallView {
+  readonly turn: TurnView
+  readonly request: Readonly<Omit<ModelRequest, 'signal'>>
+}
+
 export interface HookMap {
   /** waterfall — accept or stop the step; `pause` stops here. */
   'turn/before-step': (
-    turn: TurnState,
+    turn: TurnView,
     next: Next<KernelGate>
   ) => Promise<KernelGate>
   /** waterfall — budget and request checks before the model is called. */
   'model/before-call': (
-    call: ModelCallState,
+    call: ModelCallView,
     next: Next<KernelGate>
   ) => Promise<KernelGate>
   /** waterfall — policy and approval decide before dispatch. */
   'tool/pre-execute': (
-    call: ToolCallState,
+    call: ToolCallView,
     next: Next<KernelGate>
   ) => Promise<KernelGate>
   /** waterfall around the tool body — timeout, retry, metrics. */
   'tool/execute': (
-    call: ToolCallState,
+    call: ToolCallView,
     next: Next<ToolOutcome>
   ) => Promise<ToolOutcome>
   /** serial — settle reservations, inspect or replace the outcome. */
   'tool/post-execute': (
-    call: ToolCallState,
+    call: ToolCallView,
     outcome: ToolOutcome
   ) => Promise<ToolOutcome>
   /** serial — finalize the turn result (audit, telemetry). */
-  'turn/end': (turn: TurnState, result: RuntimeResult) => Promise<RuntimeResult>
+  'turn/end': (turn: TurnView, result: RuntimeResult) => Promise<RuntimeResult>
 }
 
 export type HookPoint = keyof HookMap

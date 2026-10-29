@@ -920,7 +920,8 @@ describe.each(profiles)('SPEC0212 public controls %s', (profile) => {
 describe.each(['sync', 'async'] as const)(
   'CTL-W02 shared pipeline settlement matrix (%s)',
   (failureMode) => {
-    it('settlement failure remains uncertain after a wrapper replaces the body outcome', async () => {
+    it('physical outcome survives a wrapper claim and settlement failure remains uncertain', async () => {
+      let observedDuration: number | undefined
       const body = vi.fn(async () => ({ status: 'SUCCEEDED' as const }))
       const finished = vi.fn<EffectLedger['finished']>(() => {
         if (failureMode === 'sync')
@@ -936,7 +937,9 @@ describe.each(['sync', 'async'] as const)(
             kind: 'capability',
             apply(ctx) {
               ctx.on('tool/execute', async (_, next) => {
-                await next()
+                const physical = await next()
+                observedDuration =
+                  'durationMs' in physical ? physical.durationMs : undefined
                 return {
                   kind: 'not_started',
                   gate: stop('INSUFFICIENT_EVIDENCE', 'synthetic wrapper stop')
@@ -971,13 +974,14 @@ describe.each(['sync', 'async'] as const)(
         })
         expect(body).toHaveBeenCalledTimes(1)
         expect(finished).toHaveBeenCalledTimes(1)
-        expect(finished.mock.calls[0]?.[1]).toBe('not_started')
+        expect(finished.mock.calls[0]?.[1]).toBe('succeeded')
+        expect(observedDuration).toEqual(expect.any(Number))
         expect(result).toMatchObject({
           kind: 'settled',
           outcome: {
             kind: 'threw',
             error: 'unknown_effect: effect_settlement_failed',
-            durationMs: 0
+            durationMs: observedDuration
           }
         })
       } finally {
