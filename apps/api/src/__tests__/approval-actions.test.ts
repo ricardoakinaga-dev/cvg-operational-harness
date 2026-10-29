@@ -32,6 +32,9 @@ describe('approval controlled actions API', () => {
         proposedAction: 'handoff_to_operator',
         summary: 'Operador deve assumir atendimento ficticio',
         riskLevel: 'high'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>

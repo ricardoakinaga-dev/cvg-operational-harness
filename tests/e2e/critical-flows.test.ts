@@ -36,6 +36,9 @@ describe('critical runtime flows', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Slot sugerido para revisao humana',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<{

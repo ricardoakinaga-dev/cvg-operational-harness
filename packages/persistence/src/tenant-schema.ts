@@ -10,6 +10,13 @@
  */
 export type TenantIsolationExpression = 'quarantined' | 'tenant-only'
 
+/**
+ * Runtime table privileges. The default is `read-insert-update`; an
+ * append-only table (SPEC 0257 `api_creation_receipts`) is `read-insert`:
+ * the runtime role may not UPDATE it, and the preflights require exactly that.
+ */
+export type TenantRuntimePrivileges = 'read-insert-update' | 'read-insert'
+
 export interface TenantScopedTable {
   readonly table: string
   /** Exact RLS policy name the preflight requires. */
@@ -19,13 +26,20 @@ export interface TenantScopedTable {
    * false` and the column must exist. `tenant-only`: tenant equality alone.
    */
   readonly expression: TenantIsolationExpression
+  readonly runtimePrivileges: TenantRuntimePrivileges
 }
 
 function entry(
   table: string,
-  expression: TenantIsolationExpression = 'quarantined'
+  expression: TenantIsolationExpression = 'quarantined',
+  runtimePrivileges: TenantRuntimePrivileges = 'read-insert-update'
 ): TenantScopedTable {
-  return { table, policy: `${table}_tenant_isolation`, expression }
+  return {
+    table,
+    policy: `${table}_tenant_isolation`,
+    expression,
+    runtimePrivileges
+  }
 }
 
 export const TENANT_SCHEMA_INVENTORY: readonly TenantScopedTable[] = [
@@ -79,7 +93,9 @@ export const TENANT_SCHEMA_INVENTORY: readonly TenantScopedTable[] = [
   entry('case_roots', 'tenant-only'),
   entry('case_assignments', 'tenant-only'),
   entry('case_execution_links', 'tenant-only'),
-  entry('case_audit_links', 'tenant-only')
+  entry('case_audit_links', 'tenant-only'),
+  // SPEC 0257: immutable receipts of HTTP creations (migration 0030).
+  entry('api_creation_receipts', 'tenant-only', 'read-insert')
 ]
 
 export const TENANT_SCHEMA_TABLES: readonly string[] =
@@ -90,3 +106,17 @@ export const TENANT_ONLY_TABLES: ReadonlySet<string> = new Set(
     (item) => item.expression === 'tenant-only'
   ).map((item) => item.table)
 )
+
+/** Tables whose runtime role must NOT hold UPDATE (append-only receipts). */
+export const TENANT_READ_INSERT_TABLES: ReadonlySet<string> = new Set(
+  TENANT_SCHEMA_INVENTORY.filter(
+    (item) => item.runtimePrivileges === 'read-insert'
+  ).map((item) => item.table)
+)
+
+/** The exact GRANT privilege list of the runtime role for one inventory table. */
+export function tenantRuntimeGrantPrivileges(table: string): string {
+  return TENANT_READ_INSERT_TABLES.has(table)
+    ? 'SELECT, INSERT'
+    : 'SELECT, INSERT, UPDATE'
+}

@@ -294,6 +294,24 @@ export interface OutboxEffectRecord {
   appliedAt: Date
 }
 
+/** SPEC 0257 §4.1 — receipt of an HTTP creation (never updated, never deleted). */
+export interface ApiCreationReceiptRecord {
+  /** `null` only in the isolated tenantless memory profile. */
+  tenantId: TenantId | null
+  route: '/v1/tasks' | '/v1/approvals'
+  digestVersion: 1
+  keyDigest: string
+  requestDigest: string
+  actorType: AuditEventRecord['actorType']
+  actorId: string
+  sessionId: string
+  taskSource: string | null
+  taskId: string | null
+  approvalId: string | null
+  auditId: string
+  createdAt: Date
+}
+
 export interface DatabaseState {
   conversations: ConversationRecord[]
   messages: MessageRecord[]
@@ -311,4 +329,5 @@ export interface DatabaseState {
   ownerDrafts: OwnerDraftRecord[]
   patientDrafts: PatientDraftRecord[]
   appointmentDrafts: AppointmentDraftRecord[]
+  apiCreationReceipts: ApiCreationReceiptRecord[]
 }

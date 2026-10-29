@@ -1,0 +1,28 @@
+import { appendFileSync } from 'node:fs'
+import { describe, it } from 'vitest'
+import { buildServer } from '../server.ts'
+
+const OUT = '/mnt/dados/tmp/ricardo/rev0257/s2-probe.txt'
+const log = (m: string) => appendFileSync(OUT, m + '\n')
+describe('review 0257 slice 2 probe', () => {
+  it('probe', async () => {
+    const app = buildServer({ requireAuthenticatedMutations: true })
+    const inbound = await app.inject({
+      method: 'POST', url: '/v1/webhooks/channels/whatsapp/messages',
+      payload: { externalMessageId: 'probe-1', senderRef: '+551177776666', body: 'x', receivedAt: '2026-10-28T14:00:00-03:00' }
+    })
+    log('inbound ' + inbound.statusCode + ' ' + inbound.body.slice(0, 120))
+    const sessionId = (inbound.json() as { data?: { sessionId?: string } }).data?.sessionId ?? 'none'
+    const body = { sessionId, proposedAction: 'handoff_to_operator', summary: 's', riskLevel: 'high' }
+    const ops = [
+      ['no identity, no header', {}],
+      ['operator without grant, no header', { 'x-operator-id': 'operator.zzz', 'x-operator-role': 'Operator' }],
+      ['operator without grant, valid header', { 'x-operator-id': 'operator.zzz', 'x-operator-role': 'Operator', 'idempotency-key': 'probe-key-00000001' }],
+      ['operator without grant, bad header', { 'x-operator-id': 'operator.zzz', 'x-operator-role': 'Operator', 'idempotency-key': 'bad key' }]
+    ] as const
+    for (const [name, headers] of ops) {
+      const r = await app.inject({ method: 'POST', url: '/v1/approvals', headers: { ...headers } as never, payload: body })
+      log(name + ' => ' + r.statusCode + ' ' + ((r.json() as { error?: { code?: string } }).error?.code ?? 'ok'))
+    }
+  })
+})

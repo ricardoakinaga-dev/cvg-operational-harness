@@ -11,8 +11,10 @@ import type {
 import {
   createLocalSandboxGate,
   createShellTool,
-  hostProbe
+  hostProbe,
+  type ProcessContainmentProfile
 } from '@cvg/sandbox'
+import { reviewedNodeProfile } from '../../../../tests/helpers/aud0625-node-process-profile.ts'
 import { createOperationalHarness } from '../createOperationalHarness.ts'
 import {
   InMemoryApprovalEngine,
@@ -63,10 +65,17 @@ function registry(tools: readonly ToolDefinition[]): ToolRegistry {
 function harnessFor(
   root: string,
   approvals: InMemoryApprovalEngine,
-  options: { readonly withSandbox?: boolean; readonly runner?: unknown } = {}
+  options: {
+    readonly withSandbox?: boolean
+    readonly runner?: unknown
+    readonly processProfile?: ProcessContainmentProfile
+  } = {}
 ): ReturnType<typeof createOperationalHarness> {
   const tool = createShellTool({
     workspaceRoot: root,
+    ...(options.processProfile
+      ? { processProfile: options.processProfile }
+      : {}),
     ...(options.runner !== undefined ? { run: options.runner as never } : {})
   })
   return createOperationalHarness({
@@ -161,10 +170,12 @@ describe('PDSH-013 shell tool in the operational harness (SPEC 0198 §2)', () =>
       const root = tempWorkspace()
       const approvals = new InMemoryApprovalEngine()
       approvals.approveOnRequest = true
-      const harness = harnessFor(root, approvals)
+      const harness = harnessFor(root, approvals, {
+        processProfile: reviewedNodeProfile(root)
+      })
       const result = await harness.execute(
         input({
-          argv: ['/bin/echo', 'sintetico'],
+          argv: [process.execPath, '-e', 'console.log("sintetico")'],
           intent: 'fumaça de integração com approval'
         })
       )

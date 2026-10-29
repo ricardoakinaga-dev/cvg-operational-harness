@@ -285,7 +285,15 @@ function post(
   headers: Record<string, string>,
   payload: Record<string, unknown>
 ) {
-  return app.inject({ method: 'POST', url, headers, payload })
+  // SPEC 0257: the approval creation route requires one Idempotency-Key.
+  const withKey =
+    url === '/v1/approvals'
+      ? {
+          ...headers,
+          'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        }
+      : headers
+  return app.inject({ method: 'POST', url, headers: withKey, payload })
 }
 
 function runtime(conversationId: string, sessionId: string): RuntimeInput {
@@ -1431,7 +1439,11 @@ describe('SPEC0251 S6/S7 — authority outage and error mapping (memory)', () =>
       await w.app.inject({
         method: 'POST',
         url: '/v1/approvals',
-        headers: { ...APPROVER_A, 'content-type': 'application/xml' },
+        headers: {
+          ...APPROVER_A,
+          'content-type': 'application/xml',
+          'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        },
         payload: '<synthetic/>'
       }),
       415

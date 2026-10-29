@@ -661,6 +661,91 @@ describeWithPostgres('durable runtime approval authority (PROD-04)', () => {
     expect(persisted.expiredAt).toBe(now.toISOString())
   })
 
+  it('SPEC 0279: a REJECTED approval past expiry stays REJECTED in the database', async () => {
+    let now = new Date('2026-09-13T12:00:00.000Z')
+    const clocked = new PostgresApprovalAuthority(pool, {
+      engine: { clock: () => now }
+    })
+    const hint = `rejected_${randomBytes(4).toString('hex')}`
+    const record = await clocked.request({
+      ...requestInput(tenantA, hint),
+      expiresInMs: 1_000
+    })
+    await clocked.submit(tenantA, record.approvalId, 'op_operator_1')
+    await clocked.reject(tenantA, record.approvalId, {
+      approverId: 'op_approver_1'
+    })
+    now = new Date(now.getTime() + 5_000)
+
+    await expect(
+      clocked.verifyAndConsume({
+        tenantId: tenantA,
+        approvalId: record.approvalId,
+        action: 'appointment.confirm',
+        resource: { type: 'appointment', id: `apt_${hint}` },
+        payload: syntheticPayload(hint)
+      })
+    ).rejects.toMatchObject({ code: 'invalid_state' })
+    await expect(
+      clocked.submit(tenantA, record.approvalId, 'op_operator_1')
+    ).rejects.toMatchObject({ code: 'invalid_state' })
+
+    const persisted = await authority.get(tenantA, record.approvalId)
+    expect(persisted.status).toBe('REJECTED')
+    expect(persisted.expiredAt ?? null).toBeNull()
+  })
+
+  it('SPEC 0279: an EXECUTING approval past expiry survives a stray verifyAndConsume and confirms', async () => {
+    let now = new Date('2026-09-13T12:00:00.000Z')
+    const clocked = new PostgresApprovalAuthority(pool, {
+      engine: { clock: () => now }
+    })
+    const hint = `executing_${randomBytes(4).toString('hex')}`
+    const record = await clocked.request({
+      ...requestInput(tenantA, hint),
+      expiresInMs: 1_000
+    })
+    await clocked.submit(tenantA, record.approvalId, 'op_operator_1')
+    await clocked.approve(tenantA, record.approvalId, {
+      approverId: 'op_approver_1'
+    })
+    const reservationId = `rsv_${hint}`
+    await clocked.reserve(
+      reserveInput(tenantA, hint, record.approvalId, reservationId)
+    )
+    await clocked.markExecuting({
+      tenantId: tenantA,
+      approvalId: record.approvalId,
+      reservationId
+    })
+    now = new Date(now.getTime() + 5_000)
+
+    await expect(
+      clocked.verifyAndConsume({
+        tenantId: tenantA,
+        approvalId: record.approvalId,
+        action: 'appointment.confirm',
+        resource: { type: 'appointment', id: `apt_${hint}` },
+        payload: syntheticPayload(hint)
+      })
+    ).rejects.toMatchObject({ code: 'invalid_state' })
+    expect((await authority.get(tenantA, record.approvalId)).status).toBe(
+      'EXECUTING'
+    )
+
+    const confirmed = await clocked.confirm({
+      tenantId: tenantA,
+      approvalId: record.approvalId,
+      reservationId,
+      evidence: {
+        outcome: 'effect_confirmed',
+        executionRef: `exec_${hint}`,
+        evidenceRef: `adapter:exec_${hint}`
+      }
+    })
+    expect(confirmed.status).toBe('EXECUTED')
+  })
+
   it('rejects the cross-tenant expireStale sweep', async () => {
     await expect(authority.expireStale()).rejects.toMatchObject({
       code: 'invalid_action'

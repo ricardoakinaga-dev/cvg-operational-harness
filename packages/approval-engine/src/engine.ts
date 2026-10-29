@@ -94,6 +94,24 @@ export interface ApprovalConsumption {
   executionRef?: string
 }
 
+/**
+ * Statuses that still expire (SPEC 0279). Decided and in-flight approvals
+ * (REJECTED, CANCELLED, FAILED, UNCERTAIN, RESERVED, EXECUTING) never become
+ * EXPIRED; a reusable EXECUTED approval still does, see isExpirable.
+ */
+const EXPIRABLE_STATUSES: readonly ApprovalRecord['status'][] = [
+  'REQUESTED',
+  'PENDING',
+  'APPROVED'
+]
+
+function isExpirable(record: ApprovalRecord): boolean {
+  return (
+    EXPIRABLE_STATUSES.includes(record.status) ||
+    (record.status === 'EXECUTED' && !record.singleUse)
+  )
+}
+
 const DEFAULT_EXPIRY_MS = 15 * 60 * 1000
 const DEFAULT_RESERVATION_TTL_MS = 60 * 1000
 const MAX_RESERVATION_HISTORY = 64
@@ -1207,9 +1225,7 @@ export class ApprovalEngine {
   expireStale(now: Date = this.#clock()): number {
     let expired = 0
     const candidates = this.#store.listExpiringBefore(now.toISOString(), [
-      'REQUESTED',
-      'PENDING',
-      'APPROVED'
+      ...EXPIRABLE_STATUSES
     ])
     for (const record of candidates) {
       const updated = this.#store.update(
@@ -1280,6 +1296,9 @@ export class ApprovalEngine {
   }
 
   #assertNotExpired(record: ApprovalRecord): void {
+    // SPEC 0279: outside the expirable set the caller's own status check
+    // answers; the guard never rewrites a decided or in-flight approval.
+    if (!isExpirable(record)) return
     if (Date.parse(record.expiresAt) < this.#clock().getTime()) {
       this.#store.update(
         record.tenantId,

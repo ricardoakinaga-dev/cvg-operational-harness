@@ -8,6 +8,7 @@ import {
   runPostgresMigrations,
   TENANT_ONLY_TABLES,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   withTenantContext
 } from '@cvg/persistence'
 import { assertPostgresKernelPrerequisites } from '../kernel-composition.ts'
@@ -98,6 +99,10 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
         (table) => `${schema}.${table}`
       ).join(', ')} TO ${role}`
     )
+    // SPEC 0257: the receipts table is append-only for the runtime role.
+    await admin.query(
+      `REVOKE UPDATE ON ${schema}.api_creation_receipts FROM ${role}`
+    )
     await admin.query(`ALTER ROLE ${role} SET search_path TO ${schema}`)
   }
 
@@ -150,7 +155,7 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}."${table}" TO ${role}`
       )
     }
     await admin.query(`ALTER ROLE ${role} SET search_path TO ${schema}`)

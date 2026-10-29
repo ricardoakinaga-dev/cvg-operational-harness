@@ -13,6 +13,8 @@ export interface FaultPlan {
   readonly scenario: Scenario
   readonly maxRequests: number
   readonly chunkDelayMs: number
+  /** SPEC 0232b: expect the governed `system` message before the user message. */
+  readonly governedSystem?: true
 }
 export interface SyntheticRecording {
   readonly version: 1
@@ -35,9 +37,12 @@ export interface SyntheticRecording {
 }
 export interface SyntheticRequest {
   readonly model: 'cvg-synthetic-model-v1'
-  readonly messages: readonly [
-    { readonly role: 'user'; readonly content: string }
-  ]
+  readonly messages:
+    | readonly [{ readonly role: 'user'; readonly content: string }]
+    | readonly [
+        { readonly role: 'system'; readonly content: string },
+        { readonly role: 'user'; readonly content: string }
+      ]
   readonly temperature: 0
   readonly max_tokens: 32
   readonly stream: false
@@ -75,6 +80,7 @@ export const LIMITS: Readonly<{
   chunkDelayMs: 100
   lifetimeMs: 5000
 }>
+export function governedInstruction(caseId: string): string
 export function expectedSyntheticRequest(plan: FaultPlan): SyntheticRequest
 export function assertSyntheticEnvironment(snapshot: unknown): void
 export function preservePrimaryError(

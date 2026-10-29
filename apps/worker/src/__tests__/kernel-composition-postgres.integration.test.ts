@@ -26,6 +26,7 @@ import {
   PostgresEffectJournal,
   runPostgresMigrations,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   withTenantContext
 } from '@cvg/persistence'
 import { canonicalizeJson } from '@cvg/shared'
@@ -882,7 +883,7 @@ describe('SPEC0249 kernel audit chain persistence', () => {
         await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
         for (const table of TENANT_SCHEMA_TABLES) {
           await admin.query(
-            `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+            `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}."${table}" TO ${role}`
           )
         }
         const url = new URL(databaseUrl)

@@ -233,7 +233,10 @@ describe('server boundary envelopes', () => {
     const invalidApproval = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      payload: { sessionId: 'not-a-session' }
+      payload: { sessionId: 'not-a-session' },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      }
     })
     await app.close()
 
@@ -326,7 +329,10 @@ describe('server boundary envelopes', () => {
     const approval = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      headers: operatorHeaders,
+      headers: {
+        ...operatorHeaders,
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      },
       payload: {
         sessionId,
         proposedAction: 'create_appointment_draft',
@@ -342,6 +348,9 @@ describe('server boundary envelopes', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Horário fictício sugerido',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     await app.close()
@@ -370,7 +379,10 @@ describe('server boundary envelopes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      headers: operatorHeaders,
+      headers: {
+        ...operatorHeaders,
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      },
       payload: {
         sessionId: 'sess_00000000-0000-4000-8000-000000000821',
         proposedAction: 'audit_evidence_export_review',

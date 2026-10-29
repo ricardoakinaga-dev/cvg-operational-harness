@@ -99,7 +99,11 @@ import {
   AuditRepository,
   ConversationRepository,
   type DurableOutboxAdapter,
+  API_CREATION_KEY_PATTERN,
+  InMemoryApiCreation,
   InMemoryDatabase,
+  PostgresApiCreation,
+  type ApiCreationPort,
   OutboxRepository,
   PostgresApprovalAuthority,
   PostgresOperationalExecutionStore,
@@ -122,7 +126,6 @@ import {
   withTenantContext
 } from '@cvg/persistence'
 import {
-  createInternalTask,
   createInboundIdempotencyKey,
   executePublishedAgent,
   getConversationTimeline,
@@ -1872,23 +1875,24 @@ export function buildServer(options: BuildServerOptions = {}) {
           sessionId: input.sessionId
         })
       }
-      const task = await createInternalTask({ tasks }, input, tenantId)
-      await audit.append(
+      // SPEC 0257: resource, creation audit and receipt commit together.
+      if (!persistence.apiCreation) {
+        throw new DomainError(
+          'configuration_error',
+          'Atomic creation is not available in this persistence composition'
+        )
+      }
+      const created = await persistence.apiCreation.createTaskWithAudit(
         {
-          type: 'integration_event',
-          actorType: 'System',
-          actorId: 'api',
+          actor: identity
+            ? { actorType: identity.role, actorId: identity.operatorId }
+            : { actorType: 'System', actorId: 'api' },
           correlationId,
-          policyVersion: 'api-runtime-v1',
-          payload: {
-            sessionId: task.sessionId,
-            taskId: task.id,
-            source: task.source,
-            tenantId
-          }
+          task: input
         },
         tenantId
       )
+      const task = created.resource
       emitRuntimeLog({
         event: 'task.created',
         correlationId,
@@ -2021,23 +2025,31 @@ export function buildServer(options: BuildServerOptions = {}) {
           sessionId: requestedApproval.sessionId
         })
       }
-      const approval = await approvals.save(requestedApproval, tenantId)
-      await audit.append(
+      // SPEC 0257 §2: exactly one valid header, checked after authentication
+      // and case authorization and before any mutation.
+      const creationKey = readCreationKey(request.raw.rawHeaders)
+      // SPEC 0257: resource, creation audit and receipt commit together; a
+      // replay returns the same approval.
+      if (!persistence.apiCreation) {
+        throw new DomainError(
+          'configuration_error',
+          'Atomic creation is not available in this persistence composition'
+        )
+      }
+      const created = await persistence.apiCreation.createApprovalWithAudit(
         {
-          type: 'approval_decision',
-          actorType: requester?.role ?? 'System',
-          actorId: requester?.operatorId ?? 'api',
+          actor: requester
+            ? { actorType: requester.role, actorId: requester.operatorId }
+            : identity
+              ? { actorType: identity.role, actorId: identity.operatorId }
+              : { actorType: 'System', actorId: 'api' },
           correlationId,
-          policyVersion: 'api-runtime-v1',
-          payload: {
-            sessionId: approval.sessionId,
-            approvalRequestId: approval.id,
-            status: approval.status,
-            tenantId
-          }
+          idempotencyKey: creationKey,
+          request: requestedApproval
         },
         tenantId
       )
+      const approval = created.resource
       emitRuntimeLog({
         event: 'approval.created',
         correlationId,
@@ -4784,6 +4796,32 @@ export function runtimeLogLevel(
     : 'error'
 }
 
+/**
+ * SPEC 0257 §2: the single `Idempotency-Key` header. Occurrences are counted in
+ * the raw headers (case-insensitive); duplicates, commas, spaces, a missing
+ * header or a value outside 8-200 `[A-Za-z0-9._:-]` are `validation_failed`.
+ */
+function readCreationKey(rawHeaders: readonly string[]): string {
+  const values: string[] = []
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    if (rawHeaders[index]?.toLowerCase() === 'idempotency-key') {
+      values.push(rawHeaders[index + 1] ?? '')
+    }
+  }
+  const [value] = values
+  if (
+    values.length !== 1 ||
+    value === undefined ||
+    !API_CREATION_KEY_PATTERN.test(value)
+  ) {
+    throw new DomainError(
+      'validation_failed',
+      'A single valid Idempotency-Key header is required'
+    )
+  }
+  return value
+}
+
 function statusCodeForError(code: string): number {
   if (code === 'unauthorized') return 401
   if (code === 'forbidden') return 403
@@ -4924,6 +4962,12 @@ interface RuntimePersistence {
   outbox: DurableOutboxAdapter
   /** R3 controlled journey store: memory or tenant-scoped PostgreSQL adapter. */
   journeys: JourneyRepositoryPort | null
+  /**
+   * SPEC 0257: atomic creation of task/approval + audit + receipt. Absent on a
+   * shared queryable client (no exclusive transactional pool): the two POSTs
+   * answer 503 before any write.
+   */
+  apiCreation: ApiCreationPort | null
   conversations:
     | ConversationRepository
     | PostgresRuntimeRepository
@@ -5207,6 +5251,10 @@ function createPersistence(
       outbox: postgres as unknown as DurableOutboxAdapter,
       journeys,
       conversations: postgres,
+      apiCreation:
+        config.kind === 'postgres-pool'
+          ? new PostgresApiCreation(config.pool)
+          : null,
       tasks: {
         create: (
           input: Parameters<PostgresRuntimeRepository['createTask']>[0],
@@ -5279,6 +5327,7 @@ function createPersistence(
         ? journeyRepository
         : new JourneyRepository(db),
     conversations: new ConversationRepository(db),
+    apiCreation: new InMemoryApiCreation(db),
     tasks: new TaskRepository(db),
     approvals: new ApprovalRepository(db),
     audit: new AuditRepository(db)

@@ -173,6 +173,10 @@ describeWithPostgres(
             (table) => `${schema}.${table}`
           ).join(', ')} TO ${role}`
         )
+        // SPEC 0257: the receipts table is append-only for the runtime role.
+        await admin.query(
+          `REVOKE UPDATE ON ${schema}.api_creation_receipts FROM ${role}`
+        )
 
         const repository = new TenantScopedPostgresRuntimeRepository(pool)
         const before = await repository.enqueue({
@@ -305,6 +309,10 @@ describeWithPostgres(
           `GRANT SELECT, INSERT, UPDATE ON ${WORKER_CRITICAL_TABLES.map(
             (table) => `${schema}.${table}`
           ).join(', ')} TO ${role}`
+        )
+        // SPEC 0257: the receipts table is append-only for the runtime role.
+        await admin.query(
+          `REVOKE UPDATE ON ${schema}.api_creation_receipts FROM ${role}`
         )
         await admin.query(
           `CREATE POLICY synthetic_allow_all ON ${schema}.outbox_events FOR ALL USING (true) WITH CHECK (true)`
