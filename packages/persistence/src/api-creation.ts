@@ -140,11 +140,23 @@ export function creationNamespaceTenant(tenantId?: TenantId): string {
   return tenantId ?? MEMORY_TENANTLESS_NAMESPACE
 }
 
-export function assertCreationKey(key: string): void {
-  if (!API_CREATION_KEY_PATTERN.test(key)) {
+/**
+ * Approvals take the strict header rule (8-200 characters of
+ * `[A-Za-z0-9._:-]`). A task keeps the body key it already validates (8-200
+ * characters, any text): SPEC 0257 §2 does not tighten it.
+ */
+export function assertCreationKey(
+  key: string,
+  route: ApiCreationRoute = '/v1/approvals'
+): void {
+  const valid =
+    route === '/v1/approvals'
+      ? API_CREATION_KEY_PATTERN.test(key)
+      : key.length >= 8 && key.length <= 200
+  if (!valid) {
     throw new DomainError(
       'validation_failed',
-      'Idempotency key must be 8-200 characters of [A-Za-z0-9._:-]'
+      'Idempotency key is outside the accepted range'
     )
   }
 }
@@ -224,7 +236,7 @@ export class InMemoryApiCreation implements ApiCreationPort {
     rawTenantId?: TenantId
   ): ApiCreationResult<TaskRecord> {
     const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
-    assertCreationKey(command.task.idempotencyKey)
+    assertCreationKey(command.task.idempotencyKey, '/v1/tasks')
     const namespace = creationNamespaceTenant(tenantId)
     const keyDigest = creationKeyDigest(command.task.idempotencyKey)
     const requestDigest = taskRequestDigest(
@@ -363,14 +375,8 @@ export class InMemoryApiCreation implements ApiCreationPort {
     this.#busy = true
     try {
       const live = this.db.state
-      const captured = {
-        tasks: live.tasks,
-        approvals: live.approvals,
-        auditEvents: live.auditEvents,
-        apiCreationReceipts: live.apiCreationReceipts,
-        sessions: live.sessions,
-        conversations: live.conversations
-      }
+      // Every collection of the live state: any concurrent writer aborts us.
+      const captured: Partial<DatabaseState> = { ...live }
       const outcome = operation(live)
       if (!('next' in outcome)) return outcome
       if (!this.db.publish(live, captured, outcome.next)) {

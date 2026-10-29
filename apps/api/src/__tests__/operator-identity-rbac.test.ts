@@ -92,6 +92,9 @@ describe('operator identity RBAC hardening', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Apenas rascunho controlado',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>
@@ -120,6 +123,9 @@ describe('operator identity RBAC hardening', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Apenas rascunho controlado',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>
@@ -155,6 +161,9 @@ describe('operator identity RBAC hardening', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Apenas rascunho controlado',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>
@@ -240,14 +249,18 @@ describe('operator identity RBAC hardening', () => {
     const missingIdentity = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      payload
+      payload,
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      }
     })
     const forbiddenRole = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
       headers: {
         'x-operator-id': 'operator.audit',
-        'x-operator-role': 'Operator'
+        'x-operator-role': 'Operator',
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       },
       payload
     })
@@ -256,7 +269,8 @@ describe('operator identity RBAC hardening', () => {
       url: '/v1/approvals',
       headers: {
         'x-operator-id': 'supervisor.audit',
-        'x-operator-role': 'Supervisor'
+        'x-operator-role': 'Supervisor',
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       },
       payload
     })

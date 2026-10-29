@@ -2,7 +2,11 @@
 import { randomBytes } from 'node:crypto'
 import { Client } from 'pg'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { TENANT_SCHEMA_TABLES, runPostgresMigrations } from '@cvg/persistence'
+import {
+  TENANT_SCHEMA_TABLES,
+  runPostgresMigrations,
+  tenantRuntimeGrantPrivileges
+} from '@cvg/persistence'
 import {
   grantOperatorSessionFunctions,
   runOperatorSessionMigrations
@@ -121,7 +125,7 @@ async function withDatabase(
     }
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT,INSERT,UPDATE ON ${data}.${table} TO ${runtime}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${data}.${table} TO ${runtime}`
       )
     }
     await admin.query(`GRANT SELECT ON ${data}.schema_migrations TO ${runtime}`)

@@ -113,7 +113,10 @@ describe('tenant-scoped inbound data plane', () => {
     const approvalA = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      headers: { 'x-tenant-id': tenantA },
+      headers: {
+        'x-tenant-id': tenantA,
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      },
       payload: {
         sessionId: firstSessionId,
         proposedAction: 'create_appointment_draft',
@@ -124,7 +127,10 @@ describe('tenant-scoped inbound data plane', () => {
     const approvalB = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      headers: { 'x-tenant-id': tenantB },
+      headers: {
+        'x-tenant-id': tenantB,
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      },
       payload: {
         sessionId: secondSessionId,
         proposedAction: 'create_appointment_draft',

@@ -256,8 +256,19 @@ describe('memory task creation (AC01/AC02/AC03)', () => {
     })
   })
 
-  it('rejects keys outside the 8-200 [A-Za-z0-9._:-] rule', () => {
+  it('a task keeps its body key rule (8-200 any text); approvals take the strict header rule', () => {
     const port = new InMemoryApiCreation(database())
+    for (const key of ['short', 'x'.repeat(201)]) {
+      expect(() =>
+        port.createTaskWithAudit(taskCommand({ idempotencyKey: key }), tenantA)
+      ).toThrow(/Idempotency key/)
+    }
+    expect(
+      port.createTaskWithAudit(
+        taskCommand({ idempotencyKey: 'has space é 12345' }),
+        tenantA
+      ).outcome
+    ).toBe('created')
     for (const key of [
       'short',
       'has space 12345',
@@ -265,7 +276,7 @@ describe('memory task creation (AC01/AC02/AC03)', () => {
       'é-key-0001'
     ]) {
       expect(() =>
-        port.createTaskWithAudit(taskCommand({ idempotencyKey: key }), tenantA)
+        port.createApprovalWithAudit(approvalCommand({}, key), tenantA)
       ).toThrow(/Idempotency key/)
     }
   })
@@ -368,6 +379,59 @@ describe('memory approval creation', () => {
       tenantA
     )
     expect(task.outcome).toBe('created')
+  })
+})
+
+describe('memory publication (AC10) — whole state', () => {
+  it('another writer that REPLACES the whole state pointer aborts the creation (MEM1)', () => {
+    const db = database()
+    const port = new InMemoryApiCreation(db)
+    const publish = db.publish.bind(db)
+    db.publish = (expected, collections, next) => {
+      // A second writer publishes a different state first.
+      publish(expected, collections, { ...expected })
+      return publish(expected, collections, next)
+    }
+    expect(() => port.createTaskWithAudit(taskCommand(), tenantA)).toThrow(
+      /changed concurrently/
+    )
+    expect(counts(db)).toEqual({
+      tasks: 0,
+      approvals: 0,
+      audit: 0,
+      receipts: 0
+    })
+  })
+
+  it('a mutation of a collection the creation did not even write (messages) also aborts it', () => {
+    const db = database()
+    const port = new InMemoryApiCreation(db)
+    const publish = db.publish.bind(db)
+    db.publish = (expected, collections, next) => {
+      db.state.messages = [...db.state.messages]
+      return publish(expected, collections, next)
+    }
+    expect(() => port.createTaskWithAudit(taskCommand(), tenantA)).toThrow(
+      /changed concurrently/
+    )
+    expect(counts(db).tasks).toBe(0)
+  })
+
+  it('an approval for a session of another tenant is refused before any write (MEM8)', () => {
+    const db = database()
+    const port = new InMemoryApiCreation(db)
+    expect(() =>
+      port.createApprovalWithAudit(
+        approvalCommand({ sessionId: 'sess_b' }),
+        tenantA
+      )
+    ).toThrow('Session not found')
+    expect(counts(db)).toEqual({
+      tasks: 0,
+      approvals: 0,
+      audit: 0,
+      receipts: 0
+    })
   })
 })
 

@@ -214,7 +214,7 @@ export class PostgresApiCreation implements ApiCreationPort {
     rawTenantId?: TenantId
   ): Promise<ApiCreationResult<TaskRecord>> {
     const tenantId = this.requireTenant(rawTenantId)
-    assertCreationKey(command.task.idempotencyKey)
+    assertCreationKey(command.task.idempotencyKey, '/v1/tasks')
     const keyDigest = creationKeyDigest(command.task.idempotencyKey)
     const requestDigest = taskRequestDigest(
       tenantId,

@@ -380,7 +380,11 @@ describeWithPostgres(
 
     // AC04/AC11: the fault is injected at the connection, not by mocking the port.
     function faultyPool(
-      mode: 'commit-ack-lost' | 'commit-fails-before' | 'cleanup-fails',
+      mode:
+        | 'commit-ack-lost'
+        | 'commit-fails-before'
+        | 'cleanup-fails'
+        | 'rollback-fails',
       releases: Array<Error | undefined>
     ): PostgresPoolLike {
       return {
@@ -392,6 +396,9 @@ describeWithPostgres(
               if (text === 'COMMIT' && mode === 'commit-ack-lost') {
                 await real.query('COMMIT')
                 throw new Error('COMMIT acknowledgement lost')
+              }
+              if (text === 'ROLLBACK' && mode === 'rollback-fails') {
+                throw new Error('ROLLBACK failed')
               }
               if (text === 'COMMIT' && mode === 'commit-fails-before') {
                 throw new Error('COMMIT never reached the server')
