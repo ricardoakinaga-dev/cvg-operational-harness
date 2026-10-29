@@ -125,7 +125,8 @@ describe('SPEC 0263 D01: an aborted signal starts nothing', () => {
   })
 
   it('a synchronous throw of the lookup is observed as a DNS failure', async () => {
-    const controller = new AbortController()
+    const tracked = trackedController()
+    const controller = tracked.controller
     const dnsLookup = vi.fn(() => {
       throw new Error('sync resolver crash')
     })
@@ -138,6 +139,9 @@ describe('SPEC 0263 D01: an aborted signal starts nothing', () => {
       name: 'UnsafeUrlError',
       reason: 'dns_resolution_failed'
     })
+    // Review P3-b: the listener is released on the synchronous-throw exit too.
+    expect(tracked.installed()).toBeGreaterThan(0)
+    expect(tracked.balance()).toBe(0)
   })
 })
 
@@ -485,5 +489,44 @@ describe('SPEC 0263 D10–D11: discarded responses and listeners', () => {
       { dnsLookup: async () => PUBLIC }
     )
     expect(again.status).toBe(200)
+  })
+})
+
+describe('SPEC 0263 review P3 (AUD0625-REVIEW-0263-D9)', () => {
+  it('P3-a: the guard alone refuses a literal IP when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      resolveAndGuardOutboundUrl(
+        'https://93.184.216.34/',
+        { allowedHosts: ['93.184.216.34'] },
+        { signal: controller.signal }
+      )
+    ).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('P3-a: the guard alone discards a resolution that finishes after the abort (exam-egress path)', async () => {
+    const controller = new AbortController()
+    const dnsLookup = () => {
+      const resolved = Promise.resolve(PUBLIC)
+      void resolved.then(() => controller.abort())
+      return resolved
+    }
+    await expect(
+      resolveAndGuardOutboundUrl('https://public.example/', OPTIONS, {
+        dnsLookup,
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('P3-c: with an aborted signal, cancellation wins over an invalid URL', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      resolveAndGuardOutboundUrl('not a url', OPTIONS, {
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' })
   })
 })
