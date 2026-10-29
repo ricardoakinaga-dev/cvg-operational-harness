@@ -1192,6 +1192,8 @@ describe('web console', () => {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
+            // SPEC 0257 §7: the caller's logical-operation key.
+            'idempotency-key': expect.stringMatching(/^op-[0-9a-f-]{36}$/),
             'x-operator-id': 'supervisor.audit',
             'x-operator-role': 'Supervisor'
           }

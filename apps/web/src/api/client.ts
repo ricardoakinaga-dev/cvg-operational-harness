@@ -1234,11 +1234,14 @@ export const apiClient = {
   async requestAuditEvidenceExportApproval(input: {
     identity: OperatorIdentity
     sessionId: string
+    /** SPEC 0257 §7: supplied by the caller, never created per execution. */
+    idempotencyKey: string
   }): Promise<ApprovalView> {
     return request('/v1/approvals', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
+        'idempotency-key': input.idempotencyKey,
         ...operatorHeaders(input.identity)
       },
       body: JSON.stringify({
