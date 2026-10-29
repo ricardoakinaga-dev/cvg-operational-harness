@@ -64,7 +64,7 @@ comparado antes de conectar". O script não lê `DATABASE_URL`, mas `connect()` 
 Prova: `proofs/probe-pg-env-and-query-override.cjs` (resolve `pg` do projeto; sem rede). Com as
 variáveis exportadas, `Client` resolve `password`, `ssl` e `options` do ambiente e `host=other.example`
 da query; com `fix`, apagar `PG*` do `process.env` elimina o ambiente mas NÃO a query (os dois são
-necessários). O fronteira de confiança é o administrador root, então não é uma escalada por terceiros;
+necessários). A fronteira de confiança é o administrador root, então não é uma escalada por terceiros;
 mas é exatamente a propriedade pedida ("não aceita atalho") e nenhum teste a trava (o CLI só prova
 que `DATABASE_URL` é ignorado).
 Correção sugerida: em `connect()` recusar `url.search`/`url.hash` não vazios; ler `PG*` apenas para
