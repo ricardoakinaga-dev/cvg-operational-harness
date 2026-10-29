@@ -4,7 +4,7 @@ Branch `claude/aud0625-0263-df` @ `7a7d0d28` (base `63fc9862`). Revisora: sessã
 
 ## Veredito: APPROVE, sem obrigatórios (3 P3 de teste e 2 observações)
 
-Não achei defeito de código. Os seis arquivos de teste da 0263 passam (28/28), os pacotes `shared`, `model-gateway` e `channel-gateway` passam inteiros (50 arquivos, 559 testes) e as 28 mutações de código abaixo morrem, quando se removem todas as camadas de uma mesma defesa. Os P3 são de teste: cada camada de defesa redundante, sozinha, não é fixada por um teste.
+Não achei defeito de código. Os seis arquivos de teste da 0263 passam (28/28), os pacotes `shared`, `model-gateway` e `channel-gateway` passam inteiros (50 arquivos, 559 testes) e das 30 mutações que tentei, 18 morrem sozinhas; as 12 que sobrevivem são camadas redundantes de uma mesma defesa (uma delas, A14, é lacuna real de teste), e todas as combinações dessas camadas morrem. Os P3 são de teste: cada camada de defesa redundante, sozinha, não é fixada por um teste.
 
 ## Foco pedido
 
@@ -13,7 +13,7 @@ Não achei defeito de código. Os seis arquivos de teste da 0263 passam (28/28),
 3. **Erros constantes.** `AbortError`/`TimeoutError` como `Error` com `name` (por causa do jsdom), mensagem constante, motivo customizado não vaza (A12 morre, 2 falhas), `TimeoutError` reconhecido pelo `name` do motivo (A11 morre), sinal presente e inválido dá `TypeError` antes de I/O (A10 morre). O motivo `Error` nos transportes continua preservado como na 0180 (T4 morre nos dois).
 4. **Transportes e `diagnostics_channel`.** Os testes contam `http.client.request.created` (D16): zero requisições com `Blob.arrayBuffer` pendente e com pré-abort, e uma no controle real em loopback. Fixos os dois transportes (model e channel) e o `exam-egress` (X1, preliminar sem sinal, morre).
 5. **D15 com `vi.mock`.** O teste segura a carga de `node:dns/promises` com `vi.mock`, aborta durante a carga, libera e espera 10 ms: zero chamadas ao lookup nativo; o controle sem abort resolve uma vez. A7 (tirar a checagem depois do `import`) morre com 2 falhas.
-6. **Mutações numa cópia minha.** 19 no `ssrf.ts` ([mutations-shared.txt](proofs/mutations-shared.txt)): 13 mortas, 6 sobrevivem individualmente (as camadas redundantes acima, mais A14); 9 nos transportes e no exam ([mutations-transport.txt](proofs/mutations-transport.txt)): 3 mortas, 6 redundantes; 4 combinadas ([mutations-combined.txt](proofs/mutations-combined.txt)): todas mortas.
+6. **Mutações numa cópia minha.** 17 no `ssrf.ts` ([mutations-shared.txt](proofs/mutations-shared.txt)): 11 mortas, 6 sobrevivem individualmente (as camadas redundantes acima, mais A14); 9 nos transportes e no exam ([mutations-transport.txt](proofs/mutations-transport.txt)): 3 mortas, 6 redundantes; 4 combinadas ([mutations-combined.txt](proofs/mutations-combined.txt)): todas mortas.
 
 ## P3 (testes, não bloqueiam)
 
