@@ -744,97 +744,77 @@ function streamingGateway(
 }
 
 describe('PAR-M01 §4 — gateway terminal state', () => {
-  it.fails(
-    'returns one result whose text is the concatenated deltas',
-    async () => {
-      const { gateway, state } = streamingGateway(async function* () {
-        yield { type: 'delta', text: 'Olá, ' }
-        yield { type: 'delta', text: 'mundo' }
-        yield { type: 'usage', usage: { inputTokens: 4, outputTokens: 2 } }
-        yield { type: 'finish', reason: 'stop' }
-      })
-      const result = await gateway.generate(gatewayRequest())
-      expect(result.output.text).toBe('Olá, mundo')
-      expect(result.usageStatus).toBe('reported')
-      expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2 })
-      expect(result.attempts).toBe(1)
-      expect(state.calls).toBe(1)
-    }
-  )
+  it('returns one result whose text is the concatenated deltas', async () => {
+    const { gateway, state } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'Olá, ' }
+      yield { type: 'delta', text: 'mundo' }
+      yield { type: 'usage', usage: { inputTokens: 4, outputTokens: 2 } }
+      yield { type: 'finish', reason: 'stop' }
+    })
+    const result = await gateway.generate(gatewayRequest())
+    expect(result.output.text).toBe('Olá, mundo')
+    expect(result.usageStatus).toBe('reported')
+    expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2 })
+    expect(result.attempts).toBe(1)
+    expect(state.calls).toBe(1)
+  })
 
-  it.fails(
-    'a cut after deltas is a failure: no result, no partial text anywhere',
-    async () => {
-      const { gateway, events } = streamingGateway(async function* () {
-        yield { type: 'delta', text: 'PARCIAL-SECRETO' }
-        throw new ModelProviderError('fake', 'connection', 'cut')
-      })
-      const failure = await gateway.generate(gatewayRequest()).then(
-        () => undefined,
-        (error: unknown) => error
-      )
-      expect(failure).toMatchObject({ code: 'provider_connection_reset' })
-      expect(JSON.stringify({ failure, events })).not.toContain(
-        'PARCIAL-SECRETO'
-      )
-      expect(events.filter((e) => e.type === 'model.call.failed')).toHaveLength(
-        1
-      )
-      expect(events.some((e) => e.type === 'model.call.completed')).toBe(false)
-    }
-  )
+  it('a cut after deltas is a failure: no result, no partial text anywhere', async () => {
+    const { gateway, events } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'PARCIAL-SECRETO' }
+      throw new ModelProviderError('fake', 'connection', 'cut')
+    })
+    const failure = await gateway.generate(gatewayRequest()).then(
+      () => undefined,
+      (error: unknown) => error
+    )
+    expect(failure).toMatchObject({ code: 'provider_connection_reset' })
+    expect(JSON.stringify({ failure, events })).not.toContain('PARCIAL-SECRETO')
+    expect(events.filter((e) => e.type === 'model.call.failed')).toHaveLength(1)
+    expect(events.some((e) => e.type === 'model.call.completed')).toBe(false)
+  })
 
-  it.fails(
-    'an iterator that ends without finish is a failure, not a result',
-    async () => {
-      const { gateway } = streamingGateway(async function* () {
-        yield { type: 'delta', text: 'sem fim' }
-      })
-      await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
-        code: 'provider_connection_reset'
-      })
-    }
-  )
+  it('an iterator that ends without finish is a failure, not a result', async () => {
+    const { gateway } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'sem fim' }
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'provider_connection_reset'
+    })
+  })
 
-  it.fails(
-    'a caller abort is cancelled, closes the stream once and is not retried',
-    async () => {
-      const controller = new AbortController()
-      const { gateway, state } = streamingGateway(
-        async function* () {
-          yield { type: 'delta', text: 'a' }
-          await new Promise((r) => setTimeout(r, 5_000))
-          yield { type: 'finish', reason: 'stop' }
-        },
-        { maxRetries: 2 }
-      )
-      const run = gateway.generate({
-        ...gatewayRequest(),
-        signal: controller.signal
-      })
-      setTimeout(() => controller.abort(), 50)
-      await expect(run).rejects.toMatchObject({ code: 'cancelled' })
-      expect(state.calls).toBe(1)
-      expect(state.returned).toBe(1)
-    },
-    10_000
-  )
-
-  it.fails(
-    'anything after finish is a protocol violation, not extra text',
-    async () => {
-      const { gateway } = streamingGateway(async function* () {
+  it('a caller abort is cancelled, closes the stream once and is not retried', async () => {
+    const controller = new AbortController()
+    const { gateway, state } = streamingGateway(
+      async function* () {
         yield { type: 'delta', text: 'a' }
+        await new Promise((r) => setTimeout(r, 5_000))
         yield { type: 'finish', reason: 'stop' }
-        yield { type: 'delta', text: 'tarde' }
-      })
-      await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
-        code: 'provider_malformed_response'
-      })
-    }
-  )
+      },
+      { maxRetries: 2 }
+    )
+    const run = gateway.generate({
+      ...gatewayRequest(),
+      signal: controller.signal
+    })
+    setTimeout(() => controller.abort(), 50)
+    await expect(run).rejects.toMatchObject({ code: 'cancelled' })
+    expect(state.calls).toBe(1)
+    expect(state.returned).toBe(1)
+  }, 10_000)
 
-  it.fails('a second finish is a protocol violation', async () => {
+  it('anything after finish is a protocol violation, not extra text', async () => {
+    const { gateway } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'a' }
+      yield { type: 'finish', reason: 'stop' }
+      yield { type: 'delta', text: 'tarde' }
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'provider_malformed_response'
+    })
+  })
+
+  it('a second finish is a protocol violation', async () => {
     const { gateway } = streamingGateway(async function* () {
       yield { type: 'finish', reason: 'stop' }
       yield { type: 'finish', reason: 'length' }
@@ -844,160 +824,181 @@ describe('PAR-M01 §4 — gateway terminal state', () => {
     })
   })
 
-  it.fails(
-    'a streaming profile on a provider without executeStream fails closed',
-    async () => {
-      const gateway = new ModelGateway({
-        providers: [
-          {
-            id: 'fake',
-            location: 'local',
-            models: ['fake-v1'],
-            execute: async (): Promise<ProviderResult> => ({
-              text: 'silent fallback',
-              providerId: 'fake',
-              model: 'fake-v1',
-              externalCall: false
-            })
-          }
-        ],
-        profiles: { fast: profile({ streaming: true }) },
-        prompts: registry(),
-        clock: () => NOW
-      })
-      await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
-        code: 'invalid_request'
-      })
-    }
-  )
+  it('a streaming profile on a provider without executeStream fails closed', async () => {
+    const gateway = new ModelGateway({
+      providers: [
+        {
+          id: 'fake',
+          location: 'local',
+          models: ['fake-v1'],
+          execute: async (): Promise<ProviderResult> => ({
+            text: 'silent fallback',
+            providerId: 'fake',
+            model: 'fake-v1',
+            externalCall: false
+          })
+        }
+      ],
+      profiles: { fast: profile({ streaming: true }) },
+      prompts: registry(),
+      clock: () => NOW
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'invalid_request'
+    })
+  })
 
-  it.fails(
-    'a retry after a cut yields only the complete attempt, both attempts counted',
-    async () => {
-      let attempt = 0
-      const { gateway, events } = streamingGateway(
-        async function* () {
-          attempt += 1
-          if (attempt === 1) {
-            yield { type: 'delta', text: 'PRIMEIRA-PARCIAL' }
-            throw new ModelProviderError('fake', 'connection', 'cut')
-          }
-          yield { type: 'delta', text: 'segunda completa' }
-          yield { type: 'usage', usage: { inputTokens: 2, outputTokens: 2 } }
-          yield { type: 'finish', reason: 'stop' }
-        },
-        { maxRetries: 1 }
-      )
-      const result = await gateway.generate(gatewayRequest())
-      expect(result.output.text).toBe('segunda completa')
-      expect(result.output.text).not.toContain('PRIMEIRA')
-      expect(result.attempts).toBe(2)
-      expect(events.some((e) => e.type === 'model.retry.scheduled')).toBe(true)
-    }
-  )
-
-  it.fails(
-    'structured output is parsed only from a complete stream',
-    async () => {
-      const complete = streamingGateway(async function* () {
-        yield { type: 'delta', text: '{"ok":' }
-        yield { type: 'delta', text: 'true}' }
+  it('a retry after a cut yields only the complete attempt, both attempts counted', async () => {
+    let attempt = 0
+    const { gateway, events } = streamingGateway(
+      async function* () {
+        attempt += 1
+        if (attempt === 1) {
+          yield { type: 'delta', text: 'PRIMEIRA-PARCIAL' }
+          throw new ModelProviderError('fake', 'connection', 'cut')
+        }
+        yield { type: 'delta', text: 'segunda completa' }
+        yield { type: 'usage', usage: { inputTokens: 2, outputTokens: 2 } }
         yield { type: 'finish', reason: 'stop' }
-      })
-      const structured = {
-        schemaName: 'ok',
-        schema: {
-          parse: (v: unknown) => v,
-          safeParse: (v: unknown) => ({ success: true, data: v })
-        } as never
-      }
-      const ok = await complete.gateway.generate({
+      },
+      { maxRetries: 1 }
+    )
+    const result = await gateway.generate(gatewayRequest())
+    expect(result.output.text).toBe('segunda completa')
+    expect(result.output.text).not.toContain('PRIMEIRA')
+    expect(result.attempts).toBe(2)
+    expect(events.some((e) => e.type === 'model.retry.scheduled')).toBe(true)
+  })
+
+  it('structured output is parsed only from a complete stream', async () => {
+    const complete = streamingGateway(async function* () {
+      yield { type: 'delta', text: '{"ok":' }
+      yield { type: 'delta', text: 'true}' }
+      yield { type: 'finish', reason: 'stop' }
+    })
+    const structured = {
+      schemaName: 'ok',
+      schema: {
+        parse: (v: unknown) => v,
+        safeParse: (v: unknown) => ({ success: true, data: v })
+      } as never
+    }
+    const ok = await complete.gateway.generate({
+      ...gatewayRequest(),
+      structuredOutput: structured
+    })
+    expect(ok.output.structured).toEqual({ ok: true })
+
+    const cut = streamingGateway(async function* () {
+      yield { type: 'delta', text: '{"ok":true}' }
+      throw new ModelProviderError('fake', 'connection', 'cut')
+    })
+    await expect(
+      cut.gateway.generate({
         ...gatewayRequest(),
         structuredOutput: structured
       })
-      expect(ok.output.structured).toEqual({ ok: true })
-
-      const cut = streamingGateway(async function* () {
-        yield { type: 'delta', text: '{"ok":true}' }
-        throw new ModelProviderError('fake', 'connection', 'cut')
-      })
-      await expect(
-        cut.gateway.generate({
-          ...gatewayRequest(),
-          structuredOutput: structured
-        })
-      ).rejects.toMatchObject({ code: 'provider_connection_reset' })
-    }
-  )
+    ).rejects.toMatchObject({ code: 'provider_connection_reset' })
+  })
 })
 
 describe('PAR-M01 §7 — usage of a stream is unknown, never zero', () => {
-  it.fails(
-    'a completed stream without counters is unreported with the conservative bound',
-    async () => {
-      const { gateway, events } = streamingGateway(async function* () {
-        yield { type: 'delta', text: 'sem contadores' }
-        yield { type: 'finish', reason: 'stop' }
-      })
-      const result = await gateway.generate(gatewayRequest())
-      expect(result.usageStatus).toBe('unreported')
-      expect(result.usage.outputTokens).toBeGreaterThan(0)
-      expect(result.costUsd).toBeGreaterThan(0)
-      expect(
-        events.find((e) => e.type === 'model.call.completed')
-      ).toMatchObject({ detail: expect.stringContaining('usage_unreported') })
-    }
-  )
+  it('a completed stream without counters is unreported with the conservative bound', async () => {
+    const { gateway, events } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'sem contadores' }
+      yield { type: 'finish', reason: 'stop' }
+    })
+    const result = await gateway.generate(gatewayRequest())
+    expect(result.usageStatus).toBe('unreported')
+    expect(result.usage.outputTokens).toBeGreaterThan(0)
+    expect(result.costUsd).toBeGreaterThan(0)
+    expect(events.find((e) => e.type === 'model.call.completed')).toMatchObject(
+      { detail: expect.stringContaining('usage_unreported') }
+    )
+  })
 
-  it.fails(
-    'a stream cut after output is charged the conservative bound, flagged unreported',
-    async () => {
-      const { gateway, events } = streamingGateway(async function* () {
-        yield { type: 'delta', text: 'algo foi gerado' }
-        throw new ModelProviderError('fake', 'connection', 'cut')
-      })
-      await expect(gateway.generate(gatewayRequest())).rejects.toBeDefined()
-      const failed = events.find((e) => e.type === 'model.call.failed')
-      expect(failed).toMatchObject({ detail: 'usage_unreported' })
-      expect(failed?.costUsd).toBeGreaterThan(0)
-      expect(failed?.outputTokens).toBeGreaterThan(0)
-    }
-  )
+  it('a stream cut after output is charged the conservative bound, flagged unreported', async () => {
+    const { gateway, events } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'algo foi gerado' }
+      throw new ModelProviderError('fake', 'connection', 'cut')
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toBeDefined()
+    const failed = events.find((e) => e.type === 'model.call.failed')
+    expect(failed).toMatchObject({ detail: 'usage_unreported' })
+    expect(failed?.costUsd).toBeGreaterThan(0)
+    expect(failed?.outputTokens).toBeGreaterThan(0)
+  })
 
-  it.fails(
-    'a stream cancelled after output is also charged, never as zero',
-    async () => {
-      const controller = new AbortController()
-      const { gateway, events } = streamingGateway(async function* () {
-        yield { type: 'delta', text: 'saiu algo' }
+  it('a stream cancelled after output is also charged, never as zero', async () => {
+    const controller = new AbortController()
+    const { gateway, events } = streamingGateway(async function* () {
+      yield { type: 'delta', text: 'saiu algo' }
+      await new Promise((r) => setTimeout(r, 5_000))
+      yield { type: 'finish', reason: 'stop' }
+    })
+    const run = gateway.generate({
+      ...gatewayRequest(),
+      signal: controller.signal
+    })
+    setTimeout(() => controller.abort(), 50)
+    await expect(run).rejects.toMatchObject({ code: 'cancelled' })
+    const failed = events.find((e) => e.type === 'model.call.failed')
+    expect(failed).toMatchObject({ detail: 'usage_unreported' })
+    expect(failed?.costUsd).toBeGreaterThan(0)
+  }, 10_000)
+
+  it("a stream that fails before any output keeps today's failure accounting", async () => {
+    const { gateway, events } = streamingGateway(async function* () {
+      throw new ModelProviderError('fake', 'unavailable', 'down')
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'provider_unavailable'
+    })
+    const failed = events.find((e) => e.type === 'model.call.failed')
+    expect(failed?.detail).toBeUndefined()
+    expect(failed?.costUsd).toBeUndefined()
+  })
+})
+
+describe('PAR-M01 §4.1 — usage events are validated', () => {
+  it('a second usage event is a protocol violation', async () => {
+    const { gateway } = streamingGateway(async function* () {
+      yield { type: 'usage', usage: { inputTokens: 1, outputTokens: 1 } }
+      yield { type: 'usage', usage: { inputTokens: 9, outputTokens: 9 } }
+      yield { type: 'finish', reason: 'stop' }
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'provider_malformed_response'
+    })
+  })
+
+  it('a malformed usage event is a protocol violation', async () => {
+    const { gateway } = streamingGateway(async function* () {
+      yield { type: 'usage', usage: { inputTokens: -1, outputTokens: 1 } }
+      yield { type: 'finish', reason: 'stop' }
+    })
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'provider_malformed_response'
+    })
+  })
+})
+
+describe('PAR-M01 §4.1 — call deadline', () => {
+  it('a stream that stalls past timeoutMs is a retryable provider_timeout, not cancelled', async () => {
+    const { gateway, events } = streamingGateway(
+      async function* () {
+        yield { type: 'delta', text: 'devagar' }
         await new Promise((r) => setTimeout(r, 5_000))
         yield { type: 'finish', reason: 'stop' }
-      })
-      const run = gateway.generate({
-        ...gatewayRequest(),
-        signal: controller.signal
-      })
-      setTimeout(() => controller.abort(), 50)
-      await expect(run).rejects.toMatchObject({ code: 'cancelled' })
-      const failed = events.find((e) => e.type === 'model.call.failed')
-      expect(failed).toMatchObject({ detail: 'usage_unreported' })
-      expect(failed?.costUsd).toBeGreaterThan(0)
-    },
-    10_000
-  )
-
-  it.fails(
-    "a stream that fails before any output keeps today's failure accounting",
-    async () => {
-      const { gateway, events } = streamingGateway(async function* () {
-        throw new ModelProviderError('fake', 'unavailable', 'down')
-      })
-      await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
-        code: 'provider_unavailable'
-      })
-      const failed = events.find((e) => e.type === 'model.call.failed')
-      expect(failed?.detail).toBeUndefined()
-      expect(failed?.costUsd).toBeUndefined()
-    }
-  )
+      },
+      { profileOverrides: { timeoutMs: 80 } }
+    )
+    await expect(gateway.generate(gatewayRequest())).rejects.toMatchObject({
+      code: 'provider_timeout',
+      retryable: true
+    })
+    expect(events.find((e) => e.type === 'model.call.failed')).toMatchObject({
+      detail: 'usage_unreported'
+    })
+  }, 10_000)
 })
