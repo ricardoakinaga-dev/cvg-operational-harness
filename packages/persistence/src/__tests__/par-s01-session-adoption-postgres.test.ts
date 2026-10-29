@@ -150,7 +150,7 @@ describe.skipIf(!url)('PAR-S01 slice 7: adoption and compatibility', () => {
       migrations: ['0028_session_events']
     })
     manifest = await populate(schema)
-  })
+  }, 120_000)
   afterAll(async () => {
     await pool?.end()
     for (const s of [schema, restored, oldSchema])
@@ -718,6 +718,61 @@ describe.skipIf(!url)('PAR-S01 slice 7: adoption and compatibility', () => {
         await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
       }
     }, 30_000)
+
+    it('refuses a schema name that is not a plain identifier, before any query', async () => {
+      const seen: string[] = []
+      const spy = {
+        query: async (sql: string) => {
+          seen.push(sql)
+          return { rows: [], rowCount: 0 }
+        }
+      }
+      const evil = 'x"; DROP SCHEMA public CASCADE; --'
+      const e = await failure(
+        adoptSessionStreams(spy as never, { schemaName: evil }, [fresh[0]!])
+      )
+      expect(e.failure).toBe('invalid_manifest')
+      await expect(
+        countUnadoptedSessionStreams(spy as never, {
+          schemaName: evil,
+          tenantId: tenants[0]!
+        })
+      ).rejects.toBeInstanceOf(SessionAdoptionError)
+      await expect(
+        verifySessionAdoption(spy as never, { schemaName: evil }, [fresh[0]!])
+      ).rejects.toBeInstanceOf(SessionAdoptionError)
+      expect(seen).toEqual([])
+    })
+
+    it('reports a failing read per entry and keeps verifying the next ones', async () => {
+      const name = `pars01e_${suffix}`
+      const entries = await smallSchema(name, 2)
+      try {
+        await adoptSessionStreams(admin, { schemaName: name }, entries)
+        const flaky = {
+          query: async (sql: string, v?: unknown[]) => {
+            if (
+              sql.includes('FROM') &&
+              sql.includes('header_json') &&
+              v?.[1] === 's-0'
+            )
+              throw Object.assign(new Error('statement timeout'), {
+                code: '57014'
+              })
+            return admin.query(sql, v as never)
+          }
+        }
+        expect(
+          await verifySessionAdoption(
+            flaky as never,
+            { schemaName: name },
+            entries
+          )
+        ).toEqual([`${tenants[0]}/s-0: error 57014`])
+      } finally {
+        await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
+      }
+    })
   })
 
   describe('after adoption: new facts, rollback of the app, restore', () => {

@@ -54,6 +54,18 @@ export class SessionAdoptionError extends Error {
 }
 
 const quote = (schema: string): string => `"${schema}"`
+const SCHEMA_NAME = /^[a-z][a-z0-9_]{0,62}$/
+/** The tool runs as the table owner: the schema name is interpolated, so it is validated first. */
+function checkedSchema(raw: unknown): string {
+  if (typeof raw !== 'string' || !SCHEMA_NAME.test(raw))
+    throw new SessionAdoptionError(
+      'invalid_manifest',
+      'invalid session schema name',
+      0,
+      { batches: [], adopted: 0, alreadyAdopted: 0 }
+    )
+  return raw
+}
 const DIGEST = /^[a-f0-9]{64}$/
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
@@ -179,7 +191,7 @@ export async function adoptSessionStreams(
   },
   manifest: readonly SessionAdoptionEntry[]
 ): Promise<SessionAdoptionReport> {
-  const schema = options.schemaName
+  const schema = checkedSchema(options.schemaName)
   const prepared = prepare(
     manifest,
     options.batchSize ?? SESSION_ADOPTION_MAX_BATCH
@@ -287,13 +299,14 @@ export async function countUnadoptedSessionStreams(
   client: PostgresQueryable,
   options: { readonly schemaName: string; readonly tenantId: string }
 ): Promise<number> {
+  const schema = checkedSchema(options.schemaName)
   await client.query('BEGIN')
   try {
     await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
       options.tenantId
     ])
     const r = await client.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM ${quote(options.schemaName)}.session_streams WHERE tenant_id=$1 AND header_json IS NULL`,
+      `SELECT count(*)::int AS n FROM ${quote(schema)}.session_streams WHERE tenant_id=$1 AND header_json IS NULL`,
       [options.tenantId]
     )
     return r.rows[0]!.n
@@ -308,26 +321,37 @@ export async function verifySessionAdoption(
   options: { readonly schemaName: string },
   manifest: readonly SessionAdoptionEntry[]
 ): Promise<string[]> {
+  const schema = checkedSchema(options.schemaName)
   const prepared = prepare(manifest, 1)
   const problems: string[] = []
   await client.query('BEGIN READ ONLY')
   try {
     for (const p of prepared) {
       const { tenantId, sessionId } = p.entry
-      const state = await lockStream(
-        client,
-        options.schemaName,
-        tenantId,
-        sessionId,
-        false
-      ).catch(() => undefined)
       const where = `${tenantId}/${sessionId}`
-      if (!state) problems.push(`${where}: missing`)
-      else if (!matches(state, p)) problems.push(`${where}: metadata differs`)
-      else if (Number(state.next_sequence) !== p.entry.expectedNextSequence)
-        problems.push(`${where}: cursor differs`)
-      else if (state.digest !== p.entry.expectedDigest)
-        problems.push(`${where}: digest differs`)
+      // A failing read aborts only this entry; it is reported, never turned into "missing".
+      await client.query('SAVEPOINT verify_entry')
+      try {
+        const state = await lockStream(
+          client,
+          schema,
+          tenantId,
+          sessionId,
+          false
+        )
+        if (!state) problems.push(`${where}: missing`)
+        else if (!matches(state, p)) problems.push(`${where}: metadata differs`)
+        else if (Number(state.next_sequence) !== p.entry.expectedNextSequence)
+          problems.push(`${where}: cursor differs`)
+        else if (state.digest !== p.entry.expectedDigest)
+          problems.push(`${where}: digest differs`)
+        await client.query('RELEASE SAVEPOINT verify_entry')
+      } catch (error) {
+        await client.query('ROLLBACK TO SAVEPOINT verify_entry')
+        problems.push(
+          `${where}: error ${(error as { code?: string }).code ?? 'unknown'}`
+        )
+      }
     }
   } finally {
     await client.query('ROLLBACK').catch(() => undefined)
