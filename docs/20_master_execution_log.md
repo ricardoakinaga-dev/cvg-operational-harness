@@ -20,6 +20,7 @@
 - F20 (índice corrente `docs/08_runtime/aud0625_current_index.md`, `b02b03261`) e F08c (decisão de não criar o índice `(tenant_id, updated_at)`, `624134de7`), ambos só docs da sessão 07, mesclados na onda 3; a 07 ainda troca "U19" por U09/U10/U23 no índice. Prova REM21 do PostgreSQL movida para a 0031 (`7ef14615f`, sobre o cherry-pick `bb23f4499` da onda 2; o trecho do journal de canal da carga sintética passou a rodar depois do roll forward, `00b93c70b`); `npm run test:postgres:proof` PASS local. Produção `NO_GO`.
 - F18: S1 na onda 3; S2 em correção (P2-1/P2-2, revisão 07 4ffbda710e). F14: escopo mapeado nas carteiras PAR/C100, sem BUILD nesta remediação (`6909447fc`, só docs, mesclado). Produção `NO_GO`.
 - REM21-014 browser-proof (D9, 29/10/2026): entrypoint de teste `scripts/rem21-014-trusted-test-api.ts` com autoridade de principais sintética (recusa fora de `NODE_ENV=test`, teste dedicado) e `playwright.rem21-014.config.ts` ajustado; spec intacto. `test:e2e:rem21-014` 18/18 e e2e 12/12 locais. Sem produção.
+- PAR-M01 fase 1 (D9, recibo human-decisions-14, `claude/aud0625-par-m01-d9` sobre a onda 3 `0efc427e3`): DISCOVERY, SPEC 0284 `PROPOSED_FOR_HUMAN_T3_REVIEW` (stream só interno, terminal único, uso desconhecido) e `aud0625-par-m01-streaming.test.ts` (4 controles, 27 `it.fails`). Achado: o transporte vinculado bufferiza o corpo inteiro, então o M01 exige trabalho no transporte. Sem BUILD, sem migration; produção `NO_GO`.
 
 # 29/10/2026 — segunda onda AUD0625 (Claude DF, sessões 07 e D9, Codex AUD0625)
 
