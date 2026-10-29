@@ -135,6 +135,11 @@ describeWithPostgres(
     })
 
     const writeAssignment = async (status: 'ACTIVE' | 'REVOKED') => {
+      const stored = await admin.query(
+        `SELECT revision FROM ${schema}.case_assignments WHERE tenant_id = $1 AND case_id = $2 AND operator_id = $3`,
+        [tenant, caseId, operatorId]
+      )
+      grantRevision = stored.rows[0] ? Number(stored.rows[0].revision) : 0
       await authority.putAssignment({
         tenantId: tenant,
         caseId,
@@ -315,6 +320,69 @@ describeWithPostgres(
       // Nothing was left half done: the same operation completes normally.
       expect((await create(key)).outcome).toBe('created')
       expect(await taskCount(key)).toBe(1)
+    })
+
+    it('R02 (principal, write first): a principal change issued while the unit holds the principal waits for the commit', async () => {
+      await writeAssignment('ACTIVE')
+      const key = `unit-key-${randomBytes(6).toString('hex')}`
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let reached!: () => void
+      const atCommit = new Promise<void>((resolve) => {
+        reached = resolve
+      })
+      const unit = create(key, {
+        beforeCommit: async () => {
+          reached()
+          await gate
+        }
+      })
+      await atCommit
+      const current = await admin.query(
+        `SELECT revision, active FROM ${schema}.case_principals WHERE tenant_id = $1 AND operator_id = $2`,
+        [tenant, operatorId]
+      )
+      let changed = false
+      const change = authority
+        .applyVerifiedPrincipalState({
+          tenantId: tenant,
+          operatorId,
+          role: 'Operator',
+          active: !current.rows[0].active,
+          expectedRevision: Number(current.rows[0].revision),
+          authorityVersion: 'synthetic-authority-v1',
+          proofRef: `synthetic-proof:${operatorId}`,
+          identitySource: 'synthetic_fixture'
+        })
+        .then(() => {
+          changed = true
+        })
+      await sleep(300)
+      expect(changed).toBe(false)
+      release()
+      expect((await unit).outcome).toBe('created')
+      await change
+      expect(changed).toBe(true)
+      expect(await taskCount(key)).toBe(1)
+      // Restore the principal for the next case.
+      const after = await admin.query(
+        `SELECT revision, active FROM ${schema}.case_principals WHERE tenant_id = $1 AND operator_id = $2`,
+        [tenant, operatorId]
+      )
+      if (!after.rows[0].active) {
+        await authority.applyVerifiedPrincipalState({
+          tenantId: tenant,
+          operatorId,
+          role: 'Operator',
+          active: true,
+          expectedRevision: Number(after.rows[0].revision),
+          authorityVersion: 'synthetic-authority-v1',
+          proofRef: `synthetic-proof:${operatorId}`,
+          identitySource: 'synthetic_fixture'
+        })
+      }
     })
 
     it('a principal deactivated before the unit is denied with zero writes', async () => {
