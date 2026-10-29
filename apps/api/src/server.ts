@@ -103,6 +103,7 @@ import {
   InMemoryApiCreation,
   InMemoryDatabase,
   PostgresApiCreation,
+  PostgresAuthorizedWrites,
   type ApiCreationPort,
   OutboxRepository,
   PostgresApprovalAuthority,
@@ -818,6 +819,23 @@ export function buildServer(options: BuildServerOptions = {}) {
   })
   // SPEC0176: one dependency bag for the case readers, the registry and the
   // execution projection used by mutation responses.
+  /**
+   * SPEC 0262: a PostgreSQL authority only hands its lock hook to the
+   * PostgreSQL writers; any other pairing would commit the write without the
+   * authorization unit, so it is refused before any write.
+   */
+  const assertAuthorizedWriteComposition = (): void => {
+    if (
+      caseAuthority instanceof PostgresCaseAuthority &&
+      !(persistence.authorizedWrites instanceof PostgresAuthorizedWrites)
+    ) {
+      throw new DomainError(
+        'configuration_error',
+        'Authorized writes are not available in this persistence composition'
+      )
+    }
+  }
+
   const caseRouteDeps: CaseRouteDependencies = {
     caseAuthority,
     principalPolicy: {
@@ -1991,18 +2009,31 @@ export function buildServer(options: BuildServerOptions = {}) {
         kind: 'task',
         taskId: params.taskId
       })
+      assertAuthorizedWriteComposition()
+      const statusCommand = {
+        taskId: params.taskId,
+        status: status.data,
+        actorType: identity.role,
+        actorId: identity.operatorId,
+        correlationId
+      }
       // SPEC0250 §3.1 (AUD0621 F15/F16): one atomic port call validates the
       // transition against the committed status, writes it with a CAS and
       // records the audit event in the same unit; a failure changes nothing.
-      const updated = await tasks.transitionStatusWithAudit(
-        {
-          taskId: params.taskId,
-          status: status.data,
-          actorType: identity.role,
-          actorId: identity.operatorId,
-          correlationId
-        },
-        tenantId
+      // SPEC 0262: the case policy runs in that same unit.
+      const updated = await runAuthorizedCaseMutation(
+        caseRouteDeps,
+        identity,
+        tenantId,
+        { kind: 'task', taskId: params.taskId },
+        async (unit) =>
+          persistence.authorizedWrites && unit.authorizeOnClient
+            ? persistence.authorizedWrites.transitionTaskStatus(
+                statusCommand,
+                tenantId,
+                { authorize: unit.authorizeOnClient }
+              )
+            : tasks.transitionStatusWithAudit(statusCommand, tenantId)
       )
       emitRuntimeLog({
         event: 'task.status_changed',
@@ -2141,16 +2172,32 @@ export function buildServer(options: BuildServerOptions = {}) {
           kind: 'approval_request',
           approvalRequestId: parsedBody.approvalRequestId
         })
-        const decided = await approvals.decideWithAudit(
+        assertAuthorizedWriteComposition()
+        const decision = {
+          approvalRequestId: parsedBody.approvalRequestId,
+          decision: parsedBody.decision,
+          operatorId: parsedBody.operatorId,
+          role: identity.role,
+          correlationId,
+          ...(parsedBody.note === undefined ? {} : { note: parsedBody.note })
+        }
+        // SPEC 0262: the case policy and the decision share one unit.
+        const decided = await runAuthorizedCaseMutation(
+          caseRouteDeps,
+          identity,
+          tenantId,
           {
-            approvalRequestId: parsedBody.approvalRequestId,
-            decision: parsedBody.decision,
-            operatorId: parsedBody.operatorId,
-            role: identity.role,
-            correlationId,
-            ...(parsedBody.note === undefined ? {} : { note: parsedBody.note })
+            kind: 'approval_request',
+            approvalRequestId: parsedBody.approvalRequestId
           },
-          tenantId
+          async (unit) =>
+            persistence.authorizedWrites && unit.authorizeOnClient
+              ? persistence.authorizedWrites.decideAttendanceApproval(
+                  decision,
+                  tenantId,
+                  { authorize: unit.authorizeOnClient }
+                )
+              : approvals.decideWithAudit(decision, tenantId)
         )
         const event =
           decided.status === 'assumed'
@@ -5016,6 +5063,8 @@ interface RuntimePersistence {
    * answer 503 before any write.
    */
   apiCreation: ApiCreationPort | null
+  /** SPEC 0262: task status and attendance decision in the authorization unit. */
+  authorizedWrites: PostgresAuthorizedWrites | null
   conversations:
     | ConversationRepository
     | PostgresRuntimeRepository
@@ -5303,6 +5352,10 @@ function createPersistence(
         config.kind === 'postgres-pool'
           ? new PostgresApiCreation(config.pool)
           : null,
+      authorizedWrites:
+        config.kind === 'postgres-pool'
+          ? new PostgresAuthorizedWrites(config.pool)
+          : null,
       tasks: {
         create: (
           input: Parameters<PostgresRuntimeRepository['createTask']>[0],
@@ -5376,6 +5429,7 @@ function createPersistence(
         : new JourneyRepository(db),
     conversations: new ConversationRepository(db),
     apiCreation: new InMemoryApiCreation(db),
+    authorizedWrites: null,
     tasks: new TaskRepository(db),
     approvals: new ApprovalRepository(db),
     audit: new AuditRepository(db)

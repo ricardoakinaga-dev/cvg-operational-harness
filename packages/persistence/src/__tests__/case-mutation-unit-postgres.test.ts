@@ -13,6 +13,7 @@ import type { TenantId } from '@cvg/platform'
 import {
   CaseAuthorityError,
   PostgresApiCreation,
+  PostgresAuthorizedWrites,
   PostgresCaseAuthority,
   ensureCoreConversationRootInTransaction,
   runPostgresMigrations,
@@ -417,6 +418,139 @@ describeWithPostgres(
       await revocation
       expect(revoked).toBe(true)
       expect(await taskCount(key)).toBe(1)
+    })
+
+    /** Status transition through the authority unit, as the API composes it. */
+    const transition = (
+      taskId: string,
+      hooks: ConstructorParameters<typeof PostgresAuthorizedWrites>[1] = {}
+    ) =>
+      authority.runAuthorizedMutation(tenant, {
+        operatorId,
+        authorize: policy,
+        write: (unit) =>
+          new PostgresAuthorizedWrites(runtimePool, hooks).transitionTaskStatus(
+            {
+              taskId,
+              status: 'in_progress',
+              actorType: 'Operator',
+              actorId: operatorId,
+              correlationId: `corr_${randomUUID()}`
+            },
+            tenant,
+            unit.authorizeOnClient
+              ? { authorize: unit.authorizeOnClient }
+              : undefined
+          )
+      })
+
+    const taskStatus = async (taskId: string) =>
+      (
+        await admin.query(
+          `SELECT status FROM ${schema}.tasks WHERE tenant_id = $1 AND id = $2`,
+          [tenant, taskId]
+        )
+      ).rows[0].status as string
+
+    it('task.status: a revoked grant denies the transition with the status and audit unchanged', async () => {
+      await writeAssignment('ACTIVE')
+      const created = await create(`unit-key-${randomBytes(6).toString('hex')}`)
+      const taskId = created.resource.id
+      await writeAssignment('REVOKED')
+      await expect(transition(taskId)).rejects.toMatchObject({
+        code: 'case_not_found'
+      })
+      expect(await taskStatus(taskId)).toBe('open')
+      await writeAssignment('ACTIVE')
+      expect((await transition(taskId)).status).toBe('in_progress')
+      expect(await taskStatus(taskId)).toBe('in_progress')
+    })
+
+    it('task.status: a revocation issued while the transition holds the grant waits for the commit', async () => {
+      await writeAssignment('ACTIVE')
+      const created = await create(`unit-key-${randomBytes(6).toString('hex')}`)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let reached!: () => void
+      const atCommit = new Promise<void>((resolve) => {
+        reached = resolve
+      })
+      const unit = transition(created.resource.id, {
+        beforeCommit: async () => {
+          reached()
+          await gate
+        }
+      })
+      await atCommit
+      let revoked = false
+      const revocation = writeAssignment('REVOKED').then(() => {
+        revoked = true
+      })
+      await sleep(300)
+      expect(revoked).toBe(false)
+      release()
+      expect((await unit).status).toBe('in_progress')
+      await revocation
+      expect(revoked).toBe(true)
+    })
+
+    it('approval.decide: a revoked grant denies the decision; a granted one decides once', async () => {
+      await writeAssignment('ACTIVE')
+      const approvalId = `approval_${randomUUID()}`
+      const creation = new PostgresApiCreation(runtimePool)
+      await creation.createApprovalWithAudit(
+        {
+          actor: { actorType: 'Operator', actorId: operatorId },
+          correlationId: `corr_${randomUUID()}`,
+          idempotencyKey: `unit-key-${randomBytes(6).toString('hex')}`,
+          request: {
+            id: approvalId,
+            sessionId,
+            proposedAction: 'audit_evidence_export_review',
+            summary: 'Resumo sintético',
+            riskLevel: 'medium',
+            status: 'pending',
+            decidedBy: null,
+            decidedAt: null,
+            createdAt: new Date('2026-10-28T12:00:00Z')
+          }
+        },
+        tenant
+      )
+      const decide = () =>
+        authority.runAuthorizedMutation(tenant, {
+          operatorId,
+          authorize: policy,
+          write: (unit) =>
+            new PostgresAuthorizedWrites(runtimePool).decideAttendanceApproval(
+              {
+                approvalRequestId: approvalId,
+                decision: 'approved',
+                operatorId,
+                role: 'Approver',
+                correlationId: `corr_${randomUUID()}`
+              },
+              tenant,
+              unit.authorizeOnClient
+                ? { authorize: unit.authorizeOnClient }
+                : undefined
+            )
+        })
+      const statusOf = async () =>
+        (
+          await admin.query(
+            `SELECT status FROM ${schema}.approval_requests WHERE tenant_id = $1 AND id = $2`,
+            [tenant, approvalId]
+          )
+        ).rows[0].status as string
+      await writeAssignment('REVOKED')
+      await expect(decide()).rejects.toMatchObject({ code: 'case_not_found' })
+      expect(await statusOf()).toBe('pending')
+      await writeAssignment('ACTIVE')
+      expect((await decide()).status).toBe('approved')
+      expect(await statusOf()).toBe('approved')
     })
 
     it('a principal deactivated before the unit is denied with zero writes', async () => {

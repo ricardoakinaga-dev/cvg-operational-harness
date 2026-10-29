@@ -95,6 +95,51 @@ describe('SPEC 0262 the creation routes use the unit', () => {
     expect(spy).toHaveBeenCalledTimes(2)
   })
 
+  it('PATCH /v1/tasks/:id/status and POST /v1/approvals/:id/decision go through runAuthorizedMutation exactly once', async () => {
+    const { app, sessionId } = await setup()
+    const created = await post(app, sessionId, 'unit-memory-key-0002')
+    const taskId = created.json().data.id as string
+    const spy = vi.spyOn(app.caseAuthority, 'runAuthorizedMutation')
+    const status = await app.inject({
+      method: 'PATCH',
+      url: `/v1/tasks/${taskId}/status`,
+      headers: { ...OPERATOR, 'x-tenant-id': CONTROLLED_TEST_TENANT },
+      payload: { status: 'in_progress' }
+    })
+    expect(status.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(1)
+    const approval = await app.inject({
+      method: 'POST',
+      url: '/v1/approvals',
+      headers: {
+        'x-operator-id': 'supervisor.case-manager',
+        'x-operator-role': 'Supervisor',
+        'x-tenant-id': CONTROLLED_TEST_TENANT,
+        'idempotency-key': 'unit-memory-approval-0002'
+      },
+      payload: {
+        sessionId,
+        proposedAction: 'handoff_to_operator',
+        summary: 'Resumo sintetico',
+        riskLevel: 'high'
+      }
+    })
+    const approvalId = approval.json().data.id as string
+    spy.mockClear()
+    const decided = await app.inject({
+      method: 'POST',
+      url: `/v1/approvals/${approvalId}/decision`,
+      headers: {
+        'x-operator-id': 'supervisor.case-manager',
+        'x-operator-role': 'Supervisor',
+        'x-tenant-id': CONTROLLED_TEST_TENANT
+      },
+      payload: { decision: 'rejected' }
+    })
+    expect(decided.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
   it('without an identity (controlled test profile) the unit is not involved', async () => {
     const app = buildServer()
     const spy = vi.spyOn(app.caseAuthority, 'runAuthorizedMutation')

@@ -1142,6 +1142,40 @@ export class PostgresRuntimeRepository {
     command: TaskStatusTransitionCommand,
     rawTenantId?: TenantId
   ): Promise<TaskRecord> {
+    // SPEC 0262: the client-owned primitive below never opens a transaction.
+    const status = TaskStatusSchema.parse(command.status)
+    const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    if (this.tenantIsolation && !tenantId) {
+      throw new DomainError('invalid_action', 'Tenant scope is required')
+    }
+    await this.client.query('BEGIN')
+    try {
+      const updated = await this.transitionTaskStatusWithAuditInTransaction(
+        { ...command, status },
+        tenantId
+      )
+      await this.client.query('COMMIT')
+      return updated
+    } catch (error) {
+      try {
+        await this.client.query('ROLLBACK')
+      } catch {
+        // The connection is unusable; surface the original failure. The pool
+        // owner discards a client whose cleanup fails.
+      }
+      throw error
+    }
+  }
+
+  /**
+   * SPEC 0262 §4.1 — the same validation, CAS update and audit as
+   * {@link transitionTaskStatusWithAudit}, but inside a transaction the caller
+   * already owns (no BEGIN / COMMIT / ROLLBACK here).
+   */
+  async transitionTaskStatusWithAuditInTransaction(
+    command: TaskStatusTransitionCommand,
+    rawTenantId?: TenantId
+  ): Promise<TaskRecord> {
     const status = TaskStatusSchema.parse(command.status)
     const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
     if (this.tenantIsolation && !tenantId) {
@@ -1152,8 +1186,7 @@ export class PostgresRuntimeRepository {
          INNER JOIN conversations ON conversations.id = sessions.conversation_id`
       : ''
     const scopeFilter = tenantId ? ' AND conversations.tenant_id = $2' : ''
-    await this.client.query('BEGIN')
-    try {
+    {
       const locked = await this.client.query<{
         id: string
         session_id: string
@@ -1195,16 +1228,7 @@ export class PostgresRuntimeRepository {
       await this.appendAudit(
         taskStatusTransitionAudit(current, updated, command, tenantId)
       )
-      await this.client.query('COMMIT')
       return updated
-    } catch (error) {
-      try {
-        await this.client.query('ROLLBACK')
-      } catch {
-        // The connection is unusable; surface the original failure. The pool
-        // owner discards a client whose cleanup fails.
-      }
-      throw error
     }
   }
 
@@ -1288,6 +1312,31 @@ export class PostgresRuntimeRepository {
       throw new DomainError('invalid_action', 'Tenant scope is required')
     await this.client.query('BEGIN')
     try {
+      const decided = await this.decideApprovalWithAuditInTransaction(
+        input,
+        tenantId
+      )
+      await this.client.query('COMMIT')
+      return decided
+    } catch (error) {
+      await this.client.query('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * SPEC 0262 §4.1 — the conditional update and the decision audit inside a
+   * transaction the caller already owns (no BEGIN / COMMIT / ROLLBACK here).
+   */
+  async decideApprovalWithAuditInTransaction(
+    input: AttendanceApprovalDecision,
+    rawTenantId?: TenantId
+  ): Promise<ApprovalRequestRecord> {
+    input = validateAttendanceDecision(input)
+    const tenantId = rawTenantId ? TenantIdSchema.parse(rawTenantId) : undefined
+    if (this.tenantIsolation && !tenantId)
+      throw new DomainError('invalid_action', 'Tenant scope is required')
+    {
       // The conditional update is the authority; any earlier read is only for scoped existence.
       const current = await this.findApprovalById(
         input.approvalRequestId,
@@ -1321,11 +1370,7 @@ export class PostgresRuntimeRepository {
         decidedAt
       }
       await this.appendAudit(attendanceDecisionAudit(decided, input, tenantId))
-      await this.client.query('COMMIT')
       return decided
-    } catch (error) {
-      await this.client.query('ROLLBACK')
-      throw error
     }
   }
 

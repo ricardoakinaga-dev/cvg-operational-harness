@@ -78,6 +78,36 @@ export async function runCreationTransaction<T>(
   authorize?: (client: PostgresPoolClient) => Promise<void>
 ): Promise<T> {
   const tenantId = TenantIdSchema.parse(rawTenantId)
+  return runTenantMutationTransaction(
+    pool,
+    tenantId,
+    operation,
+    hooks,
+    authorize,
+    async (client) => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [lockText(tenantId, route, keyDigest)]
+      )
+    }
+  )
+}
+
+/**
+ * SPEC 0262 §4: the single owner of BEGIN / COMMIT / ROLLBACK / release for
+ * every authorized mutation. Order: tenant context, `authorize` (principal and
+ * grant locks held to COMMIT), `afterAuthorize` seam, `beforeOperation` (the
+ * creation lock), then `operation`.
+ */
+export async function runTenantMutationTransaction<T>(
+  pool: PostgresPoolLike,
+  rawTenantId: TenantId,
+  operation: (client: PostgresPoolClient) => Promise<T>,
+  hooks: CreationTransactionHooks = {},
+  authorize?: (client: PostgresPoolClient) => Promise<void>,
+  beforeOperation?: (client: PostgresPoolClient) => Promise<void>
+): Promise<T> {
+  const tenantId = TenantIdSchema.parse(rawTenantId)
   const client = await pool.connect()
   let released = false
   const release = (error?: Error): void => {
@@ -120,10 +150,7 @@ export async function runCreationTransaction<T>(
     // operation lock, then the resource and the receipt.
     if (authorize) await authorize(client)
     await hooks.afterAuthorize?.(client)
-    await client.query(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-      [lockText(tenantId, route, keyDigest)]
-    )
+    await beforeOperation?.(client)
     const result = await operation(client)
     await clearTenantContext()
     await hooks.beforeCommit?.(client)
@@ -548,5 +575,55 @@ export class PostgresApiCreation implements ApiCreationPort {
       approvalRequestId: receipt.approval_id
     })
     return mapApproval(row)
+  }
+}
+
+/**
+ * SPEC 0262 §4: task status transition and attendance approval decision in the
+ * same unit as the case authorization (client-owned primitives of
+ * {@link PostgresRuntimeRepository}; this class owns the transaction).
+ */
+export class PostgresAuthorizedWrites {
+  constructor(
+    private readonly pool: PostgresPoolLike,
+    private readonly hooks: CreationTransactionHooks = {}
+  ) {}
+
+  transitionTaskStatus(
+    command: Parameters<
+      PostgresRuntimeRepository['transitionTaskStatusWithAuditInTransaction']
+    >[0],
+    tenantId: TenantId,
+    options: ApiCreationOptions = {}
+  ): Promise<TaskRecord> {
+    return runTenantMutationTransaction(
+      this.pool,
+      tenantId,
+      (client) =>
+        new PostgresRuntimeRepository(client, {
+          tenantIsolation: true
+        }).transitionTaskStatusWithAuditInTransaction(command, tenantId),
+      this.hooks,
+      options.authorize
+    )
+  }
+
+  decideAttendanceApproval(
+    input: Parameters<
+      PostgresRuntimeRepository['decideApprovalWithAuditInTransaction']
+    >[0],
+    tenantId: TenantId,
+    options: ApiCreationOptions = {}
+  ): Promise<ApprovalRequestRecord> {
+    return runTenantMutationTransaction(
+      this.pool,
+      tenantId,
+      (client) =>
+        new PostgresRuntimeRepository(client, {
+          tenantIsolation: true
+        }).decideApprovalWithAuditInTransaction(input, tenantId),
+      this.hooks,
+      options.authorize
+    )
   }
 }
