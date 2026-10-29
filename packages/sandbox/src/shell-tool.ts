@@ -7,6 +7,10 @@ import type {
 } from '@cvg/harness-contracts'
 import { confinePath } from './confine.ts'
 import { runContained, type ContainedRunResult } from './run.ts'
+import {
+  processProfileVersion,
+  type ProcessContainmentProfile
+} from './process-profile.ts'
 
 export interface ShellRunRequest {
   /** Pure argv array — never a shell string, never interpolated. */
@@ -20,6 +24,7 @@ export interface ShellRunRequest {
   readonly stdin?: string
   /** Caller cancellation authority, forwarded unchanged to the backend. */
   readonly signal?: AbortSignal
+  readonly processProfile?: ProcessContainmentProfile
 }
 
 export interface ShellRunResult {
@@ -43,6 +48,8 @@ export interface ShellLimits {
 export interface ShellToolOptions {
   /** Absolute tenant workspace root; cwd is confined to it by realpath. */
   readonly workspaceRoot: string
+  /** Captured by the trusted host before composition; never supplied by argv. */
+  readonly processProfile?: ProcessContainmentProfile
   /**
    * Execution backend. Defaults to `runContained` (SPEC 0196 §5) with
    * the granted PROCESS handle; hosts/tests may inject a trusted runner.
@@ -153,6 +160,10 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
     )
   }
   const root = realpathSync(rootRaw)
+  const processProfile = options.processProfile
+  const version = processProfile
+    ? processProfileVersion(processProfile, root)
+    : SHELL_BASE.version
   const limits = resolveLimits(options.limits)
   const runner =
     options.run ??
@@ -164,6 +175,9 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         maxOutputBytes: request.maxOutputBytes,
         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
         ...(request.signal ? { signal: request.signal } : {}),
+        ...(request.processProfile
+          ? { processProfile: request.processProfile }
+          : {}),
         handle: request.handle
       })
       return result
@@ -172,6 +186,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
   return {
     id: 'shell.run',
     ...SHELL_BASE,
+    version,
     description:
       'Run one command inside the workspace sandbox (pure argv, no shell).',
     risk: 'HIGH',
@@ -212,6 +227,20 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
           'configured workspace root is outside the sandbox grant'
         )
       const record = input as Record<string, unknown> | null
+      for (const key of [
+        'env',
+        'mounts',
+        'profile',
+        'processProfile',
+        'bwrapPath',
+        'runtimeFiles',
+        'executablePaths'
+      ]) {
+        if (record?.[key] !== undefined)
+          return rejected(
+            'containment configuration belongs to trusted composition'
+          )
+      }
 
       // Any string-command field is refused: interpolation never enters.
       for (const key of ['command', 'cmd', 'shell']) {
@@ -309,6 +338,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
           timeoutMs,
           maxOutputBytes: limits.maxOutputBytes,
           ...(signal ? { signal } : {}),
+          ...(processProfile ? { processProfile } : {}),
           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})
         })
       } catch (error) {

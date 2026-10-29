@@ -1,44 +1,40 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runContained } from '../packages/sandbox/src/run.ts'
+import type { ProcessContainmentProfile } from '../packages/sandbox/src/process-profile.ts'
+import { reviewedNodeProfile } from './helpers/aud0625-node-process-profile.ts'
 
-let root: string, marker: string, backend: string
+let root: string, marker: string, processProfile: ProcessContainmentProfile
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'aud0625-preabort-'))
   marker = join(root, 'launched')
-  backend = join(root, 'owned-backend')
-  // A trusted test-only backend records launch. It is not a containment proof.
-  writeFileSync(
-    backend,
-    '#!' +
-      process.execPath +
-      '\n' +
-      'require("node:fs").writeFileSync(' +
-      JSON.stringify(marker) +
-      ',"OWNED-LAUNCH");process.stdout.write("OWNED-BACKEND");\n',
-    { mode: 0o700 }
-  )
-})
+  processProfile = reviewedNodeProfile(root)
+}, 30000)
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 function request(signal?: AbortSignal) {
   return {
-    argv: ['controlled-no-payload'],
-    bwrapPath: backend,
+    argv: [
+      process.execPath,
+      '-e',
+      'require("node:fs").writeFileSync(process.argv[1],"OWNED-LAUNCH");process.stdout.write("OWNED-BACKEND")',
+      marker
+    ],
+    processProfile,
     handle: {
       mode: 'PROCESS' as const,
       workspaceRoot: root,
       allowNetwork: false,
       allowSubprocess: true
     },
-    timeoutMs: 1000,
+    timeoutMs: 2000,
     ...(signal ? { signal } : {})
   }
 }
 describe('F05 backend pre-abort admission, owned launch marker only', () => {
-  it('positive control: the owned test backend records a real launch', async () => {
+  it('positive control: the reviewed profile records an owned launch marker', async () => {
     const result = await runContained(request())
     expect(result.exitCode).toBe(0)
     expect(result.stdout).toBe('OWNED-BACKEND')

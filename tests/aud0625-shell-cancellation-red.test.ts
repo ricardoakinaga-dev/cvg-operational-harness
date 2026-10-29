@@ -18,7 +18,8 @@ afterEach(() => {
 async function callShell(
   preAborted = false,
   abortInRunner = false,
-  omitSignal = false
+  omitSignal = false,
+  throwAfterAbort = false
 ) {
   const root = mkdtempSync(join(tmpdir(), 'aud0625-shell-'))
   roots.push(root)
@@ -31,6 +32,7 @@ async function callShell(
       captured.push(request)
       if (abortInRunner)
         controller.abort(new Error('owned synthetic late cancellation'))
+      if (throwAfterAbort) throw new Error('OWNED-POST-ABORT-THROW')
       return {
         exitCode: 0,
         stdout: 'CVG-OWN-NO-SUBPROCESS',
@@ -90,6 +92,14 @@ describe('AUD0625 F05 — caller cancellation reaches the shell runner seam', ()
   })
   it('a runner completion after cancellation is uncertain, never successful or retried', async () => {
     const actual = await callShell(false, true)
+    expect(actual.captured).toHaveLength(1)
+    expect(actual.result).toMatchObject({
+      status: 'FAILED',
+      error: 'effect_uncertain: cleanup_incomplete after cancellation'
+    })
+  })
+  it('a runner throw after cancellation is uncertain, never a generic runner failure or retry', async () => {
+    const actual = await callShell(false, true, false, true)
     expect(actual.captured).toHaveLength(1)
     expect(actual.result).toMatchObject({
       status: 'FAILED',

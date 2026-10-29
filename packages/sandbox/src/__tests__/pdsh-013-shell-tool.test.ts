@@ -9,6 +9,7 @@ import {
   type ShellRunRequest,
   type ShellRunResult
 } from '../index.ts'
+import { reviewedNodeProfile } from '../../../../tests/helpers/aud0625-node-process-profile.ts'
 
 const tempDirs: string[] = []
 
@@ -330,9 +331,19 @@ describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
     'runs a command inside the namespace with workspace bind',
     async () => {
       const root = tempWorkspace()
-      const tool = createShellTool({ workspaceRoot: root })
+      const tool = createShellTool({
+        workspaceRoot: root,
+        processProfile: reviewedNodeProfile(root)
+      })
       const result = await tool.execute(
-        { argv: ['/bin/echo', 'sintetico'], intent: 'fumaça do host' },
+        {
+          argv: [
+            process.execPath,
+            '-e',
+            'process.stdout.write("sintetico\\n")'
+          ],
+          intent: 'fumaça do host'
+        },
         context(root)
       )
       expect(result.status).toBe('SUCCEEDED')
@@ -347,10 +358,17 @@ describe('PDSH-013 shell default runner (SPEC 0198 §1, host smoke)', () => {
     'writes inside the workspace are visible outside the namespace',
     async () => {
       const root = tempWorkspace()
-      const tool = createShellTool({ workspaceRoot: root })
+      const tool = createShellTool({
+        workspaceRoot: root,
+        processProfile: reviewedNodeProfile(root)
+      })
       const result = await tool.execute(
         {
-          argv: ['/bin/sh', '-c', 'echo sintetico > inside.txt'],
+          argv: [
+            process.execPath,
+            '-e',
+            'require("node:fs").writeFileSync("inside.txt","sintetico\\n")'
+          ],
           intent: 'provar bind gravável do workspace'
         },
         context(root)

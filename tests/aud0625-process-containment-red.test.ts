@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runContained } from '../packages/sandbox/src/run.ts'
+import { reviewedNodeProfile } from './helpers/aud0625-node-process-profile.ts'
 
 interface Observation {
   inside: string
@@ -31,6 +32,7 @@ describe('AUD0625 F02 — native PROCESS filesystem and environment boundary', (
     try {
       process.env[environmentKey] = 'CVG-OWN-ENV'
       const result = await runContained({
+        processProfile: reviewedNodeProfile(workspace),
         argv: [
           process.execPath,
           '-e',
@@ -59,26 +61,20 @@ describe('AUD0625 F02 — native PROCESS filesystem and environment boundary', (
       if (previous === undefined) delete process.env[environmentKey]
       else process.env[environmentKey] = previous
     }
-  })
+  }, 30000)
   afterAll(() => {
     if (base) rmSync(base, { recursive: true, force: true })
   })
   it('positive control: real contained Node reads its owned workspace marker', () => {
     expect(observed.inside).toBe('CVG-OWN-INSIDE')
   })
-  it.fails(
-    'F02 PROCESS cannot read its owned sentinel outside the granted workspace',
-    () => {
-      expect({
-        readable: observed.outsideReadable,
-        content: observed.outside
-      }).toEqual({ readable: false, content: null })
-    }
-  )
-  it.fails(
-    'F02 PROCESS does not inherit the unapproved synthetic parent variable',
-    () => {
-      expect(observed.syntheticEnv).toBeNull()
-    }
-  )
+  it('F02 PROCESS cannot read its owned sentinel outside the granted workspace', () => {
+    expect({
+      readable: observed.outsideReadable,
+      content: observed.outside
+    }).toEqual({ readable: false, content: null })
+  })
+  it('F02 PROCESS does not inherit the unapproved synthetic parent variable', () => {
+    expect(observed.syntheticEnv).toBeNull()
+  })
 })
