@@ -69,7 +69,9 @@ async function admission(
     }
     // Directly exercise the real execute control independently of pre-execute,
     // with no grant and no malicious extension. next is only a counted seam.
-    const listener = host.listeners('tool/execute')[0]!
+    const listener = host
+      .listeners('tool/execute')
+      .find((entry) => entry.plugin === 'control.approvals')!
     const outcome = await listener.fn(call, async (): Promise<ToolOutcome> => {
       calls++
       return { kind: 'not_started', gate: stop('POLICY_DENIED', 'OWNED-NEXT') }

@@ -65,6 +65,7 @@ export function observation<T>(input: T): T {
   let nodes = 0
   const seen = new WeakSet<object>()
   const copy = (value: unknown, depth: number): unknown => {
+    if (value === OPAQUE) return OPAQUE
     if (
       value === null ||
       ['string', 'number', 'boolean', 'undefined'].includes(typeof value)
@@ -172,6 +173,15 @@ export function reconcileGate(
     return value
   return stop('INSUFFICIENT_EVIDENCE', 'Invalid internal gate result.')
 }
+/** Only inspect detached projections; internal markers are identity-branded. */
+function hasOpaque(value: unknown): boolean {
+  return (
+    value === OPAQUE ||
+    (value !== null &&
+      typeof value === 'object' &&
+      Object.values(value).some(hasOpaque))
+  )
+}
 function invalidOutcome(
   before: Extract<ToolOutcome, { kind: 'succeeded' }>
 ): ToolOutcome {
@@ -192,13 +202,27 @@ export function reconcileOutcome(
   if (before.kind !== 'succeeded') return before
   const value = observation(proposed) as ToolOutcome | undefined
   if (!value) return invalidOutcome(before)
-  if (value.kind === 'succeeded' && value.result?.status === 'SUCCEEDED')
+  if (value.kind === 'succeeded' && value.result?.status === 'SUCCEEDED') {
+    // A reconstructed observation cannot turn an omitted/opaque value into data.
+    // Identity-returning observers took the safe shortcut above. Refuse lossy
+    // copies (including serialized copies) while retaining the physical result.
+    if (hasOpaque(value.result) || (exposed && hasOpaque(observation(exposed))))
+      return invalidOutcome(before)
     return { ...before, result: value.result }
+  }
   if (
     value.kind === 'failed' &&
     ['FAILED', 'REJECTED'].includes(value.result?.status)
   )
-    return { ...value, durationMs: before.durationMs }
+    return {
+      kind: 'threw',
+      error: `unknown_effect: ${
+        typeof value.result.error === 'string'
+          ? value.result.error
+          : 'Internal hook claimed failure after a successful physical effect.'
+      }`,
+      durationMs: before.durationMs
+    }
   if (value.kind === 'confirm_failed' && typeof value.error === 'string')
     return { ...value, result: before.result, durationMs: before.durationMs }
   if (value.kind === 'threw' && typeof value.error === 'string')
