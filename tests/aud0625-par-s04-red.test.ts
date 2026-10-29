@@ -12,7 +12,7 @@ import * as session from '../packages/harness/src/session/index.ts'
 // PAR-S04 phase 1 (SPEC 0287): RED witnesses for the pure half of fork and resume. The `it.fails`
 // bodies are the specification; the markers come off in BUILD, never replaced by a weaker check.
 // Controls (unmarked) pin the S01 starting point that must keep holding.
-const api = session as unknown as Record<string, (...args: any[]) => any>
+const api = session as unknown as Record<string, any>
 const TENANT = 'tenant-synthetic-A'
 const SOURCE = 'source-session'
 const TARGET = 'fork-session'
