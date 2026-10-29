@@ -259,7 +259,15 @@ function post(
   headers: Record<string, string>,
   payload: Record<string, unknown>
 ) {
-  return server.inject({ method: 'POST', url, headers, payload })
+  // SPEC 0257: the approval creation route requires one Idempotency-Key.
+  const withKey =
+    url === '/v1/approvals'
+      ? {
+          ...headers,
+          'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        }
+      : headers
+  return server.inject({ method: 'POST', url, headers: withKey, payload })
 }
 
 function patchTask(

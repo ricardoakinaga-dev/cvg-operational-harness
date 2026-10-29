@@ -410,7 +410,10 @@ describeWithPostgres('AUD0621 tasks and approvals over PostgreSQL', () => {
         const created = await server.inject({
           method: 'POST',
           url: '/v1/approvals',
-          headers: { 'x-tenant-id': pageTenant },
+          headers: {
+            'x-tenant-id': pageTenant,
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          },
           payload: {
             sessionId,
             proposedAction: 'synthetic_review',

@@ -1998,6 +1998,9 @@ describe('api PostgreSQL persistence mode', () => {
             proposedAction: 'create_appointment_draft',
             summary: 'Aprovacao ficticia em postgres',
             riskLevel: 'medium'
+          },
+          headers: {
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
           }
         })
         const approvalBody = approval.json() as Envelope<{ id: string }>
@@ -2227,7 +2230,10 @@ describe('api PostgreSQL persistence mode', () => {
         await app.inject({
           method: 'POST',
           url: '/v1/approvals',
-          headers: { 'x-tenant-id': postgresTenantA },
+          headers: {
+            'x-tenant-id': postgresTenantA,
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          },
           payload: {
             sessionId: firstSessionId,
             proposedAction: 'create_appointment_draft',
@@ -2238,7 +2244,10 @@ describe('api PostgreSQL persistence mode', () => {
         await app.inject({
           method: 'POST',
           url: '/v1/approvals',
-          headers: { 'x-tenant-id': postgresTenantB },
+          headers: {
+            'x-tenant-id': postgresTenantB,
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          },
           payload: {
             sessionId: otherSessionId,
             proposedAction: 'create_appointment_draft',
