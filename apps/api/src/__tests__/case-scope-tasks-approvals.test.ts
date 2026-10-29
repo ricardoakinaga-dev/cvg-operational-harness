@@ -12,7 +12,7 @@
  * tenant A without a case root.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApprovalEngine as DurableApprovalEngine,
   type ApprovalAuthority
@@ -875,8 +875,12 @@ describe('SPEC0251 S4 — runtime approval decision (memory)', () => {
       'WAITING_APPROVAL'
     )
 
+    // SPEC 0262: the runtime decision runs inside the authorization unit.
+    const unit = vi.spyOn(w.app.caseAuthority, 'runAuthorizedMutation')
     const approved = await decideRuntime(w.app, linked, APPROVER_A)
     expect(approved.statusCode).toBe(202)
+    expect(unit).toHaveBeenCalledTimes(1)
+    unit.mockRestore()
     expect(approved.headers['cache-control']).toBe('no-store')
     expect((await store.get(TENANT, linked.executionId))?.state).toBe('QUEUED')
 
