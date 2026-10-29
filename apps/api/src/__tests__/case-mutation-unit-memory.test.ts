@@ -140,6 +140,25 @@ describe('SPEC 0262 the creation routes use the unit', () => {
     expect(spy).toHaveBeenCalledTimes(1)
   })
 
+  it('POST /v1/journeys/tasks goes through runAuthorizedMutation exactly once', async () => {
+    const { app, sessionId } = await setup()
+    const spy = vi.spyOn(app.caseAuthority, 'runAuthorizedMutation')
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/journeys/tasks',
+      headers: { ...OPERATOR, 'x-tenant-id': CONTROLLED_TEST_TENANT },
+      payload: {
+        sessionId,
+        title: 'Revisar caso',
+        description: 'Descricao sintetica',
+        priority: 'medium',
+        idempotencyKey: 'unit-memory-journey-0001'
+      }
+    })
+    expect(response.statusCode).toBe(200)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
   it('without an identity (controlled test profile) the unit is not involved', async () => {
     const app = buildServer()
     const spy = vi.spyOn(app.caseAuthority, 'runAuthorizedMutation')

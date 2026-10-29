@@ -18,7 +18,8 @@ import {
 } from '@cvg/shared'
 import type {
   JourneyRepository,
-  JourneyRepositoryPort
+  JourneyRepositoryPort,
+  JourneyTaskAuthorization
 } from './memory-repository.ts'
 
 export interface SecretaryJourneyRouteDependencies {
@@ -44,6 +45,18 @@ export interface SecretaryJourneyRouteDependencies {
     sessionId: string
   ) => Promise<void>
   /**
+   * SPEC 0262 — the same case policy, run in the SAME unit as the write
+   * (PostgreSQL: the creation transaction; memory: the authority queue).
+   * `write` receives the hook the PostgreSQL repository must run before it
+   * writes. Injected by the API; absent only in tests of the route.
+   */
+  runAuthorizedTaskWrite?: <T>(
+    identity: OperatorIdentity,
+    tenantId: TenantId,
+    sessionId: string,
+    write: (options: JourneyTaskAuthorization) => Promise<T>
+  ) => Promise<T>
+  /**
    * SPEC0251 I7 — error mapping of the journey task route: the case branch
    * ahead of the API's generic mapping, with the HTTP status. Injected by the API.
    */
@@ -66,6 +79,7 @@ export function registerSecretaryJourneyRoutes(
     resolveOptionalRequestTenant,
     statusCodeForError,
     authorizeTaskSession,
+    runAuthorizedTaskWrite,
     toSafeTaskError
   } = dependencies
 
@@ -389,11 +403,21 @@ export function registerSecretaryJourneyRoutes(
         )
       }
       if (identity) await authorizeTaskSession(identity, tenantId, sessionId)
-      const task = await journeys.createJourneyTask({
+      const taskInput = {
         ...(body as Parameters<JourneyRepository['createJourneyTask']>[0]),
         tenantId,
         auditContext: journeyAuditContext(identity, correlationId)
-      } as Parameters<JourneyRepository['createJourneyTask']>[0])
+      } as Parameters<JourneyRepository['createJourneyTask']>[0]
+      const task =
+        identity && runAuthorizedTaskWrite
+          ? await runAuthorizedTaskWrite(
+              identity,
+              tenantId,
+              sessionId,
+              async (authorization) =>
+                journeys.createJourneyTask(taskInput, authorization)
+            )
+          : await journeys.createJourneyTask(taskInput)
       reply.header('cache-control', 'no-store')
       return ok(task, correlationId)
     } catch (error) {

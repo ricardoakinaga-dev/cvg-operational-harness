@@ -1930,6 +1930,18 @@ export function buildServer(options: BuildServerOptions = {}) {
         kind: 'core_session',
         sessionId
       }),
+    // SPEC 0262: the case policy and the journey task share one unit.
+    runAuthorizedTaskWrite: (identity, tenantId, sessionId, write) =>
+      runAuthorizedCaseMutation(
+        caseRouteDeps,
+        identity,
+        tenantId,
+        { kind: 'core_session', sessionId },
+        (unit) =>
+          write(
+            unit.authorizeOnClient ? { authorize: unit.authorizeOnClient } : {}
+          )
+      ),
     toSafeTaskError: toSafeRouteError
   })
 
