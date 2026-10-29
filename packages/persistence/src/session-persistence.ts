@@ -2,6 +2,10 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { canonicalizeJson } from '@cvg/shared'
 import type {
+  SessionEventAppend,
+  SessionEventRead,
+  SessionEventStore,
+  SessionStream,
   SessionAccess,
   SessionCreateOptions,
   SessionEvent,
@@ -27,8 +31,12 @@ import {
   SessionStorageUnavailableError,
   SessionCommitUnknownError,
   SessionEventError,
+  materializeSessionEvent,
   sessionEventInputDigest,
   validateSessionEvent,
+  validateSessionEventAppend,
+  validateSessionEventRead,
+  validateSessionStream,
   validateSessionHeader
 } from '@cvg/harness'
 import type {
@@ -625,6 +633,16 @@ class PostgresSessionHandle implements SessionHandle {
     state.lease?.onLost((error) => {
       this.#lost ??= error
     })
+    if (state.access === 'write')
+      writerCapabilities.set(this, {
+        tenantId: state.options.tenantId,
+        sessionId: state.header.id,
+        active: () => !this.#closing && !this.#lost,
+        appendInput: (input, digest) =>
+          this.#admit(undefined, () => this.#appendInputAtomic(input, digest)),
+        read: (afterSequence, limit) =>
+          this.read(afterSequence, limit).then((r) => r.events)
+      })
   }
   get header(): SessionHeaderV1 {
     return structuredClone(this.#s.header)
@@ -896,7 +914,11 @@ class PostgresSessionHandle implements SessionHandle {
     )
   }
   #classify(error: unknown): Error {
-    if (error instanceof SessionPersistenceError) return error
+    if (
+      error instanceof SessionPersistenceError ||
+      error instanceof SessionEventError
+    )
+      return error
     const code = (error as { code?: unknown } | null)?.code
     if (
       typeof code !== 'string' ||
@@ -966,6 +988,84 @@ class PostgresSessionHandle implements SessionHandle {
   }
 
   /**
+   * The bridge primitive: lookup by event id, sequence assignment, INSERT and cursor advance
+   * in ONE transaction of the owner connection, on the same single queue as every other
+   * ticket. It never goes through the public read/append.
+   */
+  async #appendInputAtomic(
+    input: SessionEventAppend,
+    digest: string
+  ): Promise<SessionEvent> {
+    const schema = quote(this.#s.options.schemaName)
+    const tenant = this.#s.options.tenantId
+    return this.#transaction(async (lease) => {
+      const cursor = await lease.query<{
+        next_sequence: string
+        format_version: number
+      }>(
+        `SELECT next_sequence, format_version FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+        [tenant, this.id]
+      )
+      const row = cursor.rows[0]
+      if (!row)
+        throw new SessionEventError(
+          'session_not_open',
+          'Session stream is not open'
+        )
+      if (row.format_version !== input.formatVersion)
+        throw new SessionEventError(
+          'session_event_conflict',
+          'Session format differs'
+        )
+      const prior = await lease.query<EventRow>(
+        `SELECT record, input_digest FROM ${schema}.session_events WHERE tenant_id=$1 AND session_id=$2 AND event_id=$3`,
+        [tenant, this.id, input.eventId]
+      )
+      const previous = prior.rows[0]
+      if (previous) {
+        // An identical replay returns the earlier fact and mutates nothing.
+        if (previous.input_digest !== digest)
+          throw new SessionEventError(
+            'session_event_conflict',
+            'Session event identity was reused with different input'
+          )
+        const sequence = Number(
+          (previous.record as { sequence?: unknown } | null)?.sequence
+        )
+        return checkEvent(previous, this.id, tenant, sequence)
+      }
+      const next = Number(row.next_sequence)
+      const event = materializeSessionEvent(input, next)
+      await lease.query(
+        `INSERT INTO ${schema}.session_events (tenant_id,session_id,sequence,event_id,format_version,event_type,schema_fingerprint,input_digest,record)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+        [
+          tenant,
+          this.id,
+          event.sequence,
+          event.eventId,
+          event.formatVersion,
+          event.type,
+          event.schemaFingerprint,
+          digest,
+          canonicalizeJson(event)
+        ]
+      )
+      const advanced = await lease.query(
+        `UPDATE ${schema}.session_streams SET next_sequence=$3 WHERE tenant_id=$1 AND session_id=$2`,
+        [tenant, this.id, next + 1]
+      )
+      if (advanced.rowCount !== 1)
+        throw new SessionStorageUnavailableError(
+          'Session cursor was not advanced',
+          this.id
+        )
+      this.#highWater = Math.max(this.#highWater, next)
+      return event
+    })
+  }
+
+  /**
    * The durability barrier: an UPDATE of the cursor to its own value under ownership, with a
    * synchronous COMMIT. It writes WAL even when nothing changed logically; a read-only COMMIT
    * would not be a barrier.
@@ -1027,6 +1127,95 @@ class PostgresSessionHandle implements SessionHandle {
       this.#s.onClosed?.()
     }
     if (failure) throw failure
+  }
+}
+
+interface WriterCapability {
+  readonly tenantId: string
+  readonly sessionId: string
+  active(): boolean
+  appendInput(input: SessionEventAppend, digest: string): Promise<SessionEvent>
+  read(afterSequence: number, limit: number): Promise<readonly SessionEvent[]>
+}
+/** Private: only handles issued by this module's factory are ever in here. */
+const writerCapabilities = new WeakMap<object, WriterCapability>()
+
+/**
+ * SPEC 0221 §8: the existing SDK/kernel port over ONE genuine, still ACTIVE writer handle of
+ * this module's factory. Wrappers, Proxies, clones, external implementations, readers, and
+ * closed or lost handles get a synchronous TypeError and no IO. Several adapters for one
+ * handle share its single queue.
+ */
+export function sessionEventStoreForHandle(
+  handle: SessionHandle
+): SessionEventStore {
+  const capability =
+    typeof handle === 'object' && handle !== null
+      ? writerCapabilities.get(handle)
+      : undefined
+  if (!capability || !capability.active())
+    throw new TypeError(
+      'sessionEventStoreForHandle needs an active writer handle issued by createPostgresSessionPersistence'
+    )
+  return new HandleBackedSessionEventStore(capability)
+}
+
+function bridgeError(error: unknown): Error {
+  if (error instanceof SessionEventError) return error
+  const wrapped = new SessionEventError(
+    'session_storage_unavailable',
+    'Session storage is unavailable; retry only with the original event identity and input'
+  )
+  Object.defineProperty(wrapped, 'cause', { value: error })
+  return wrapped
+}
+
+class HandleBackedSessionEventStore implements SessionEventStore {
+  readonly #cap: WriterCapability
+  constructor(capability: WriterCapability) {
+    this.#cap = capability
+  }
+  #bind(tenantId: string, sessionId: string): void {
+    if (tenantId !== this.#cap.tenantId)
+      throw new SessionEventError(
+        'invalid_session_event',
+        'Tenant differs from bound session store'
+      )
+    if (sessionId !== this.#cap.sessionId)
+      throw new SessionEventError(
+        'session_not_open',
+        'Session stream is not open'
+      )
+    if (!this.#cap.active())
+      throw new SessionEventError(
+        'session_storage_unavailable',
+        'Session storage is unavailable; retry only with the original event identity and input'
+      )
+  }
+  async openSession(raw: SessionStream): Promise<SessionStream> {
+    const input = validateSessionStream(raw)
+    this.#bind(input.tenantId, input.sessionId)
+    return { ...input }
+  }
+  async append(raw: SessionEventAppend): Promise<SessionEvent> {
+    // Captured and validated before the first await.
+    const input = validateSessionEventAppend(raw)
+    this.#bind(input.tenantId, input.sessionId)
+    const digest = sessionEventInputDigest(input)
+    try {
+      return await this.#cap.appendInput(input, digest)
+    } catch (error) {
+      throw bridgeError(error)
+    }
+  }
+  async read(raw: SessionEventRead): Promise<readonly SessionEvent[]> {
+    const input = validateSessionEventRead(raw)
+    this.#bind(input.tenantId, input.sessionId)
+    try {
+      return await this.#cap.read(input.afterSequence, input.limit)
+    } catch (error) {
+      throw bridgeError(error)
+    }
   }
 }
 
