@@ -38,7 +38,34 @@ interface Fixture {
   authorityError?: { message: string; code?: string } | Error
   /** The store rejects the resume with this error (store.resolveApproval). */
   resumeError?: Error
+  /**
+   * SPEC 0274: which decision timestamps the approval row carries. Only read
+   * for FAILED/EXPIRED rows; undefined behaves as 'approved'.
+   */
+  decided?: 'approved' | 'rejected' | 'both' | 'none'
 }
+
+const isTerminal = (row: Fixture) =>
+  row.status === 'FAILED' || row.status === 'EXPIRED'
+const hasApprovedAt = (row: Fixture) =>
+  (row.decided ?? 'approved') === 'approved' || row.decided === 'both'
+const hasRejectedAt = (row: Fixture) =>
+  row.decided === 'rejected' || row.decided === 'both'
+/** The recorded decision, as the PostgreSQL data says it (not the SQL under test). */
+const recordedDecision = (row: Fixture) =>
+  row.status === 'REJECTED' ||
+  (row.status === 'EXPIRED' && hasRejectedAt(row) && !hasApprovedAt(row))
+    ? 'rejected'
+    : 'approved'
+/** FAILED needs approved_at alone; EXPIRED needs exactly one timestamp. */
+const isCoherentTerminal = (row: Fixture) =>
+  row.status === 'FAILED'
+    ? hasApprovedAt(row) && !hasRejectedAt(row)
+    : row.status === 'EXPIRED' && hasApprovedAt(row) !== hasRejectedAt(row)
+/** Anomalous: FAILED without approved_at or with rejected_at, or both timestamps. */
+const isIncoherentTerminal = (row: Fixture) =>
+  (row.status === 'FAILED' && !isCoherentTerminal(row)) ||
+  (row.status === 'EXPIRED' && hasApprovedAt(row) && hasRejectedAt(row))
 
 function envelopeFor(row: Fixture) {
   return {
@@ -50,7 +77,13 @@ function envelopeFor(row: Fixture) {
     decisionCommandKey: `cmd_${row.approvalId}`,
     policyVersion: 'policy-f08',
     payloadHash: 'c'.repeat(64),
-    correlationId: `req_${row.approvalId}`
+    correlationId: `req_${row.approvalId}`,
+    ...(isTerminal(row) && hasApprovedAt(row)
+      ? { approvedAt: '2026-10-28T10:00:00.000Z' }
+      : {}),
+    ...(isTerminal(row) && hasRejectedAt(row)
+      ? { rejectedAt: '2026-10-28T10:00:00.000Z' }
+      : {})
   }
 }
 
@@ -61,9 +94,38 @@ function interpretSelector(
   rows: Fixture[]
 ): Array<{ execution_id: string; approval_id: string; decision: string }> {
   const statuses = [
-    ...(/a\.status IN \(([^)]*)\)/.exec(sql)?.[1] ?? '').matchAll(/'(\w+)'/g)
+    ...(
+      /a\.status IN \(([^)]*)\)/.exec(sql.slice(sql.indexOf('WHERE')))?.[1] ??
+      ''
+    ).matchAll(/'(\w+)'/g)
   ].map((match) => match[1])
   const countMode = /SELECT count\(/.test(sql)
+  const incoherentCount = /AS incoherent/.test(sql)
+  const excludesTerminal =
+    /AND NOT \(a\.status IN \('FAILED', 'EXPIRED'\) AND NOT \(/.test(sql)
+  const failedRule =
+    /\(a\.status = 'FAILED' AND a\.approved_at IS NOT NULL AND a\.rejected_at IS NULL\) OR/.test(
+      sql
+    )
+  const expiredRule =
+    /\(a\.status = 'EXPIRED' AND \(a\.approved_at IS NULL\) <> \(a\.rejected_at IS NULL\)\)\)\)/.test(
+      sql
+    )
+  const sqlCoherent = (row: Fixture) =>
+    (failedRule && row.status === 'FAILED' && isCoherentTerminal(row)) ||
+    (expiredRule && row.status === 'EXPIRED' && isCoherentTerminal(row))
+  // Only the anti-join's own CASE counts: the SELECT list has a similar one.
+  const rejectedFromTimestamps =
+    /a\.status = 'EXPIRED' AND a\.rejected_at IS NOT NULL AND a\.approved_at IS NULL/.test(
+      /NOT EXISTS \(([\s\S]*?)\n\s*\)/.exec(sql)?.[1] ?? ''
+    )
+  const decisionExpected = (row: Fixture) =>
+    row.status === 'REJECTED' ||
+    (rejectedFromTimestamps &&
+      row.status === 'EXPIRED' &&
+      recordedDecision(row) === 'rejected')
+      ? 'rejected'
+      : 'approved'
   const [minParam, maxParam] = countMode
     ? [params[0], params[1]]
     : [params[1], params[2]]
@@ -86,7 +148,7 @@ function interpretSelector(
     (row.events ?? []).map((decision) => ({ row, decision }))
   )
   selected = selected.filter((row) => {
-    const expected = row.status === 'REJECTED' ? 'rejected' : 'approved'
+    const expected = decisionExpected(row)
     const hasEvent = everyEvent.some(
       (event) =>
         (!checksApproval || event.row === row) &&
@@ -105,6 +167,26 @@ function interpretSelector(
   ).filter((field) =>
     new RegExp(`COALESCE\\(a\\.${field}, ''\\) <> ''`).test(sql)
   )
+  if (incoherentCount) {
+    // The count query's own predicate decides what is counted.
+    const countsFailed =
+      /\(a\.status = 'FAILED' AND NOT \(a\.approved_at IS NOT NULL AND a\.rejected_at IS NULL\)\)/.test(
+        sql
+      )
+    const countsBoth =
+      /\(a\.status = 'EXPIRED' AND a\.approved_at IS NOT NULL AND a\.rejected_at IS NOT NULL\)/.test(
+        sql
+      )
+    const counted = selected.filter(
+      (row) =>
+        isIncoherentTerminal(row) &&
+        ((countsFailed && row.status === 'FAILED') ||
+          (countsBoth && row.status === 'EXPIRED'))
+    )
+    return [{ incoherent: counted.length }] as never
+  }
+  if (excludesTerminal)
+    selected = selected.filter((row) => !isTerminal(row) || sqlCoherent(row))
   const missing = (row: Fixture) =>
     row.envelope === false
       ? ('decision_command_key' as const)
@@ -126,14 +208,26 @@ function interpretSelector(
   if (order === 'DESC') selected.sort((a, b) => a.ageMs - b.ageMs)
   if (/LIMIT \$1/.test(sql)) selected = selected.slice(0, Number(params[0]))
   const mapsRejected =
-    /CASE WHEN a\.status = 'REJECTED' THEN 'REJECTED' ELSE 'APPROVED' END AS decision/.test(
+    /CASE WHEN \(a\.status = 'REJECTED'.* THEN 'REJECTED' ELSE 'APPROVED' END AS decision/.test(
+      sql
+    )
+  const mapsTerminalRejected =
+    mapsRejected &&
+    /AS decision/.test(sql) &&
+    /a\.status = 'EXPIRED' AND a\.rejected_at IS NOT NULL AND a\.approved_at IS NULL\)\) THEN 'REJECTED'/.test(
       sql
     )
   return selected.map((row) => ({
     execution_id: `exec_${row.approvalId}`,
     approval_id: row.approvalId,
     decision:
-      mapsRejected && row.status === 'REJECTED' ? 'REJECTED' : 'APPROVED'
+      mapsRejected &&
+      (row.status === 'REJECTED' ||
+        (mapsTerminalRejected &&
+          row.status === 'EXPIRED' &&
+          recordedDecision(row) === 'rejected'))
+        ? 'REJECTED'
+        : 'APPROVED'
   }))
 }
 
@@ -141,6 +235,7 @@ function harness(rows: Fixture[]) {
   const appended: string[] = []
   const failed: Array<{ approvalId: string; reason: string }> = []
   const incompleteCounts: number[] = []
+  const incoherentCounts: number[] = []
   const resumed: string[] = []
   const client = {
     query: async (text: string, params: unknown[] = []) => {
@@ -202,9 +297,10 @@ function harness(rows: Fixture[]) {
         )
       },
       onRowFailed: (failure) => failed.push(failure),
-      onIncompleteEnvelope: (count) => incompleteCounts.push(count)
+      onIncompleteEnvelope: (count) => incompleteCounts.push(count),
+      onIncoherentTerminal: (count) => incoherentCounts.push(count)
     })
-  return { tick, appended, failed, resumed, incompleteCounts }
+  return { tick, appended, failed, resumed, incompleteCounts, incoherentCounts }
 }
 
 const rows = (): Fixture[] => [
@@ -565,6 +661,173 @@ describe('F08d: erros tipados de domínio por linha (tipo e code, nunca a mensag
       }
     ])
     await expect(h.tick({})).rejects.toBe(plain)
+  })
+})
+
+const byAge = (all: Fixture[]) => (a: string, b: string) =>
+  all.find((r) => r.approvalId === b)!.ageMs -
+  all.find((r) => r.approvalId === a)!.ageMs
+
+describe('F08b / SPEC 0274: aprovações FAILED e EXPIRED (decisão pelos timestamps)', () => {
+  const terminals = (): Fixture[] => [
+    {
+      approvalId: 'f1',
+      status: 'FAILED',
+      ageMs: 10 * MIN,
+      decided: 'approved'
+    },
+    {
+      approvalId: 'f2',
+      status: 'EXPIRED',
+      ageMs: 15 * MIN,
+      decided: 'rejected'
+    },
+    // EXPIRED that expired undecided: normal, out of the batch, silent
+    { approvalId: 'f3', status: 'EXPIRED', ageMs: 20 * MIN, decided: 'none' },
+    // incoherent: both timestamps / FAILED without approval / FAILED rejected
+    { approvalId: 'f4', status: 'EXPIRED', ageMs: 25 * MIN, decided: 'both' },
+    {
+      approvalId: 'f9',
+      status: 'FAILED',
+      ageMs: 40 * MIN,
+      decided: 'rejected'
+    },
+    { approvalId: 'f10', status: 'FAILED', ageMs: 45 * MIN, decided: 'none' },
+    // the event already exists
+    {
+      approvalId: 'f5',
+      status: 'FAILED',
+      ageMs: 30 * MIN,
+      decided: 'approved',
+      events: ['approved']
+    },
+    {
+      approvalId: 'f6',
+      status: 'EXPIRED',
+      ageMs: 35 * MIN,
+      decided: 'rejected',
+      events: ['rejected']
+    },
+    // an "approved" event does not cover a rejected decision
+    {
+      approvalId: 'f7',
+      status: 'EXPIRED',
+      ageMs: 5 * MIN,
+      decided: 'rejected',
+      events: ['approved']
+    },
+    {
+      approvalId: 'f8',
+      status: 'EXPIRED',
+      ageMs: 12 * MIN,
+      decided: 'approved'
+    }
+  ]
+
+  it('recupera FAILED e EXPIRED decididos, do mais antigo ao mais novo, sem retomar a execução', async () => {
+    const h = harness(terminals())
+    expect(await h.tick({})).toBe(4)
+    expect(h.appended).toEqual(
+      ['f2', 'f8', 'f1', 'f7'].sort(byAge(terminals()))
+    )
+    expect(h.resumed).toEqual([])
+    expect(h.failed).toEqual([])
+  })
+
+  it('exclui as terminais sem decisão coerente do lote e conta só as incoerentes, sem ocupar vagas', async () => {
+    const h = harness(terminals())
+    expect(await h.tick({ limit: 2 })).toBe(2)
+    expect(h.appended).toEqual(['f2', 'f8'])
+    expect(h.failed).toEqual([])
+    // f4 (both), f9 (FAILED rejected) and f10 (FAILED without approval); not f3
+    expect(h.incoherentCounts).toEqual([3])
+  })
+
+  it('EXPIRED que venceu sem decisão sai do lote em silêncio', async () => {
+    const h = harness([
+      { approvalId: 'q1', status: 'EXPIRED', ageMs: 10 * MIN, decided: 'none' }
+    ])
+    expect(await h.tick({})).toBe(0)
+    expect(h.appended).toEqual([])
+    expect(h.failed).toEqual([])
+    expect(h.incoherentCounts).toEqual([])
+  })
+
+  it.each([
+    ['FAILED com rejected_at', 'FAILED', 'rejected'],
+    ['FAILED sem timestamp', 'FAILED', 'none'],
+    ['FAILED com os dois', 'FAILED', 'both'],
+    ['EXPIRED com os dois', 'EXPIRED', 'both']
+  ] as const)(
+    '%s é excluída do lote e contada como incoerente',
+    async (_name, status, decided) => {
+      const h = harness([
+        { approvalId: 'i1', status, ageMs: 10 * MIN, decided },
+        {
+          approvalId: 'i2',
+          status: 'FAILED',
+          ageMs: 5 * MIN,
+          decided: 'approved'
+        }
+      ])
+      expect(await h.tick({ limit: 1 })).toBe(1)
+      expect(h.appended).toEqual(['i2'])
+      expect(h.failed).toEqual([])
+      expect(h.incoherentCounts).toEqual([1])
+    }
+  )
+
+  it('o evento existente cobre só a própria decisão (approved não cobre rejected)', async () => {
+    const h = harness(terminals())
+    await h.tick({})
+    expect(h.appended).not.toContain('f5')
+    expect(h.appended).not.toContain('f6')
+    expect(h.appended).toContain('f7')
+  })
+
+  it('linha incoerente com envelope incompleto conta só como incoerente', async () => {
+    const h = harness([
+      {
+        approvalId: 'g1',
+        status: 'FAILED',
+        ageMs: 10 * MIN,
+        decided: 'none',
+        envelope: false
+      }
+    ])
+    await h.tick({})
+    expect(h.incoherentCounts).toEqual([1])
+    expect(h.incompleteCounts).toEqual([])
+  })
+
+  it('sem linhas incoerentes não há registro de contagem', async () => {
+    const h = harness([terminals()[0]!])
+    await h.tick({})
+    expect(h.incoherentCounts).toEqual([])
+  })
+
+  it('a contagem usa a mesma janela do lote (piso e teto)', async () => {
+    const h = harness([
+      { approvalId: 'w1', status: 'FAILED', ageMs: 5_000, decided: 'none' },
+      { approvalId: 'w2', status: 'FAILED', ageMs: 10 * MIN, decided: 'none' },
+      {
+        approvalId: 'w3',
+        status: 'FAILED',
+        ageMs: 48 * 60 * MIN,
+        decided: 'none'
+      }
+    ])
+    await h.tick({})
+    expect(h.incoherentCounts).toEqual([1])
+  })
+
+  it('o status terminal não muda a seleção dos outros estados', async () => {
+    const h = harness([...rows(), ...terminals()])
+    await h.tick({})
+    expect(h.appended).toEqual(
+      expect.arrayContaining(['x9', 'x8', 'x2', 'x1', 'f1', 'f2', 'f8', 'f7'])
+    )
+    expect(h.appended).toHaveLength(8)
   })
 })
 
