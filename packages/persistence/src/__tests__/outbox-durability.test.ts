@@ -8,7 +8,10 @@ import {
   runPostgresMigrations
 } from '../postgres.ts'
 import { renewClaim } from '../postgres-outbox.ts'
-import { TENANT_SCHEMA_TABLES } from '../tenant-schema.ts'
+import {
+  TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges
+} from '../tenant-schema.ts'
 
 const databaseUrl = process.env.TEST_DATABASE_URL
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000101'
@@ -553,7 +556,7 @@ describe('SPEC0249 durable outbox claim fencing (minimal role)', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}."${table}" TO ${role}`
       )
     }
     const url = new URL(databaseUrl as string)

@@ -42,6 +42,9 @@ describe('api observability', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Aprovacao ficticia',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<{ id: string }>

@@ -12,7 +12,10 @@ import {
 } from '../operational-execution-postgres.ts'
 import { readPostgresMigrationSql, runPostgresMigrations } from '../postgres.ts'
 import type { PostgresPoolLike } from '../tenant-scoped-postgres.ts'
-import { TENANT_SCHEMA_TABLES } from '../tenant-schema.ts'
+import {
+  TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges
+} from '../tenant-schema.ts'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
 const describeWithPostgres = testDatabaseUrl ? describe : describe.skip
@@ -291,7 +294,7 @@ describeWithPostgres('SPEC0249 bounded crash recovery (minimal role)', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${role}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}."${table}" TO ${role}`
       )
     }
     const url = new URL(testDatabaseUrl)

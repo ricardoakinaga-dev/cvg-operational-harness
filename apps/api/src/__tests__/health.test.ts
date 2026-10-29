@@ -117,6 +117,9 @@ describe('api runtime', () => {
         proposedAction: 'create_appointment_draft',
         summary: 'Horario sugerido',
         riskLevel: 'medium'
+      },
+      headers: {
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
       }
     })
     const approvalBody = approval.json() as Envelope<ApprovalResult>

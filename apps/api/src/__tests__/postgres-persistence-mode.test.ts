@@ -21,6 +21,7 @@ import {
   runPostgresMigrations,
   TENANT_ONLY_TABLES,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   PostgresControlPlaneRepository,
   TenantScopedPostgresRuntimeRepository,
   type PostgresPoolLike,
@@ -355,7 +356,8 @@ describe('api PostgreSQL persistence mode', () => {
       '0026_rate_limit_key_hardening',
       '0027_worker_operations',
       // SPEC0176: the case assignment schema is part of the verified set.
-      '0029_case_assignment_authorization'
+      '0029_case_assignment_authorization',
+      '0030_api_creation_receipts'
     ] as const
     const rows: Array<{
       version: string
@@ -1022,7 +1024,8 @@ describe('api PostgreSQL persistence mode', () => {
               table_name === 'worker_heartbeats' ||
               table_name === 'kernel_pause_switches' ||
               // SPEC0176 case tables are tenant-only (inventory).
-              SPEC0176_CASE_TABLES.includes(table_name)
+              SPEC0176_CASE_TABLES.includes(table_name) ||
+              table_name === 'api_creation_receipts'
                 ? []
                 : [
                     { table_name, column_name: 'tenant_isolation_quarantined' }
@@ -1091,7 +1094,8 @@ describe('api PostgreSQL persistence mode', () => {
               tablename === 'journey_appointment_drafts' ||
               tablename === 'worker_heartbeats' ||
               tablename === 'kernel_pause_switches' ||
-              SPEC0176_CASE_TABLES.includes(tablename)
+              SPEC0176_CASE_TABLES.includes(tablename) ||
+              tablename === 'api_creation_receipts'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')",
             with_check:
@@ -1106,7 +1110,8 @@ describe('api PostgreSQL persistence mode', () => {
               tablename === 'journey_appointment_drafts' ||
               tablename === 'worker_heartbeats' ||
               tablename === 'kernel_pause_switches' ||
-              SPEC0176_CASE_TABLES.includes(tablename)
+              SPEC0176_CASE_TABLES.includes(tablename) ||
+              tablename === 'api_creation_receipts'
                 ? "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
                 : "tenant_isolation_quarantined = false AND tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
           }))
@@ -1776,7 +1781,7 @@ describe('api PostgreSQL persistence mode', () => {
         await admin.query(`GRANT USAGE ON SCHEMA ${schemaName} TO ${roleName}`)
         for (const table of protectedTables) {
           await admin.query(
-            `GRANT SELECT, INSERT, UPDATE ON ${schemaName}.${table} TO ${roleName}`
+            `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schemaName}.${table} TO ${roleName}`
           )
         }
         await admin.query(
@@ -1993,6 +1998,9 @@ describe('api PostgreSQL persistence mode', () => {
             proposedAction: 'create_appointment_draft',
             summary: 'Aprovacao ficticia em postgres',
             riskLevel: 'medium'
+          },
+          headers: {
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
           }
         })
         const approvalBody = approval.json() as Envelope<{ id: string }>
@@ -2222,7 +2230,10 @@ describe('api PostgreSQL persistence mode', () => {
         await app.inject({
           method: 'POST',
           url: '/v1/approvals',
-          headers: { 'x-tenant-id': postgresTenantA },
+          headers: {
+            'x-tenant-id': postgresTenantA,
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          },
           payload: {
             sessionId: firstSessionId,
             proposedAction: 'create_appointment_draft',
@@ -2233,7 +2244,10 @@ describe('api PostgreSQL persistence mode', () => {
         await app.inject({
           method: 'POST',
           url: '/v1/approvals',
-          headers: { 'x-tenant-id': postgresTenantB },
+          headers: {
+            'x-tenant-id': postgresTenantB,
+            'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+          },
           payload: {
             sessionId: otherSessionId,
             proposedAction: 'create_appointment_draft',
@@ -2492,7 +2506,7 @@ async function withServingReplaySchema(
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtimeRole}`)
     for (const table of [...TENANT_SCHEMA_TABLES, 'webhook_replay_events']) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}.${table} TO ${runtimeRole}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}.${table} TO ${runtimeRole}`
       )
     }
     await admin.query(

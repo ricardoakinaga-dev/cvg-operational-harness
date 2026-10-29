@@ -23,7 +23,10 @@ async function createPendingApproval(app: ReturnType<typeof buildServer>) {
   const response = await app.inject({
     method: 'POST',
     url: '/v1/approvals',
-    headers: { 'x-tenant-id': TENANT_ID },
+    headers: {
+      'x-tenant-id': TENANT_ID,
+      'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    },
     payload: {
       sessionId: created.session.id,
       proposedAction: 'controlled_action',

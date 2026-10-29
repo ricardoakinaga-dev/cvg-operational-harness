@@ -79,6 +79,9 @@ async function createEvidenceFixture(app: ReturnType<typeof buildServer>) {
       proposedAction: 'create_appointment_draft',
       summary: 'Apenas rascunho controlado',
       riskLevel: 'medium'
+    },
+    headers: {
+      'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
     }
   })
   const approvalBody = approval.json() as Envelope<{ id: string }>

@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { AuditPanel } from './features/audit/index.tsx'
 import { ApprovalsPanel } from './features/approvals/index.tsx'
 import { ConversationsPanel } from './features/conversations/index.tsx'
+import {
+  beginLogicalOperation,
+  resolveLogicalOperation
+} from './api/logical-operation.ts'
 import { TasksPanel } from './features/tasks/index.tsx'
 import { JourneysPanel } from './features/journeys/index.tsx'
 import { PlatformPanel } from './features/platform/index.tsx'
@@ -178,6 +182,8 @@ export function App({
   const [conversations, setConversations] = useState<
     PanelState<ConversationView[]>
   >(loading([]))
+  // SPEC 0257 §7: synchronous guard, so a double click cannot dispatch twice.
+  const auditExportInFlight = useRef(false)
   const [conversationPageInfo, setConversationPageInfo] =
     useState<ListPageInfo | null>(null)
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] =
@@ -1040,13 +1046,38 @@ export function App({
     if (!selectedSessionId) return
     if (!canReviewAuditEvidence(identity.role)) return
 
+    // SPEC 0257 §7: one logical operation per tenant/operator/session/action.
+    // Block a second click while a request is in flight.
+    if (auditExportInFlight.current) return
+    const operationScope = {
+      tenantId: identity.tenantId,
+      operatorId: identity.operatorId,
+      sessionId: selectedSessionId,
+      action: 'audit_evidence_export_review'
+    }
+    let operation
+    try {
+      operation = beginLogicalOperation(operationScope)
+    } catch {
+      setAuditEvidenceExportMessage(
+        'Nao foi possivel guardar a operacao neste navegador; habilite o armazenamento da sessao e tente de novo.'
+      )
+      return
+    }
+    auditExportInFlight.current = true
     setIsRequestingAuditEvidenceExport(true)
     setAuditEvidenceExportMessage(null)
     try {
-      await apiClient.requestAuditEvidenceExportApproval({
+      const created = await apiClient.requestAuditEvidenceExportApproval({
         identity,
-        sessionId: selectedSessionId
+        sessionId: selectedSessionId,
+        idempotencyKey: operation.key
       })
+      try {
+        resolveLogicalOperation(operationScope, created.id)
+      } catch {
+        // The request was accepted; a registry failure only affects a next one.
+      }
       await refreshApprovals(scope)
       if (!isCurrentViewScope(scope)) return
       setAuditEvidenceExportMessage(
@@ -1058,6 +1089,7 @@ export function App({
         'Erro ao solicitar aprovacao de export controlado.'
       )
     } finally {
+      auditExportInFlight.current = false
       if (isCurrentViewScope(scope)) setIsRequestingAuditEvidenceExport(false)
     }
   }

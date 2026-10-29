@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto'
 import {
   TENANT_ONLY_TABLES,
+  TENANT_READ_INSERT_TABLES,
   TENANT_SCHEMA_TABLES,
   readPostgresMigrationSql,
   type PostgresQueryable
@@ -87,7 +88,8 @@ const tenantIsolationMigrationVersions = [
   '0025_webhook_replay_fencing',
   '0026_rate_limit_key_hardening',
   '0027_worker_operations',
-  '0029_case_assignment_authorization'
+  '0029_case_assignment_authorization',
+  '0030_api_creation_receipts'
 ] as const
 
 const tenantIsolationRequiredConstraints = [
@@ -1491,7 +1493,10 @@ export async function assertRuntimeRoleIsLeastPrivilege(
         table.owner === role.rolname ||
         !table.can_select ||
         !table.can_insert ||
-        !table.can_update ||
+        // SPEC 0257: an append-only table must NOT grant UPDATE.
+        (TENANT_READ_INSERT_TABLES.has(table.relname)
+          ? table.can_update
+          : !table.can_update) ||
         table.can_delete ||
         table.can_truncate ||
         table.can_trigger ||

@@ -26,6 +26,7 @@ import {
   PostgresCaseAuthority,
   PostgresRuntimeRepository,
   TENANT_SCHEMA_TABLES,
+  tenantRuntimeGrantPrivileges,
   runInitialPostgresMigration,
   runPostgresMigrations,
   withTenantContext
@@ -258,7 +259,15 @@ function post(
   headers: Record<string, string>,
   payload: Record<string, unknown>
 ) {
-  return server.inject({ method: 'POST', url, headers, payload })
+  // SPEC 0257: the approval creation route requires one Idempotency-Key.
+  const withKey =
+    url === '/v1/approvals'
+      ? {
+          ...headers,
+          'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+        }
+      : headers
+  return server.inject({ method: 'POST', url, headers: withKey, payload })
 }
 
 function patchTask(
@@ -347,7 +356,7 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${runtimeRole}`)
     for (const table of TENANT_SCHEMA_TABLES) {
       await admin.query(
-        `GRANT SELECT, INSERT, UPDATE ON ${schema}."${table}" TO ${runtimeRole}`
+        `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${schema}."${table}" TO ${runtimeRole}`
       )
     }
     await admin.query(

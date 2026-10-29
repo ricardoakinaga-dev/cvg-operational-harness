@@ -63,7 +63,10 @@ async function seed(app: App, tenantId: string, tasks: number, approvals = 0) {
     const created = await app.inject({
       method: 'POST',
       url: '/v1/approvals',
-      headers: { 'x-tenant-id': tenantId },
+      headers: {
+        'x-tenant-id': tenantId,
+        'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      },
       payload: {
         sessionId: session.id,
         proposedAction: 'synthetic_review',

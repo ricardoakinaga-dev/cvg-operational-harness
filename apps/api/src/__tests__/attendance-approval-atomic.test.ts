@@ -29,7 +29,10 @@ async function setup() {
   const response = await app.inject({
     method: 'POST',
     url: '/v1/approvals',
-    headers,
+    headers: {
+      ...headers,
+      'idempotency-key': `approval-key-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    },
     payload: {
       sessionId: session.id,
       proposedAction: 'synthetic_review',

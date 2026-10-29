@@ -17,7 +17,11 @@
  * connection strings.
  */
 import pg from 'pg'
-import { TENANT_SCHEMA_TABLES, runPostgresMigrations } from '@cvg/persistence'
+import {
+  TENANT_SCHEMA_TABLES,
+  runPostgresMigrations,
+  tenantRuntimeGrantPrivileges
+} from '@cvg/persistence'
 
 const ROLE_PATTERN = /^[a-z][a-z0-9_]{0,62}$/
 
@@ -72,7 +76,7 @@ async function main() {
       await client.query(`GRANT USAGE ON SCHEMA ${data} TO ${runtime}`)
       for (const table of TENANT_SCHEMA_TABLES) {
         await client.query(
-          `GRANT SELECT, INSERT, UPDATE ON ${data}."${table}" TO ${runtime}`
+          `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${data}."${table}" TO ${runtime}`
         )
       }
       await client.query(
