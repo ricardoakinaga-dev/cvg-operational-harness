@@ -199,6 +199,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Checkpoint antes da requisição ao modelo, antes de efeito externo e antes do próximo passo; tentativa de retry gravada antes do backoff; retomada pública em PostgreSQL.
 - Depende de: PAR-K01.
 - Aceite: Crash entre modelo e ferramenta, e entre ferramenta e resultado, não repete efeito em PostgreSQL real; a tentativa de retry aparece no log antes da espera.
+- AUD0625 (29/10/2026): fase 1 da SPEC 0225 entregue localmente (journal completo, migration 0033, v1 opt-in desligada; ver `AUD0625-PAR-K03-D9-20261029/RESULT.md`). Estado segue PARTIAL. **PAR-K03b** (cartão a criar, dono a definir): integrar o BUILD 0224 completo no estado atual (checkpoint V2, reconciliar com F18 no `iterative-runtime`) e fechar J09–J11; exige nova decisão humana (o recibo 17 cobre só `complete-json.ts`). J13 depende de 0217/K01.
 
 ### PAR-K04 — Lifecycle de capabilities com quiescência
 

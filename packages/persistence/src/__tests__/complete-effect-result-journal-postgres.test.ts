@@ -670,6 +670,136 @@ describe('SPEC 0225 f3 — journal adapter, storage version 1', () => {
     )
   })
 
+  describe('readiness refuses an unqualified environment', () => {
+    async function scratchSchema(bodyPrincipal: string): Promise<string> {
+      const name = `cvg_j225r_${Date.now()}_${randomBytes(3).toString('hex')}`
+      await runPostgresMigrations(admin, { schemaName: name })
+      await admin.query(`SET search_path TO "${schema}"`)
+      await admin.query(`GRANT USAGE ON SCHEMA "${name}" TO ${role}`)
+      await admin.query(
+        `GRANT SELECT,INSERT,UPDATE ON "${name}".operational_effect_journal TO ${role}`
+      )
+      await admin.query(
+        `GRANT SELECT ON "${name}".schema_migrations TO ${role}`
+      )
+      await admin.query(renderJournalResultActivation(name, bodyPrincipal).sql)
+      return name
+    }
+    async function asService<T>(
+      name: string,
+      run: (j: PostgresOperationalEffectJournal) => Promise<T>
+    ): Promise<T> {
+      const scoped = new Pool({
+        ...serviceUrl(),
+        user: role,
+        password,
+        max: 1,
+        options: `-c search_path=${name}`
+      })
+      try {
+        return await run(
+          new PostgresOperationalEffectJournal(scoped, {
+            resultStorage: { version: 1 }
+          })
+        )
+      } finally {
+        await scoped.end()
+      }
+    }
+    itWithPostgres(
+      'a guard activated for a different principal does not serve this one',
+      async () => {
+        const name = await scratchSchema('someone_else')
+        try {
+          expect(
+            await asService(name, (j) => failure(j.get(tenant, 'x')))
+          ).toBe('JOURNAL_STORAGE_MODE')
+        } finally {
+          await admin.query(`DROP SCHEMA "${name}" CASCADE`)
+        }
+      }
+    )
+    itWithPostgres(
+      'a dropped storage constraint reprobates the activation',
+      async () => {
+        const name = await scratchSchema(role)
+        try {
+          expect(await asService(name, (j) => j.get(tenant, 'x'))).toBeNull()
+          await admin.query(
+            `ALTER TABLE "${name}".operational_effect_journal
+             DROP CONSTRAINT journal_result_storage_envelope`
+          )
+          expect(
+            await asService(name, (j) => failure(j.get(tenant, 'x')))
+          ).toBe('JOURNAL_STORAGE_MODE')
+        } finally {
+          await admin.query(`DROP SCHEMA "${name}" CASCADE`)
+        }
+      }
+    )
+    itWithPostgres(
+      'another superuser login makes the table reachable and is refused',
+      async () => {
+        const name = `j225s_${randomBytes(4).toString('hex')}`
+        await admin.query(
+          `CREATE ROLE ${name} LOGIN SUPERUSER PASSWORD '${randomBytes(8).toString('hex')}'`
+        )
+        try {
+          expect(await failure(journal(1).get(tenant, 'x'))).toBe(
+            'JOURNAL_STORAGE_MODE'
+          )
+        } finally {
+          await admin.query(`DROP ROLE ${name}`)
+        }
+        expect(await journal(1).get(tenant, 'x')).toBeNull()
+      }
+    )
+    itWithPostgres(
+      'a same-named TEMP table in the serving session is refused, not trusted',
+      async () => {
+        // A temp table that predates the revoke: readiness must not resolve to it.
+        const db = serviceUrl().database
+        await admin.query(`GRANT TEMPORARY ON DATABASE "${db}" TO ${role}`)
+        await pool.query('CREATE TEMP TABLE operational_effect_journal (x int)')
+        await admin.query(`REVOKE TEMPORARY ON DATABASE "${db}" FROM ${role}`)
+        try {
+          expect(await failure(journal(1).get(tenant, 'x'))).toBe(
+            'JOURNAL_STORAGE_MODE'
+          )
+        } finally {
+          await pool.query('DROP TABLE pg_temp.operational_effect_journal')
+        }
+        expect(await journal(1).get(tenant, 'x')).toBeNull()
+      }
+    )
+    itWithPostgres(
+      'a foreign session is invisible to the unprivileged principal: exclusion rests on the ACL checks',
+      async () => {
+        // pg_stat_activity masks datname/backend_type of other users' sessions for a
+        // role without pg_read_all_stats, so readiness cannot count them. The
+        // operator-side activation procedure must check sessions as the owner.
+        const name = `j225c_${randomBytes(4).toString('hex')}`
+        const pw = randomBytes(8).toString('hex')
+        await admin.query(`CREATE ROLE ${name} LOGIN PASSWORD '${pw}'`)
+        const foreign = new Client({
+          ...serviceUrl(),
+          user: name,
+          password: pw
+        })
+        await foreign.connect()
+        try {
+          expect(await journal(1).get(tenant, 'x')).toBeNull()
+          await expect(
+            foreign.query('SELECT * FROM operational_effect_journal')
+          ).rejects.toBeDefined()
+        } finally {
+          await foreign.end()
+          await admin.query(`DROP ROLE ${name}`)
+        }
+      }
+    )
+  })
+
   describe('mode/readiness mismatch fails before any write', () => {
     itWithPostgres(
       'the legacy adapter is refused on an activated schema',
@@ -706,6 +836,7 @@ describe('SPEC 0225 f3 — journal adapter, storage version 1', () => {
       async () => {
         const plain = `cvg_j225p_${Date.now()}_${randomBytes(3).toString('hex')}`
         await runPostgresMigrations(admin, { schemaName: plain })
+        await admin.query(`SET search_path TO "${schema}"`)
         try {
           await admin.query(`GRANT USAGE ON SCHEMA "${plain}" TO ${role}`)
           await admin.query(
