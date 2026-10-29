@@ -1086,22 +1086,51 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
         })
         expect(inbound.statusCode).toBe(200)
         const sessionId = inbound.json().data.sessionId as string
-        const task = await post(
+        // SPEC 0257: the shared-client profile has no exclusive transactional
+        // pool, so the creation POSTs answer 503 before any write; the rows
+        // are seeded through the repository for the rest of this scenario.
+        const refusedTask = await post(
           seedServer,
           '/v1/tasks',
           { 'x-tenant-id': legacyTenant },
           taskPayload(sessionId)
         )
-        expect(task.statusCode).toBe(200)
-        const taskId = task.json().data.id as string
-        const approval = await post(
+        expect(refusedTask.statusCode).toBe(503)
+        const refusedApproval = await post(
           seedServer,
           '/v1/approvals',
           { 'x-tenant-id': legacyTenant },
           approvalPayload(sessionId)
         )
-        expect(approval.statusCode).toBe(200)
-        const approvalId = approval.json().data.id as string
+        expect(refusedApproval.statusCode).toBe(503)
+        const repository = new PostgresRuntimeRepository(client)
+        const seededTask = await repository.createTask(
+          {
+            sessionId,
+            title: 'Tarefa legada',
+            description: 'Semeada pelo repositorio',
+            priority: 'medium',
+            source: 'legacy-seed',
+            idempotencyKey: 'legacy-seed-task-0001'
+          },
+          legacyTenant
+        )
+        const taskId = seededTask.id
+        const seededApproval = await repository.saveApproval(
+          {
+            id: `approval_${randomUUID()}`,
+            sessionId,
+            proposedAction: 'create_appointment_draft',
+            summary: 'Aprovacao legada semeada',
+            riskLevel: 'medium',
+            status: 'pending',
+            decidedBy: null,
+            decidedAt: null,
+            createdAt: new Date()
+          },
+          legacyTenant
+        )
+        const approvalId = seededApproval.id
         const h = headersFor(legacyTenant)
         const state = async () =>
           JSON.stringify(
@@ -1203,13 +1232,14 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
           const approvals = await readList(server, '/v1/approvals', headers)
           expect(approvals.ids).toContain(approvalId)
         }
+        // SPEC 0257: the shared-client profile refuses creation, Supervisor included.
         const created = await post(
           server,
           '/v1/approvals',
           h.supervisor,
           approvalPayload(sessionId)
         )
-        expect(created.statusCode).toBe(200)
+        expect(created.statusCode).toBe(503)
         const decided = await post(
           server,
           `/v1/approvals/${approvalId}/decision`,

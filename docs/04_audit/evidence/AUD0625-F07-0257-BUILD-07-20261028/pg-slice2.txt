@@ -1,0 +1,88 @@
+
+ RUN  v4.1.12 /mnt/dados/cvg-work/aud0625-0257-07
+
+ ❯ apps/api/src/__tests__/postgres-persistence-mode.test.ts (71 tests | 6 failed) 226210ms
+     × runs inbound, timeline, task, approval and audit endpoints against PostgreSQL when configured 658ms
+     × keeps PostgreSQL inbound idempotency isolated by tenant 604ms
+     × blocks serving boot after event key CHECK becomes permissive 15002ms
+     × blocks serving boot after status CHECK becomes permissive 15001ms
+     × blocks serving boot after created_at becomes nullable 15000ms
+     × blocks serving boot after user trigger suppresses reservation 15001ms
+ ❯ apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts (5 tests | 1 failed) 15478ms
+     × S6 — legacy 0000 schema without 0029: Operator/Approver 503, Supervisor creates and decides 1885ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts > SPEC0251 PostgreSQL case scope of tasks and approvals > S6 — legacy 0000 schema without 0029: Operator/Approver 503, Supervisor creates and decides
+AssertionError: expected 503 to be 200 // Object.is equality
+
+- Expected
++ Received
+
+- 200
++ 503
+
+ ❯ apps/api/src/__tests__/case-scope-tasks-approvals-postgres.test.ts:1095:33
+    1093|           taskPayload(sessionId)
+    1094|         )
+    1095|         expect(task.statusCode).toBe(200)
+       |                                 ^
+    1096|         const taskId = task.json().data.id as string
+    1097|         const approval = await post(
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  apps/api/src/__tests__/postgres-persistence-mode.test.ts > api PostgreSQL persistence mode > runs inbound, timeline, task, approval and audit endpoints against PostgreSQL when configured
+TypeError: Cannot read properties of null (reading 'id')
+ ❯ apps/api/src/__tests__/postgres-persistence-mode.test.ts:2012:51
+    2010|         const scopedDecision = await app.inject({
+    2011|           method: 'POST',
+    2012|           url: `/v1/approvals/${approvalBody.data.id}/decision`,
+       |                                                   ^
+    2013|           headers: {
+    2014|             'x-operator-id': 'approver.postgres',
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  apps/api/src/__tests__/postgres-persistence-mode.test.ts > api PostgreSQL persistence mode > keeps PostgreSQL inbound idempotency isolated by tenant
+AssertionError: expected [] to have a length of 1 but got +0
+
+- Expected
++ Received
+
+- 1
++ 0
+
+ ❯ apps/api/src/__tests__/postgres-persistence-mode.test.ts:2311:36
+    2309|         expect(otherTenant.statusCode).toBe(200)
+    2310|         expect(otherTenant.json().data.accepted).toBe(true)
+    2311|         expect(tasksA.json().data).toHaveLength(1)
+       |                                    ^
+    2312|         expect(tasksB.json().data).toHaveLength(1)
+    2313|         expect(approvalsA.json().data).toHaveLength(1)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  apps/api/src/__tests__/postgres-persistence-mode.test.ts > SPEC 0158 serving-role webhook replay preflight > blocks serving boot after event key CHECK becomes permissive
+ FAIL  apps/api/src/__tests__/postgres-persistence-mode.test.ts > SPEC 0158 serving-role webhook replay preflight > blocks serving boot after status CHECK becomes permissive
+ FAIL  apps/api/src/__tests__/postgres-persistence-mode.test.ts > SPEC 0158 serving-role webhook replay preflight > blocks serving boot after created_at becomes nullable
+ FAIL  apps/api/src/__tests__/postgres-persistence-mode.test.ts > SPEC 0158 serving-role webhook replay preflight > blocks serving boot after user trigger suppresses reservation
+Error: Test timed out in 15000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ apps/api/src/__tests__/postgres-persistence-mode.test.ts:2696:33
+    2694|   ] as const
+    2695|
+    2696|   itWithPostgres.each(mutations)(
+       |                                 ^
+    2697|     'blocks serving boot after %s',
+    2698|     async (label, mutation) => {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+
+ Test Files  2 failed | 8 passed (10)
+      Tests  7 failed | 129 passed (136)
+   Start at  22:17:28
+   Duration  390.87s (transform 2.98s, setup 0ms, import 6.73s, tests 378.85s, environment 4.16s)
+
+exit=1
