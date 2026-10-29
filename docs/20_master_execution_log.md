@@ -1,16 +1,19 @@
 # 29/10/2026 — terceira onda AUD0625 (Claude D9)
 
-- Branch `claude/aud0625-wave3`, local e sem push, sobre `claude/aud0625-wave2` @ `8f511551`. Depende do merge do #32 e da onda 2 (PR da onda 2 abre depois do merge do #32). Produção `NO_GO`.
+- Branch `claude/aud0625-wave3`, local e sem push, sobre `claude/aud0625-wave2` @ `8f511551`, já com a `main` (squash do #31, `bee31e75`) via `3d6da1b6`. Depende do merge do #32 e da onda 2 (PR da onda 2 abre depois do merge do #32). Produção `NO_GO`.
 - Decisões do Ricardo:
   - [human-decisions-8](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-8.json): SPEC 0281, D1 = recusa total.
   - [human-decisions-9](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-9.json): SPEC 0282, D3 = A (teto e `Retry-After`, com a migration 0031), D1 = teto 5 e D2 = `Retry-After` cortado em 5 min.
+  - [human-decisions-10](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-10.json): SPEC 0271, D1 = A (filtro na 0021 mais aceitação do checksum anterior num ponto único) e D2 = não nesta SPEC.
 - Frentes (D9, Claude Sonnet):
   - 0281, F03c (P2): `exam.upload` recusa arquivo com mais de um hardlink (`nlink > 1` no descritor, antes de ler e antes do journal). BUILD `076c160f` (fase 1 `868ff63e`), mutações U1–U5 mortas, `packages/channel-gateway` 239/239. Revisão DF `APPROVE` (`83e5d062`).
   - 0282, F12c: o 429 respeita `Retry-After` (segundos e data HTTP, corte de 5 min) e as tentativas têm teto 5 (`attempts_exhausted`, sem rede). Journals de memória, arquivo e PostgreSQL (incluindo o `#decideReserve` privado), migration aditiva `0031_channel_effect_retry_not_before`, adaptadores Chatwoot e Evolution. BUILD `49bf28e5` (fase 1 `ab790b1c`), PG 16/16 no journal e 86/86 em modo PG, inventário e outbox; mutações mortas (Q14 equivalente). Revisão DF `APPROVE` (`83e5d062`), sem achados.
   - F02, P3-1/P3-2 (Codex AUD0625): só teste novo `tests/aud0625-process-profile-lifecycle.test.ts` (`47611886`, sem mudar runtime). Revisão D9 `APPROVE` (`4aa4d764`): os dois mutantes morrem (sem `launch.close()` vaza 10 FDs por lançamento; `allowNetwork` aceito).
+  - 0271, F15 (D9; SPEC e dona DF): o pré-check da migration 0021 só conta o que o índice deduplica (`approvalId` e `decision` não nulos), então eventos de atendimento (`NULL/NULL`) deixam de abortar a migration e de travar 0022–0031 em bancos de homologação e ensaio. `supersededMigrationChecksums` aceita o checksum anterior da 0021 (`038de370…`) no runner e nos preflights da API e do worker, sem regravar nada. BUILD `5692dc57` (fase 1 `43deb9de`), PG 146/146, mutações Q1–Q9 mortas, SKIP-PG-019 e SKIP-PG-043 religados. Revisão DF `APPROVE` (`2cc9f86c`). O terceiro comparador é o preflight do worker, não o baseline.
+  - 0257, O1 e O2 do console (D9, T2): depois de um 2xx, a falha do registro avisa o operador e mantém a chave (replay sem duplicar); um JSON corrompido no `sessionStorage` é descartado e regenerado. `20f0040d`, `apps/web` 174/174. Revisão DF `APPROVE` (`2cc9f86c`).
   - Revisão DF da 0262 fatia 1 (`331b3f59`) e confirmação (`aa353efe`): só os dois commits de docs (`REVIEW.md`), por cherry-pick; o código da 0262 fica para a onda da sessão 07.
 - Limite conhecido (0278 e 0281): a decisão por `nlink` no descritor fecha o hardlink já existente, mas não vence um escritor concorrente do workspace que **remova o nome entre o `open` e o `fstat`**: o inode aberto fica só com o nome de fora e a conferência passa (sonda `race-probe-out.txt`: `SUCCEEDED`, conteúdo de fora enviado). Reconferir o nome depois da leitura ainda é burlável por religação. A defesa real é o isolamento do PROCESS (F02/X01), que impede o payload de ver o arquivo de fora e de agir no workspace; F02/X01 seguem abertos.
-- Gates na onda 3, com Node 22: typecheck 0; docs:check-links OK; vitest focado de `packages/channel-gateway` e `packages/sandbox` (resultado no commit); gitleaks 8.28.0 sobre `wave2..wave3`: 6 commits, nenhum achado.
+- Gates na onda 3, com Node 22: typecheck 0; docs:check-links OK; skip:governance PASS; mutation-guard 3/3; vitest focado de `packages/channel-gateway` e `packages/sandbox` e testes PG das frentes (ver os BUILD-RESULT); gitleaks 8.28.0 sobre as faixas da onda sem achados.
 
 # 29/10/2026 — segunda onda AUD0625 (Claude DF, sessões 07 e D9, Codex AUD0625)
 
