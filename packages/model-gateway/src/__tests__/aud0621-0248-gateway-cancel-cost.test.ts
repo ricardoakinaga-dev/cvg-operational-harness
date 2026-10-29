@@ -155,8 +155,15 @@ describe('SPEC0248 F13 — an aborted signal stops the gateway', () => {
     const failed = x.events.filter(
       (event) => event.type === 'model.call.failed'
     )
+    // SPEC 0285 D1/T-1: attempt 1 ends with its own failure; the attempt the
+    // backoff waited for never started and is closed as cancelled.
     expect(failed).toEqual([
-      expect.objectContaining({ code: 'cancelled', attempt: 1 })
+      expect.objectContaining({ code: 'provider_unavailable', attempt: 1 }),
+      expect.objectContaining({
+        code: 'cancelled',
+        attempt: 2,
+        detail: 'not_started'
+      })
     ])
   })
 
@@ -178,10 +185,13 @@ describe('SPEC0248 F13 — an aborted signal stops the gateway', () => {
     expect(
       x.events.filter((event) => event.type === 'model.call.started')
     ).toHaveLength(1)
+    // SPEC 0285 T-1: the cancelled terminal belongs to the attempt that
+    // never started.
     expect(x.events.at(-1)).toMatchObject({
       type: 'model.call.failed',
       code: 'cancelled',
-      attempt: 1
+      attempt: 2,
+      detail: 'not_started'
     })
   })
 

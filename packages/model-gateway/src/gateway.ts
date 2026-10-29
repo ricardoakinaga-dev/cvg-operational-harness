@@ -118,6 +118,19 @@ export class ModelGateway {
     for (const provider of options.providers) {
       this.#providers.set(provider.id, provider)
     }
+    // SPEC 0285 D3: a declared window must be a positive safe integer.
+    for (const profile of Object.values(options.profiles)) {
+      const window = profile?.contextWindow
+      if (
+        window !== undefined &&
+        !(Number.isSafeInteger(window) && window > 0)
+      ) {
+        throw new ModelGatewayError(
+          'invalid_request',
+          `Profile ${profile?.name} has an invalid contextWindow`
+        )
+      }
+    }
     this.#router = new ModelRouter(options.profiles, options.routing ?? {})
     this.#prompts = options.prompts
     this.#retry = { ...DEFAULT_RETRY_POLICY, ...(options.retry ?? {}) }
@@ -281,6 +294,20 @@ export class ModelGateway {
     }
     // F13: an aborted caller never reserves budget nor reaches a provider.
     throwIfCancelled(externalSignal)
+    // SPEC 0285 D2/D3: the request size is projected once, before any
+    // reservation; a declared window that it overflows refuses here, with no
+    // provider call, no charge and no fallback (the request is the problem).
+    const projectedInputTokens = projectInputTokens(rendered.input)
+    if (
+      profile.contextWindow !== undefined &&
+      projectedInputTokens + (request.maxTokens ?? profile.maxTokens) >
+        profile.contextWindow
+    ) {
+      throw new ModelGatewayError(
+        'invalid_request',
+        `Request does not fit the context window of profile ${profile.name}`
+      )
+    }
 
     const estimatedCost = request.estimatedCostUsd ?? profile.estimatedCostUsd
     // F14: the restrictive combination of the request and profile ceilings
@@ -374,7 +401,8 @@ export class ModelGateway {
         providerId: provider.id,
         model: profile.model,
         profile: profile.name,
-        attempt
+        attempt,
+        projectedInputTokens
       })
 
       try {
@@ -518,42 +546,8 @@ export class ModelGateway {
         if (this.#countsAgainstCircuit(gatewayError)) {
           this.#circuit.onFailure(circuitKey)
         }
-        const canRetry = gatewayError.retryable && attempt < attemptsAllowed
-        if (canRetry) {
-          const delayMs = computeRetryDelayMs({
-            attempt,
-            policy: this.#retry,
-            random: this.#random
-          })
-          this.#emit({
-            type: 'model.retry.scheduled',
-            requestId: request.requestId,
-            tenantId: request.tenantId,
-            correlationId: request.correlationId,
-            providerId: provider.id,
-            model: profile.model,
-            profile: profile.name,
-            attempt: attempt + 1,
-            delayMs,
-            code: gatewayError.code
-          })
-          await this.#backoff(delayMs, externalSignal)
-          if (externalSignal?.aborted) {
-            this.#emit({
-              type: 'model.call.failed',
-              requestId: request.requestId,
-              tenantId: request.tenantId,
-              correlationId: request.correlationId,
-              providerId: provider.id,
-              model: profile.model,
-              profile: profile.name,
-              attempt,
-              code: 'cancelled'
-            })
-            throw new ModelGatewayError('cancelled', 'Model call was cancelled')
-          }
-          continue
-        }
+        // SPEC 0285 D1: every started attempt ends in exactly one terminal
+        // event, a retried one included, carrying what it was charged.
         this.#emit({
           type: 'model.call.failed',
           requestId: request.requestId,
@@ -576,6 +570,45 @@ export class ModelGateway {
               }
             : {})
         })
+        const canRetry = gatewayError.retryable && attempt < attemptsAllowed
+        if (canRetry) {
+          const delayMs = computeRetryDelayMs({
+            attempt,
+            policy: this.#retry,
+            random: this.#random
+          })
+          this.#emit({
+            type: 'model.retry.scheduled',
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            correlationId: request.correlationId,
+            providerId: provider.id,
+            model: profile.model,
+            profile: profile.name,
+            attempt: attempt + 1,
+            delayMs,
+            code: gatewayError.code
+          })
+          await this.#backoff(delayMs, externalSignal)
+          if (externalSignal?.aborted) {
+            // SPEC 0285 T-1: the attempt the backoff waited for never
+            // started; it is closed as such and carries no usage.
+            this.#emit({
+              type: 'model.call.failed',
+              requestId: request.requestId,
+              tenantId: request.tenantId,
+              correlationId: request.correlationId,
+              providerId: provider.id,
+              model: profile.model,
+              profile: profile.name,
+              attempt: attempt + 1,
+              code: 'cancelled',
+              detail: 'not_started'
+            })
+            throw new ModelGatewayError('cancelled', 'Model call was cancelled')
+          }
+          continue
+        }
         throw gatewayError
       } finally {
         clearTimeout(timeoutHandle)
@@ -767,6 +800,22 @@ function conservativeUsage(
       0
     )
   return { inputTokens: bytes, outputTokens: maxTokens }
+}
+
+/**
+ * SPEC 0285 D2: fixed-density projection of the request size, 4 UTF-8 bytes
+ * per token plus 4 tokens of framing per message (the system prompt counts as
+ * one). An estimate for pressure and the window check, never a measurement.
+ */
+function projectInputTokens(input: ModelInput): number {
+  const bytes =
+    Buffer.byteLength(input.system ?? '', 'utf8') +
+    input.messages.reduce(
+      (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
+      0
+    )
+  const framed = input.messages.length + (input.system ? 1 : 0)
+  return Math.ceil(bytes / 4) + 4 * framed
 }
 
 function completionDetail(

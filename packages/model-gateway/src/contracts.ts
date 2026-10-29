@@ -152,6 +152,12 @@ export interface ModelProfile {
   fallbackProfile?: ModelProfileName
   /** SPEC 0284: consume the provider as an internal stream. Default false. */
   streaming?: boolean
+  /**
+   * SPEC 0285 D3: declared context window in tokens. When set, a request whose
+   * projected input plus its output limit does not fit is refused before any
+   * provider call; absent means measure only.
+   */
+  contextWindow?: number
 }
 
 export type UsageStatus = 'reported' | 'unreported'
@@ -208,6 +214,12 @@ export interface ModelGatewayEvent {
   /** PDSH-024: measured prompt/completion counts on `model.call.completed`. */
   inputTokens?: number
   outputTokens?: number
+  /**
+   * SPEC 0285 D2: fixed-density estimate of the request size on
+   * `model.call.started`, computed before any provider call. An estimate,
+   * never a measurement.
+   */
+  projectedInputTokens?: number
   circuitState?: string
   detail?: string
 }
