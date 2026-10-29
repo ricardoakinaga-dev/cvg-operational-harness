@@ -87,8 +87,26 @@ export interface ProcessServiceLimitsCaps {
   readonly maxStdinBytes: number
 }
 
+export interface ProcessChunk {
+  readonly stream: 'stdout' | 'stderr'
+  readonly bytes: Uint8Array
+}
+
+/** Persistent mode only: bytes into the payload, bounded by `maxStdinBytes` for the whole launch. */
+export interface ProcessInput {
+  write(chunk: Uint8Array): Promise<void>
+  end(): Promise<void>
+}
+
 export interface ProcessHandle {
   readonly id: string
+  /** Persistent mode only. */
+  readonly stdin?: ProcessInput
+  /**
+   * Persistent mode only, single consumer. The queue is capped by `maxOutputBytes`: when the
+   * consumer is slow the payload is held back (backpressure), never buffered without bound.
+   */
+  readonly output?: AsyncIterable<ProcessChunk>
   /** Resolves once, after cleanup, with the single immutable outcome. */
   wait(): Promise<ProcessOutcome>
   /** Asks for the launch to end (cause `cancelled`); resolves with the same outcome as `wait`. */

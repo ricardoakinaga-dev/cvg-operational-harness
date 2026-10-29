@@ -41,6 +41,8 @@ export {
 } from './process-service/service.ts'
 export type {
   ProcessCause,
+  ProcessChunk,
+  ProcessInput,
   ProcessCleanup,
   ProcessConsumer,
   ProcessDisposeReport,

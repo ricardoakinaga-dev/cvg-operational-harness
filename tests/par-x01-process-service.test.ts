@@ -209,11 +209,6 @@ describe('PAR-X01 slice 2: process service engine', () => {
         'stdin above its cap',
         { stdin: new Uint8Array(10), limits: limits({ maxStdinBytes: 5 }) },
         'invalid_request'
-      ],
-      [
-        'persistent mode (slice 4)',
-        { mode: 'persistent' as const },
-        'unavailable'
       ]
     ])('rejects %s', async (_name, patch, code) => {
       const file = marker()
@@ -296,6 +291,17 @@ describe('PAR-X01 slice 2: process service engine', () => {
       clean(outcome)
       expect(members(marker)).toEqual([])
     }, 30_000)
+
+    it('a stop right after launch still ends clean, because the namespace is learned first', async () => {
+      for (let i = 0; i < 4; i++) {
+        const launched = await service.launch(
+          request('setInterval(()=>{},1000)')
+        )
+        const outcome = await launched.stop()
+        expect(outcome.cause).toBe('cancelled')
+        clean(outcome)
+      }
+    }, 40_000)
 
     it('lifetime expiry ends the tree with cause timeout', async () => {
       const marker = mark()
@@ -686,7 +692,9 @@ describe('PAR-X01 slice 2: process service engine', () => {
       const outcome = await launched.stop()
       expect(aliveNow(child.pid!)).toBe(false)
       expect(outcome.cause).toBe('cancelled')
-      expect(outcome.cleanup.state).toBe('clean')
+      // Reaped; with no status channel the namespace stays unknown, so it is not called clean.
+      expect(outcome.secondaryErrors).not.toContain('launcher_not_reaped')
+      expect(outcome.secondaryErrors).toContain('namespace_unknown')
     }, 30_000)
   })
 

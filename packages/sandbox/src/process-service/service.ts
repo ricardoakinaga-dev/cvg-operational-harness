@@ -22,9 +22,11 @@ import { StatusChannel } from './status.ts'
 import {
   PROCESS_CONSUMERS,
   type ProcessCause,
+  type ProcessChunk,
   type ProcessCleanup,
   type ProcessDisposeReport,
   type ProcessHandle,
+  type ProcessInput,
   type ProcessLaunchRequest,
   type ProcessLimits,
   type ProcessOutcome,
@@ -35,6 +37,7 @@ import {
 const ARGV_MAX_ENTRIES = 256
 const ARGV_MAX_BYTES = 128 * 1024
 const POLL_MS = 10
+const NS_WAIT_MS = 250
 
 export interface ProcessServiceOptions {
   /** Host-owned env names per consumer; absent consumers get none. */
@@ -87,6 +90,8 @@ function checkRequest(
   if (request.signal !== undefined && !(request.signal instanceof AbortSignal))
     bad('signal')
   const limits = validateProcessLimits(request.limits, caps)
+  if (request.mode === 'persistent' && request.stdin !== undefined)
+    bad('stdin for a persistent launch')
   if (request.stdin !== undefined) {
     if (!(request.stdin instanceof Uint8Array)) bad('stdin')
     if (request.stdin.length > limits.maxStdinBytes) bad('stdin size')
@@ -118,17 +123,17 @@ export function createProcessService(
       }))
   let reserved = 0
   let sequence = 0
+  let state: 'active' | 'closing' = 'active'
+  const active = new Set<Supervised>()
+  let disposal: Promise<ProcessDisposeReport> | undefined
 
   const launch = async (
     request: ProcessLaunchRequest
   ): Promise<ProcessHandle> => {
+    if (state !== 'active')
+      throw new ProcessServiceError('service_closed', 'the service is closed')
     const limits = checkRequest(request, caps)
     const env = validateProcessEnv(request.consumer, request.env, allowlist)
-    if (request.mode === 'persistent')
-      throw new ProcessServiceError(
-        'unavailable',
-        'persistent mode is not available yet'
-      )
     if (reserved >= maxConcurrent)
       throw new ProcessServiceError('service_busy', 'too many launches')
     const id = `proc-${(sequence += 1)}-${randomBytes(4).toString('hex')}`
@@ -212,7 +217,7 @@ export function createProcessService(
     } finally {
       prepared.close()
     }
-    return supervise({
+    const supervised = supervise({
       id,
       child,
       statusIndex: prepared.statusFdIndex!,
@@ -222,11 +227,27 @@ export function createProcessService(
       observe,
       release
     })
+    active.add(supervised)
+    void supervised.handle.wait().then(() => active.delete(supervised))
+    return supervised.handle
   }
 
-  // The disposer lands with slice 4; until then it only reports an empty service.
+  // Closes admission, stops every live launch through the same single cleanup (I4, I10) and
+  // reports what was found. A repeated call returns the same report.
   const dispose = (): Promise<ProcessDisposeReport> =>
-    Promise.resolve({ stopped: 0, clean: 0, cleanupFailed: 0 })
+    (disposal ??= (async () => {
+      state = 'closing'
+      const live = [...active]
+      const outcomes = await Promise.all(
+        live.map((l) => l.terminate('dispose'))
+      )
+      return {
+        stopped: live.length,
+        clean: outcomes.filter((o) => o.cleanup.state === 'clean').length,
+        cleanupFailed: outcomes.filter((o) => o.cleanup.state !== 'clean')
+          .length
+      }
+    })())
 
   return { launch, dispose }
 }
@@ -243,7 +264,12 @@ interface Supervision {
 }
 
 /** One launch: first cause wins, one cleanup task, outcome published once (SPEC 0286 I3-I5). */
-function supervise(s: Supervision): ProcessHandle {
+interface Supervised {
+  readonly handle: ProcessHandle
+  terminate(cause: 'dispose'): Promise<ProcessOutcome>
+}
+
+function supervise(s: Supervision): Supervised {
   const { child, limits, procRoot } = s
   const status = new StatusChannel()
   const stdout: Buffer[] = []
@@ -259,6 +285,8 @@ function supervise(s: Supervision): ProcessHandle {
   let initStart: string | undefined
   let nsInode: number | undefined
   let closed = false
+  let resolveNsKnown!: () => void
+  const nsKnown = new Promise<void>((resolve) => (resolveNsKnown = resolve))
   let resolveClosed!: () => void
   const closedPromise = new Promise<void>(
     (resolve) => (resolveClosed = resolve)
@@ -290,9 +318,20 @@ function supervise(s: Supervision): ProcessHandle {
 
   const settle = async (): Promise<void> => {
     if (child.stdin && !child.stdin.destroyed) child.stdin.destroy()
+    // A held (back-pressured) stream would never end: tear-down releases it.
+    child.stdout?.resume()
+    child.stderr?.resume()
     const deadline = Date.now() + limits.cleanupMs
     const alive = (): boolean =>
       !closed && child.exitCode === null && child.signalCode === null
+    // Learn the namespace before killing anything: a launch ended this early is otherwise
+    // unprovable. Bounded, and inside the cleanup budget.
+    if (nsInode === undefined && alive())
+      await Promise.race([
+        nsKnown,
+        closedPromise,
+        delay(Math.min(NS_WAIT_MS, limits.cleanupMs))
+      ])
     if (alive()) {
       // The polite request goes to the payload (the namespace init is only bubblewrap's reaper,
       // which ignores SIGTERM, and a SIGTERM to the launcher would take the payload down with it
@@ -346,9 +385,11 @@ function supervise(s: Supervision): ProcessHandle {
     const snapshot = status.snapshot()
     let unverified = scan.unverified
     // A namespace we never learned about cannot be proven empty, unless nothing ever started.
+    // Only a launcher that exited on its own without ever naming a child provably started
+    // nothing; every other end without a known namespace cannot be proven empty.
     if (
       nsInode === undefined &&
-      (snapshot.invalid || cause === 'startup_timeout')
+      (snapshot.invalid || cause !== 'spawn_failed')
     ) {
       unverified += 1
       secondary.push('namespace_unknown')
@@ -371,8 +412,12 @@ function supervise(s: Supervision): ProcessHandle {
       // Only a voluntary exit carries the payload's code; forced ends never borrow one.
       exitCode: cause === 'exit' ? (exitFromStatus ?? child.exitCode) : null,
       signal: child.signalCode,
-      stdout: Buffer.concat(stdout).toString('utf8'),
-      stderr: Buffer.concat(stderr).toString('utf8'),
+      ...(persistent
+        ? {}
+        : {
+            stdout: Buffer.concat(stdout).toString('utf8'),
+            stderr: Buffer.concat(stderr).toString('utf8')
+          }),
       truncated,
       cleanup,
       profile: 'namespace-observed',
@@ -381,6 +426,8 @@ function supervise(s: Supervision): ProcessHandle {
     }
     cleanupTimersAndListeners()
     s.release()
+    finished = true
+    pump()
     resolveOutcome(outcome)
   }
 
@@ -402,7 +449,92 @@ function supervise(s: Supervision): ProcessHandle {
     s.request.signal?.removeEventListener('abort', onAbort)
   }
 
+  const persistent = s.request.mode === 'persistent'
+  // Persistent output: bounded queue with backpressure (I8).
+  const queue: ProcessChunk[] = []
+  const waiters: Array<(r: IteratorResult<ProcessChunk>) => void> = []
+  let queuedBytes = 0
+  let held = false
+  let finished = false
+  let consumerGone = false
+  const pump = (): void => {
+    while (waiters.length > 0 && queue.length > 0) {
+      const chunk = queue.shift()!
+      queuedBytes -= chunk.bytes.length
+      waiters.shift()!({ value: chunk, done: false })
+    }
+    if (held && queuedBytes < limits.maxOutputBytes / 2) {
+      held = false
+      child.stdout?.resume()
+      child.stderr?.resume()
+    }
+    if (finished && queue.length === 0)
+      while (waiters.length > 0)
+        waiters.shift()!({ value: undefined, done: true })
+  }
+  const enqueue = (which: 'out' | 'err', chunk: Buffer): void => {
+    if (consumerGone || cleanupTask !== undefined) return
+    queue.push({
+      stream: which === 'out' ? 'stdout' : 'stderr',
+      bytes: new Uint8Array(chunk)
+    })
+    queuedBytes += chunk.length
+    pump()
+    if (queuedBytes >= limits.maxOutputBytes && !held) {
+      held = true
+      child.stdout?.pause()
+      child.stderr?.pause()
+    }
+  }
+  const output: AsyncIterable<ProcessChunk> = {
+    [Symbol.asyncIterator]: () => ({
+      next: () =>
+        new Promise<IteratorResult<ProcessChunk>>((resolve) => {
+          waiters.push(resolve)
+          pump()
+        }),
+      return: () => {
+        // The consumer left: nothing will read, so nothing is kept.
+        consumerGone = true
+        queue.length = 0
+        queuedBytes = 0
+        pump()
+        return Promise.resolve({ value: undefined, done: true as const })
+      }
+    })
+  }
+  let stdinBytes = 0
+  let stdinEnded = false
+  const stdinClosed = (): ProcessServiceError =>
+    new ProcessServiceError('invalid_request', 'stdin is closed')
+  const input: ProcessInput = {
+    write: (chunk) => {
+      if (stdinEnded || cleanupTask !== undefined || !child.stdin)
+        return Promise.reject(stdinClosed())
+      if (!(chunk instanceof Uint8Array))
+        return Promise.reject(
+          new ProcessServiceError('invalid_request', 'invalid stdin chunk')
+        )
+      if (stdinBytes + chunk.length > limits.maxStdinBytes)
+        return Promise.reject(
+          new ProcessServiceError('invalid_request', 'stdin limit reached')
+        )
+      stdinBytes += chunk.length
+      return new Promise<void>((resolve, reject) => {
+        child.stdin!.write(chunk, (error) =>
+          error ? reject(stdinClosed()) : resolve()
+        )
+      })
+    },
+    end: () => {
+      if (stdinEnded || !child.stdin) return Promise.resolve()
+      stdinEnded = true
+      return new Promise<void>((resolve) => child.stdin!.end(() => resolve()))
+    }
+  }
+
   const take = (which: 'out' | 'err', chunk: Buffer): void => {
+    if (persistent) return enqueue(which, chunk)
     const sink = which === 'out' ? stdout : stderr
     let bytes = which === 'out' ? outBytes : errBytes
     const room = limits.maxOutputBytes - bytes
@@ -428,6 +560,7 @@ function supervise(s: Supervision): ProcessHandle {
       initStart = readStartTime(initPid, procRoot)
       nsInode = snap.pidNamespace
       clearTimeout(startupTimer)
+      resolveNsKnown()
     }
   })
   child.stdin?.on('error', () => undefined)
@@ -463,15 +596,25 @@ function supervise(s: Supervision): ProcessHandle {
     } else cleanupTask ??= settle()
   })
 
-  if (s.request.stdin !== undefined && s.request.stdin.length > 0)
+  if (persistent) {
+    // stdin stays open until the consumer ends it or the launch is torn down.
+  } else if (s.request.stdin !== undefined && s.request.stdin.length > 0)
     child.stdin?.end(s.request.stdin)
   else child.stdin?.end()
 
-  return {
+  const handle: ProcessHandle = {
     id: s.id,
+    ...(persistent ? { stdin: input, output } : {}),
     wait: () => outcomePromise,
     stop: () => {
       trigger('cancelled')
+      return outcomePromise
+    }
+  }
+  return {
+    handle,
+    terminate: (why) => {
+      trigger(why)
       return outcomePromise
     }
   }
