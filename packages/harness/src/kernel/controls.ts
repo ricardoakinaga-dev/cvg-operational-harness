@@ -432,19 +432,40 @@ export function approvalsControl(
     apply(ctx) {
       ctx.provide('approvals', approvals)
       ctx.on('tool/pre-execute', async (call, next) => {
-        if (!call.needsApproval && !call.tool.requiresApproval) return next()
+        if (!requiresGrant(call)) return next()
         const gate = await decide(call)
         return gate ?? next()
       })
       // The reservation happens around dispatch, after every control and the
       // loop's own bookkeeping (iterative checkpoint) ran, and before the body.
       ctx.on('tool/execute', async (call, next) => {
-        if (!call.grant) return next()
+        if (!call.grant) {
+          return requiresGrant(call)
+            ? {
+                kind: 'not_started',
+                gate: stop(
+                  'INSUFFICIENT_EVIDENCE',
+                  'Approved execution requires a bound single-use grant before dispatch.',
+                  { cause: 'approval_unbound' }
+                )
+              }
+            : next()
+        }
         const gate = await reserve(call, call.grant)
         return gate ? { kind: 'not_started', gate } : next()
       })
       ctx.on('tool/post-execute', (call, outcome) => settle(call, outcome))
     }
+  }
+
+  // Defense in depth: the final dispatch control must not infer approval
+  // absence from a missing grant. Each independent requirement stays binding.
+  function requiresGrant(call: ToolCallState): boolean {
+    return (
+      call.tool.requiresApproval ||
+      call.needsApproval ||
+      call.policyDecision?.outcome === 'REQUIRE_APPROVAL'
+    )
   }
 
   /** Asks once; a missing, failing or unsupported answer never proceeds (I4). */
