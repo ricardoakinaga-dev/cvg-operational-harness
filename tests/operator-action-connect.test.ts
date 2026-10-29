@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Client } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
@@ -5,8 +7,10 @@ import {
   poolConfigFor,
   scrubPgEnvironment
 } from '../scripts/lib/operator-action-connect.ts'
+
 import {
   artifactSha256,
+  INSTALLED_ARTIFACT_FILES,
   OperatorActionRefusal,
   type DatastoreProfile
 } from '../scripts/lib/operator-action.ts'
@@ -188,5 +192,25 @@ describe('artifactSha256', () => {
 
   it('refuses an empty list', () => {
     expect(() => artifactSha256([])).toThrow()
+  })
+})
+
+describe('INSTALLED_ARTIFACT_FILES', () => {
+  it('lists existing files, the write path of the persistence included', () => {
+    for (const label of INSTALLED_ARTIFACT_FILES) {
+      expect(existsSync(resolve(process.cwd(), label)), label).toBe(true)
+    }
+    expect(INSTALLED_ARTIFACT_FILES).toEqual(
+      expect.arrayContaining([
+        'scripts/revoke-operator-sessions.ts',
+        'scripts/lib/operator-action.ts',
+        'scripts/lib/operator-action-connect.ts',
+        'packages/persistence/src/case-authority.ts',
+        'packages/persistence/src/case-authority-postgres.ts'
+      ])
+    )
+    expect(new Set(INSTALLED_ARTIFACT_FILES).size).toBe(
+      INSTALLED_ARTIFACT_FILES.length
+    )
   })
 })

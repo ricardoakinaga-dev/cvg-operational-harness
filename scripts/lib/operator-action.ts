@@ -590,3 +590,16 @@ export function artifactSha256(
   if (lines.length === 0) throw new Error('artifact has no files')
   return createHash('sha256').update(lines.join(''), 'utf8').digest('hex')
 }
+
+/**
+ * Files whose bytes make the installed artifact (repository-relative): the
+ * entry, the decision library, the connection guard and the persistence code
+ * that performs the write.
+ */
+export const INSTALLED_ARTIFACT_FILES = [
+  'scripts/revoke-operator-sessions.ts',
+  'scripts/lib/operator-action.ts',
+  'scripts/lib/operator-action-connect.ts',
+  'packages/persistence/src/case-authority.ts',
+  'packages/persistence/src/case-authority-postgres.ts'
+] as const

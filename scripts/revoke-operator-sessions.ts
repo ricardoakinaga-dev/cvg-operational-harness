@@ -16,30 +16,16 @@ import { lstatSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { PostgresCaseAuthority } from '@cvg/persistence'
 import type { TenantId } from '@cvg/platform'
-import {
-  createPool,
-  scrubPgEnvironment
-} from './lib/operator-action-connect.ts'
+import { createPool } from './lib/operator-action-connect.ts'
 import {
   artifactSha256,
+  INSTALLED_ARTIFACT_FILES,
   runOperatorAction,
   type DatastoreProfile,
   type DatastoreSession,
   type FileStat,
   type OperatorActionFileSystem
 } from './lib/operator-action.ts'
-
-/**
- * The installed artifact: the entry, the decision library, the connection
- * guard and the persistence code that performs the write (repository-relative).
- */
-const ARTIFACT_FILES = [
-  'scripts/revoke-operator-sessions.ts',
-  'scripts/lib/operator-action.ts',
-  'scripts/lib/operator-action-connect.ts',
-  'packages/persistence/src/case-authority.ts',
-  'packages/persistence/src/case-authority-postgres.ts'
-] as const
 
 const realFileSystem: OperatorActionFileSystem = {
   lstat(file): FileStat | null {
@@ -87,9 +73,6 @@ async function connect(
 }
 
 async function main(): Promise<void> {
-  // The shell cannot add to the connection: PG* variables are gone before
-  // anything reads the environment (they are scrubbed again before the Pool).
-  scrubPgEnvironment(process.env)
   const root = fileURLToPath(new URL('..', import.meta.url))
   const result = await runOperatorAction(
     {
@@ -98,7 +81,7 @@ async function main(): Promise<void> {
       now: () => new Date(),
       installedArtifactSha256: () =>
         artifactSha256(
-          ARTIFACT_FILES.map((label) => ({
+          INSTALLED_ARTIFACT_FILES.map((label) => ({
             label,
             bytes: readFileSync(`${root}${label}`)
           }))

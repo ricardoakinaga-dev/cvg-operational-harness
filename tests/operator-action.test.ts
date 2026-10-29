@@ -450,3 +450,28 @@ describe('runOperatorAction', () => {
     )
   })
 })
+
+describe('files with a second hard link (AUD0625 review P3-5)', () => {
+  it('accepts the same files with one link', async () => {
+    const f = fixture()
+    const result = await runOperatorAction(f.dependencies, argv(['--apply']))
+    expect(result.outcome).toBe('APPLIED')
+  })
+
+  it.each([
+    ['proof', PROOF],
+    ['policy', OPERATOR_ACTION_POLICY_PATH],
+    ['connection file', CONNECTION]
+  ])('refuses a %s that has another name', async (_name, file) => {
+    const f = fixture()
+    f.nodes[file] = {
+      ...f.nodes[file]!,
+      stat: { ...f.nodes[file]!.stat, nlink: 2 }
+    }
+    const result = await runOperatorAction(f.dependencies, argv(['--apply']))
+    expect(result.outcome).toBe('REFUSED')
+    expect(result.reason).toContain('more than one hard link')
+    expect(f.connect).not.toHaveBeenCalled()
+    expect(f.session.invalidate).not.toHaveBeenCalled()
+  })
+})
