@@ -49,8 +49,12 @@ const UNITS = [
   'h',
   '%'
 ]
+/** Every RegExp metacharacter of a literal, backslash included (CodeQL #37). */
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')
+}
 const UNIT_AFTER = new RegExp(
-  `^\\s*(${UNITS.map((unit) => unit.replace(/\//g, '\\/')).join('|')})(?![\\p{L}\\d])`,
+  `^\\s*(${UNITS.map(escapeRegExp).join('|')})(?![\\p{L}\\d])`,
   'u'
 )
 /** Measurement labels: the field a bare number belongs to. */
