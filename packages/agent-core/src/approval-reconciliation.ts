@@ -125,14 +125,20 @@ export async function reconcileApprovalDecision(
   // state never authorises the opposite decision.
   const advanced = ADVANCED_APPROVED_STATUSES.has(approval.status)
   // SPEC 0274: FAILED/EXPIRED keep the decision only in approvedAt/rejectedAt.
-  // Neither (never decided) or both (incoherent record) is a data error.
+  // Neither (never decided) or both (incoherent record) is a data error. A
+  // null from a mapping is not a decision (`!= null`). FAILED only follows
+  // RESERVED/EXECUTING, which only follow APPROVED (author's clarification),
+  // so a FAILED approval without approvedAt, or with rejectedAt, is incoherent.
   const terminal = TERMINAL_DECIDED_STATUSES.has(approval.status)
   if (terminal) {
-    const hasApproved = approval.approvedAt !== undefined
-    const hasRejected = approval.rejectedAt !== undefined
-    if (hasApproved === hasRejected) {
+    const hasApproved = approval.approvedAt != null
+    const hasRejected = approval.rejectedAt != null
+    if (
+      hasApproved === hasRejected ||
+      (approval.status === 'FAILED' && !hasApproved)
+    ) {
       throw new ApprovalReconciliationDataError(
-        `reconciliation requires exactly one recorded decision (status=${approval.status})`
+        `reconciliation requires a coherent recorded decision (status=${approval.status})`
       )
     }
     const recorded: ApprovalDecision = hasApproved ? 'APPROVED' : 'REJECTED'

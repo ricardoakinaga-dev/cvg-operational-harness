@@ -5,7 +5,7 @@ Branch `claude/aud0625-f08b-df` (base `a69030d3f`), SPEC 0274 sha256 `69503d8a�
 ## Mudança (§3)
 
 - `packages/agent-core/src/approval-reconciliation.ts`: `ReconciliationApproval` ganha `approvedAt`/`rejectedAt`; novo `TERMINAL_DECIDED_STATUSES` (`FAILED`, `EXPIRED`). Nesses estados a decisão registrada vem dos timestamps (só `approvedAt` = APPROVED, só `rejectedAt` = REJECTED); nenhum ou os dois, ou pedido divergente, é `ApprovalReconciliationDataError`. Não há `resolveExecution`: o passo é `execution:skipped_terminal` e só o append deduplicado, com `recovered: true` e `observedApprovalStatus`.
-- `apps/worker/src/homolog-worker.ts`: o seletor inclui `FAILED`/`EXPIRED`; a decisão (no `SELECT` e no `NOT EXISTS`) usa o `CASE` por timestamps (`REJECTED_DECISION`); `TERMINAL_UNDECIDED` exclui do lote (e da contagem de envelope incompleto) as linhas sem decisão coerente; nova `UNDECIDED_TERMINAL_COUNT_SQL` e o log `worker.homolog_reconcile_undecided_terminal` (`onUndecidedTerminal`). Piso, teto, `COALESCE` do índice, `ORDER BY` e `LIMIT` ficam iguais.
+- `apps/worker/src/homolog-worker.ts`: o seletor inclui `FAILED`/`EXPIRED`; a decisão (no `SELECT` e no `NOT EXISTS`) usa o `CASE` por timestamps (`REJECTED_DECISION`); `TERMINAL_UNDECIDED` exclui do lote (e da contagem de envelope incompleto) as linhas sem decisão coerente; nova `INCOHERENT_TERMINAL_COUNT_SQL` e o log `worker.homolog_reconcile_incoherent_terminal` (`onIncoherentTerminal`, ver o esclarecimento abaixo). Piso, teto, `COALESCE` do índice, `ORDER BY` e `LIMIT` ficam iguais.
 - `docs/runbooks/homolog-observability.md`: o novo log e que uma `EXPIRED` nunca decidida é comum.
 
 ## Provas
@@ -24,3 +24,12 @@ Branch `claude/aud0625-f08b-df` (base `a69030d3f`), SPEC 0274 sha256 `69503d8a�
 - O teste de EXPLAIN da 0272 desta base não tem timeout explícito; a correção `63fc9862` (já na candidata do PR #32) dá 180 s a ele. Aqui ele passou na rodada completa com `--testTimeout=180000`.
 - Uma `EXPIRED` nunca decidida é comum (pedido vencido sem resposta); o log `undecided_terminal` aparece a cada tick (5 s) enquanto houver alguma na janela de 24 h. O mesmo acontece com o de envelope incompleto. Se o ruído incomodar, reduzir para uma vez por mudança de contagem numa rodada própria.
 - A fatia não corrige o F08e (REJECTED vencida vira EXPIRED), conforme a SPEC.
+
+## Esclarecimento da SPEC pelo autor (revisão do DF, rodada 2)
+
+O Claude DF, autor da SPEC 0274, aprovou o esclarecimento abaixo. Muda só a contagem/log e o rigor; o que é recuperado legitimamente não muda.
+
+- **Contagem e log:** o seletor continua deixando fora do lote toda terminal sem decisão coerente, mas só as **incoerentes** são contadas: `FAILED` sem `approved_at`, `FAILED` com `rejected_at`, ou qualquer terminal com os dois timestamps. `EXPIRED` sem nenhum timestamp (venceu sem decisão, caso normal) sai em silêncio. O log passa a `worker.homolog_reconcile_incoherent_terminal`, o SQL a `INCOHERENT_TERMINAL_COUNT_SQL`, o callback a `onIncoherentTerminal`.
+- **`FAILED` exige aprovação:** `FAILED` só vem de `RESERVED`/`EXECUTING`, que só vêm de `APPROVED`. No SQL, a decisão `rejected` em terminal só vale para `EXPIRED`; no reconciliador, `FAILED` sem `approvedAt` ou com `rejectedAt` é `ApprovalReconciliationDataError`, sem evento.
+- **`null` não é decisão:** `approvedAt`/`rejectedAt` são lidos com `!= null`.
+- **Provas:** reconciliador +4 testes (FAILED com `rejectedAt`, FAILED com os dois, `null` em FAILED/EXPIRED, EXPIRED com um `null`); pool interpretador agora avalia o predicado da própria contagem e as regras de coerência; 23 mutações (19 + 4) mortas ([mutations-clarification.txt](proofs/mutations-clarification.txt)): `!== undefined`, FAILED sem aprovação aceito, rejeição recuperada de `FAILED`, regras de coerência frouxas, contagem incluindo a silenciosa, contagem sem os "dois" ou sem o `FAILED`, janela da contagem, entre outras. PostgreSQL 16.15, arquivo inteiro 24/24, com os 4 formatos de linha fora do lote (`EXPIRED` sem timestamp = contagem vazia; `EXPIRED` com os dois, `FAILED` só com `rejected_at` e `FAILED` sem `approved_at` = contagem `[1]`) e a linha seguinte recuperada com `limit: 1`; `EXPLAIN` repetido ainda usa `uq_audit_approval_decision`.

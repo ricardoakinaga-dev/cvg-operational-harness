@@ -186,15 +186,75 @@ describe('F08b: decisão recuperada em estado terminal (SPEC 0274)', () => {
       }
     )
 
-    it('FAILED com rejectedAt e pedido REJECTED grava o evento rejected', async () => {
+    it.each(['REJECTED', 'APPROVED'] as const)(
+      'FAILED com rejectedAt é erro de dado e não gera evento (pedido %s)',
+      async (decision) => {
+        const w = world({
+          ...envelope,
+          status: 'FAILED',
+          rejectedAt: REJECTED_AT
+        })
+        await expect(run(w, decision)).rejects.toBeInstanceOf(
+          ApprovalReconciliationDataError
+        )
+        expect(w.events.size).toBe(0)
+        expect(w.resolves()).toBe(0)
+      }
+    )
+
+    it('FAILED com approvedAt e rejectedAt é erro de dado', async () => {
       const w = world({
         ...envelope,
         status: 'FAILED',
+        approvedAt: APPROVED_AT,
         rejectedAt: REJECTED_AT
       })
-      await run(w, 'REJECTED')
-      expect([...w.events.keys()]).toEqual([`${envelope.approvalId}:rejected`])
-      expect(w.resolves()).toBe(0)
+      await expect(run(w, 'APPROVED')).rejects.toBeInstanceOf(
+        ApprovalReconciliationDataError
+      )
+      expect(w.events.size).toBe(0)
+    })
+
+    it.each(['FAILED', 'EXPIRED'])(
+      '%s com timestamps null (mapeamento) não é decisão: erro de dado',
+      async (status) => {
+        const w = world({
+          ...envelope,
+          status,
+          approvedAt: null,
+          rejectedAt: null
+        } as never)
+        await expect(run(w, 'APPROVED')).rejects.toBeInstanceOf(
+          ApprovalReconciliationDataError
+        )
+        await expect(run(w, 'REJECTED')).rejects.toBeInstanceOf(
+          ApprovalReconciliationDataError
+        )
+        expect(w.events.size).toBe(0)
+      }
+    )
+
+    it('EXPIRED com approvedAt e rejectedAt null decide approved; com rejectedAt e approvedAt null decide rejected', async () => {
+      const approved = world({
+        ...envelope,
+        status: 'EXPIRED',
+        approvedAt: APPROVED_AT,
+        rejectedAt: null
+      } as never)
+      await run(approved, 'APPROVED')
+      expect([...approved.events.keys()]).toEqual([
+        `${envelope.approvalId}:approved`
+      ])
+      const rejected = world({
+        ...envelope,
+        status: 'EXPIRED',
+        approvedAt: null,
+        rejectedAt: REJECTED_AT
+      } as never)
+      await run(rejected, 'REJECTED')
+      expect([...rejected.events.keys()]).toEqual([
+        `${envelope.approvalId}:rejected`
+      ])
     })
 
     it.each(['FAILED', 'EXPIRED'])(

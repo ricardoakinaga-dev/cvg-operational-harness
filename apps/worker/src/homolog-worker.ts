@@ -172,8 +172,17 @@ export async function assertHomologHealthPreflight(
  * but in the timestamps (`approved_at` xor `rejected_at`).
  */
 const TERMINAL_STATUSES = `a.status IN ('FAILED', 'EXPIRED')`
-const REJECTED_DECISION = `(a.status = 'REJECTED' OR (${TERMINAL_STATUSES} AND a.rejected_at IS NOT NULL AND a.approved_at IS NULL))`
-const TERMINAL_UNDECIDED = `(${TERMINAL_STATUSES} AND (a.approved_at IS NULL) = (a.rejected_at IS NULL))`
+// Author's clarification: FAILED only follows an approval, so a rejection is
+// only ever recovered from EXPIRED.
+const REJECTED_DECISION = `(a.status = 'REJECTED' OR (a.status = 'EXPIRED' AND a.rejected_at IS NOT NULL AND a.approved_at IS NULL))`
+const TERMINAL_COHERENT = `((a.status = 'FAILED' AND a.approved_at IS NOT NULL AND a.rejected_at IS NULL) OR (a.status = 'EXPIRED' AND (a.approved_at IS NULL) <> (a.rejected_at IS NULL)))`
+/** FAILED/EXPIRED with no recoverable decision: out of the batch, silently or not. */
+const TERMINAL_UNRECOVERABLE = `(${TERMINAL_STATUSES} AND NOT ${TERMINAL_COHERENT})`
+/**
+ * The anomalous part of the above: an EXPIRED without any timestamp is a
+ * request that expired undecided (normal) and is NOT counted.
+ */
+const TERMINAL_INCOHERENT = `((a.status = 'FAILED' AND NOT (a.approved_at IS NOT NULL AND a.rejected_at IS NULL)) OR (a.status = 'EXPIRED' AND a.approved_at IS NOT NULL AND a.rejected_at IS NOT NULL))`
 
 /**
  * SPEC 0272: also approvals whose execution already advanced. The anti-join
@@ -217,7 +226,7 @@ const ENVELOPE_COMPLETE = `COALESCE(a.approver_id, '') <> ''
 export const STUCK_APPROVAL_DECISIONS_SQL = `SELECT e.id AS execution_id, e.approval_id,
                CASE WHEN ${REJECTED_DECISION} THEN 'REJECTED' ELSE 'APPROVED' END AS decision
        ${stuckDecisionsFrom('$2', '$3')}
-          AND NOT ${TERMINAL_UNDECIDED}
+          AND NOT ${TERMINAL_UNRECOVERABLE}
           AND ${ENVELOPE_COMPLETE}
        ORDER BY e.updated_at ASC
        LIMIT $1`
@@ -225,18 +234,20 @@ export const STUCK_APPROVAL_DECISIONS_SQL = `SELECT e.id AS execution_id, e.appr
 /** Parameters: $1 minimum age (s), $2 maximum age (s) or NULL. */
 export const INCOMPLETE_ENVELOPE_COUNT_SQL = `SELECT count(*)::integer AS incomplete
        ${stuckDecisionsFrom('$1', '$2')}
-          AND NOT ${TERMINAL_UNDECIDED}
+          AND NOT ${TERMINAL_UNRECOVERABLE}
           AND NOT (${ENVELOPE_COMPLETE})`
 
 /**
- * SPEC 0274: FAILED/EXPIRED rows with no coherent recorded decision (neither
- * timestamp, or both) were never decided or are incoherent, so there is nothing
- * to recover. They stay out of the batch and are only counted.
+ * SPEC 0274 (author's clarification): FAILED/EXPIRED rows with no coherent
+ * recorded decision stay out of the batch. Only the INCOHERENT ones are counted
+ * (FAILED without approved_at or with rejected_at, or any terminal with both
+ * timestamps); an EXPIRED with neither timestamp expired undecided, which is
+ * normal, and leaves silently.
  * Parameters: $1 minimum age (s), $2 maximum age (s) or NULL.
  */
-export const UNDECIDED_TERMINAL_COUNT_SQL = `SELECT count(*)::integer AS undecided
+export const INCOHERENT_TERMINAL_COUNT_SQL = `SELECT count(*)::integer AS incoherent
        ${stuckDecisionsFrom('$1', '$2')}
-          AND ${TERMINAL_UNDECIDED}`
+          AND ${TERMINAL_INCOHERENT}`
 
 /**
  * Errors that belong to one row and repeat on every tick for it: the reconciler's
@@ -267,8 +278,8 @@ export interface StuckDecisionOptions {
   onRowFailed?: (failure: { approvalId: string; reason: string }) => void
   /** Rows in the window that have no complete envelope (manual handling). */
   onIncompleteEnvelope?: (count: number) => void
-  /** FAILED/EXPIRED rows in the window with no coherent recorded decision. */
-  onUndecidedTerminal?: (count: number) => void
+  /** FAILED/EXPIRED rows in the window whose recorded decision is incoherent. */
+  onIncoherentTerminal?: (count: number) => void
 }
 
 export async function reconcileStuckApprovalDecisions(
@@ -301,12 +312,12 @@ export async function reconcileStuckApprovalDecisions(
           count
         })
       ))
-  const onUndecidedTerminal =
-    options.onUndecidedTerminal ??
+  const onIncoherentTerminal =
+    options.onIncoherentTerminal ??
     ((count) =>
       console.error(
         JSON.stringify({
-          event: 'worker.homolog_reconcile_undecided_terminal',
+          event: 'worker.homolog_reconcile_incoherent_terminal',
           count
         })
       ))
@@ -317,12 +328,12 @@ export async function reconcileStuckApprovalDecisions(
     )
     const incompleteCount = Number(incomplete.rows[0]?.incomplete ?? 0)
     if (incompleteCount > 0) onIncompleteEnvelope(incompleteCount)
-    const undecided = await client.query<{ undecided: number }>(
-      UNDECIDED_TERMINAL_COUNT_SQL,
+    const incoherent = await client.query<{ incoherent: number }>(
+      INCOHERENT_TERMINAL_COUNT_SQL,
       [window.minAgeSeconds, window.maxAgeSeconds]
     )
-    const undecidedCount = Number(undecided.rows[0]?.undecided ?? 0)
-    if (undecidedCount > 0) onUndecidedTerminal(undecidedCount)
+    const incoherentCount = Number(incoherent.rows[0]?.incoherent ?? 0)
+    if (incoherentCount > 0) onIncoherentTerminal(incoherentCount)
     return client.query<{
       execution_id: string
       approval_id: string

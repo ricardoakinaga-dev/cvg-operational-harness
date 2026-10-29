@@ -19,7 +19,7 @@ import { grantCase } from './case-authorization-fixtures.ts'
 import {
   reconcileStuckApprovalDecisions,
   STUCK_APPROVAL_DECISIONS_SQL,
-  UNDECIDED_TERMINAL_COUNT_SQL
+  INCOHERENT_TERMINAL_COUNT_SQL
 } from '../../../worker/src/homolog-worker.ts'
 
 // SPEC 0272 fix: the worker waits 30 s before recovering; these tests recover at once.
@@ -1068,21 +1068,44 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
     )
   }
 
-  for (const shape of ['no-timestamp', 'both-timestamps'] as const) {
+  for (const [shape, status, setSql, counted] of [
+    [
+      'EXPIRED without any timestamp (expired undecided, silent)',
+      'EXPIRED',
+      `status = 'EXPIRED', approved_at = NULL, rejected_at = NULL`,
+      []
+    ],
+    [
+      'EXPIRED with both timestamps',
+      'EXPIRED',
+      `status = 'EXPIRED', rejected_at = approved_at`,
+      [1]
+    ],
+    [
+      'FAILED with rejected_at only',
+      'FAILED',
+      `status = 'FAILED', rejected_at = approved_at, approved_at = NULL`,
+      [1]
+    ],
+    [
+      'FAILED without approved_at',
+      'FAILED',
+      `status = 'FAILED', approved_at = NULL, rejected_at = NULL`,
+      [1]
+    ]
+  ] as const) {
     itWithPostgres(
-      `AUD0625 F08b: an EXPIRED approval with ${shape} stays out of the batch, is counted and does not hold back the next row (SPEC 0274)`,
+      `AUD0625 F08b: ${shape} stays out of the batch, is counted only when incoherent and does not hold back the next row (SPEC 0274)`,
       async () => {
         const setup = await setupDatabase()
         try {
           const { items, runtime } = await crashedDecisions(setup, [
-            `und-${shape}`,
-            `ok-${shape}`
+            `bad-${status.toLowerCase()}-${counted.length}-${setSql.length}`,
+            `ok-${status.toLowerCase()}-${counted.length}-${setSql.length}`
           ])
           const [bad, good] = items as [(typeof items)[0], (typeof items)[0]]
           await setup.pool.query(
-            shape === 'no-timestamp'
-              ? `UPDATE runtime_approvals SET status = 'EXPIRED', approved_at = NULL, rejected_at = NULL WHERE approval_id = $1`
-              : `UPDATE runtime_approvals SET status = 'EXPIRED', rejected_at = approved_at WHERE approval_id = $1`,
+            `UPDATE runtime_approvals SET ${setSql} WHERE approval_id = $1`,
             [bad.approvalId]
           )
           await setup.pool.query(
@@ -1091,19 +1114,19 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           )
           await age(setup, bad.executionId, '10 minutes')
           await age(setup, good.executionId, '5 minutes')
-          const undecided: number[] = []
+          const incoherent: number[] = []
           const failures: Array<{ approvalId: string }> = []
           await expect(
             reconcileStuckApprovalDecisions(setup.pool, tenantA, runtime, {
               limit: 1,
-              onUndecidedTerminal: (count) => undecided.push(count),
+              onIncoherentTerminal: (count) => incoherent.push(count),
               onRowFailed: (failure) => failures.push(failure)
             })
           ).resolves.toBe(1)
           // limit 1 and the oldest row has no coherent decision: it must not hold the slot.
           expect(await countDecisionEvents(setup.pool, good.approvalId)).toBe(1)
           expect(await countDecisionEvents(setup.pool, bad.approvalId)).toBe(0)
-          expect(undecided).toEqual([1])
+          expect(incoherent).toEqual(counted)
           expect(failures).toEqual([])
         } finally {
           await teardownDatabase(setup)
@@ -1193,17 +1216,17 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           STUCK_APPROVAL_DECISIONS_SQL,
           [25, 30, 86_400]
         )
-        const undecidedPlan = await explain(
+        const incoherentPlan = await explain(
           'RESET enable_seqscan',
-          UNDECIDED_TERMINAL_COUNT_SQL,
+          INCOHERENT_TERMINAL_COUNT_SQL,
           [30, 86_400]
         )
         const rows = await client.query(
           STUCK_APPROVAL_DECISIONS_SQL,
           [25, 30, 86_400]
         )
-        const counted = await client.query<{ undecided: number }>(
-          UNDECIDED_TERMINAL_COUNT_SQL,
+        const counted = await client.query<{ incoherent: number }>(
+          INCOHERENT_TERMINAL_COUNT_SQL,
           [30, 86_400]
         )
         const out = process.env.F08B_EXPLAIN_OUT
@@ -1211,12 +1234,12 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           const { writeFileSync } = await import('node:fs')
           writeFileSync(
             out,
-            `-- ${total} synthetic approvals (1/3 FAILED, 1/3 EXPIRED, 1/7 rejected, 1/13 undecided), half with their event; window 30 s .. 24 h\n-- selector, natural plan\n${natural}\n\n-- selector, enable_seqscan = off (index availability)\n${forced}\n\n-- undecided-terminal count, natural plan\n${undecidedPlan}\n`
+            `-- ${total} synthetic approvals (1/3 FAILED, 1/3 EXPIRED, 1/7 rejected, 1/13 undecided), half with their event; window 30 s .. 24 h\n-- selector, natural plan\n${natural}\n\n-- selector, enable_seqscan = off (index availability)\n${forced}\n\n-- incoherent-terminal count, natural plan\n${incoherentPlan}\n`
           )
         }
         expect(forced).toContain('uq_audit_approval_decision')
         expect(rows.rows.length).toBe(25)
-        expect(Number(counted.rows[0]?.undecided)).toBeGreaterThan(0)
+        expect(Number(counted.rows[0]?.incoherent)).toBeGreaterThan(0)
       } finally {
         client.release()
         await teardownDatabase(setup)
