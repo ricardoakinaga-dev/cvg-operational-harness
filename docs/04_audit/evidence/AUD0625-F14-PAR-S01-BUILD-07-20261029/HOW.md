@@ -24,7 +24,7 @@ Base: `claude/aud0625-wave3` (8a98de177). Barra de qualificação composta: 5 ch
 |---|----------|--------|
 | 1 | Contratos, 12 classes de erro, validação de header/cut (captura única) | feita |
 | 2 | Migration 0034 + guards + testes PG negativos | feita |
-| 3 | Adaptador (lease físico), create/open/read | |
+| 3 | Adaptador (lease físico), create/open/read, preflight | feita |
 | 4 | append/flush/close, LOST, commit-unknown | |
 | 5 | Ponte `sessionEventStoreForHandle` + teste SDK | |
 | 6 | Testemunhos S1–S5 em processos distintos | |
