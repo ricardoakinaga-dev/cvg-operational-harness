@@ -1,0 +1,42 @@
+import { appendFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { getEventListeners } from 'node:events'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, it } from 'vitest'
+import { createShellTool } from '../packages/sandbox/src/shell-tool.ts'
+import { runContained } from '../packages/sandbox/src/run.ts'
+import { phase3RuntimeInput } from '../packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+const OUT = '/mnt/dados/tmp/ricardo/revf05/probe-out.txt'
+const log = (m: string) => appendFileSync(OUT, m + '\n')
+describe('review F05 probes', () => {
+  it('probes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'rev-f05-'))
+    const input = phase3RuntimeInput()
+    const handle = { mode: 'PROCESS' as const, workspaceRoot: root, allowNetwork: false, allowSubprocess: true, deadlineMs: 2000 }
+    const ctx = (signal?: AbortSignal) => ({ tenantId: input.tenantId, agentId: input.agent.id, correlationId: input.correlationId, traceId: input.traceId, ...(signal ? { signal } : {}), sandboxHandle: handle }) as never
+    const call = (shell: ReturnType<typeof createShellTool>, c: never) => shell.execute({ argv: ['x'], intent: 'probe', timeoutMs: 1000 } as never, c)
+    // 1 listeners after normal, aborted-in-runner and throwing runner
+    for (const mode of ['ok', 'abort-then-return', 'abort-then-throw', 'throw-no-abort']) {
+      const controller = new AbortController()
+      const shell = createShellTool({ workspaceRoot: root, run: async () => {
+        if (mode.startsWith('abort')) controller.abort(new Error('late'))
+        if (mode.includes('throw')) throw new Error('boom SECRET_TOKEN')
+        return { exitCode: 0, stdout: 'ok', stderr: '', truncated: false }
+      } })
+      const r = await call(shell, ctx(controller.signal))
+      log(`${mode} => ${JSON.stringify(r)} listeners=${getEventListeners(controller.signal, 'abort').length}`)
+    }
+    // 2 backend: pre-aborted request never spawns
+    const c2 = new AbortController(); c2.abort()
+    const res = await runContained({ argv: ['/bin/echo', 'x'], cwd: root, handle, timeoutMs: 500, maxOutputBytes: 1024, signal: c2.signal } as never)
+    log('runContained preabort => ' + JSON.stringify(res))
+    // 3 abort between the shell's last check and the runner: signal that flips on first read of .aborted twice
+    let reads = 0
+    const flaky = { get aborted() { reads++; return reads >= 3 }, addEventListener() {}, removeEventListener() {}, reason: undefined } as unknown as AbortSignal
+    let calls = 0
+    const shell3 = createShellTool({ workspaceRoot: root, run: async () => { calls++; return { exitCode: 0, stdout: 'ok', stderr: '', truncated: false } } })
+    const r3 = await call(shell3, ctx(flaky))
+    log(`flaky signal (aborts on 3rd read) => ${JSON.stringify(r3)} runnerCalls=${calls} reads=${reads}`)
+    rmSync(root, { recursive: true, force: true })
+  })
+})
