@@ -69,24 +69,26 @@ const preRollForwardMigrations = [
   '0024_approval_decision_causality',
   '0025_webhook_replay_fencing',
   '0026_rate_limit_key_hardening',
-  '0027_worker_operations'
+  '0027_worker_operations',
+  '0029_case_assignment_authorization'
 ]
 // The proof always rolls forward the newest migration of the default run
 // (POSTGRES_MIGRATIONS; 0028_session_events is opt-in) over a dump of the one
 // before it; keep both in step with packages/persistence/migrations.
-const rollForwardMigration = '0029_case_assignment_authorization'
+const rollForwardMigration = '0030_api_creation_receipts'
 const preRollForwardVersion = preRollForwardMigrations.at(-1)
 // Objects the roll-forward migration adds, removed before the pre-migration
 // backup is restored over the rolled-forward schema. SPEC0176 recovers
-// production by rolling forward; this drill only restores the 0027 backup.
+// production by rolling forward; this drill only restores the 0029 backup.
+// 0030 (SPEC 0257) adds the receipts table, its guard function and the two
+// support keys it creates only when absent (absent before 0030).
 const rollForwardRollbackSql = [
-  'DROP TABLE IF EXISTS case_audit_links, case_execution_links,',
-  'case_assignments, case_roots, case_principals;',
-  'DROP FUNCTION IF EXISTS case_execution_link_lineage(),',
-  'case_audit_link_lineage(), case_assignment_revision_guard(),',
-  'case_principal_revision_guard(), case_authority_reject_mutation();',
-  'ALTER TABLE audit_events DROP CONSTRAINT IF EXISTS',
-  'audit_events_tenant_id_id_key'
+  'DROP TABLE IF EXISTS api_creation_receipts;',
+  'DROP FUNCTION IF EXISTS api_creation_receipt_reject_mutation();',
+  'ALTER TABLE tasks DROP CONSTRAINT IF EXISTS',
+  'tasks_tenant_id_session_id_id_key;',
+  'ALTER TABLE approval_requests DROP CONSTRAINT IF EXISTS',
+  'approval_requests_tenant_id_session_id_id_key'
 ].join(' ')
 
 type ManagedPostgres = {
