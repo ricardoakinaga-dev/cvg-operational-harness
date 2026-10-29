@@ -25,14 +25,19 @@ export class SessionStorageUnavailableError extends SessionPersistenceError {}
 /** The outcome is unknown: never collapsed into success or an automatic retry. */
 export class SessionCommitUnknownError extends SessionPersistenceError {}
 export class SessionHeaderValidationError extends SessionPersistenceError {}
+/** A batch the store refuses: stale or non-contiguous sequence, or a reused event id. */
+export class SessionAppendConflictError extends SessionPersistenceError {}
 
 export const SESSION_HEADER_MAX_BYTES = 64 * 1024
 const MAX_DEPTH = 64
 const MAX_NODES = 20_000
 const SESSION_ID_MAX = 200
 
+function badWith(reason: string, subject: string): never {
+  throw new SessionHeaderValidationError(`Invalid ${subject}: ${reason}`)
+}
 function bad(reason: string): never {
-  throw new SessionHeaderValidationError(`Invalid session header: ${reason}`)
+  return badWith(reason, 'session header')
 }
 function uint(value: unknown, field: string): number {
   if (
@@ -53,7 +58,13 @@ function text(value: unknown, field: string): string {
  * One traversal reads every property exactly once (an A/B getter cannot show one
  * value to validation and another to storage) and returns a detached lossless copy.
  */
-function capture(root: unknown): SessionJson {
+export function captureSessionJson(
+  root: unknown,
+  subject = 'session header'
+): SessionJson {
+  function bad(reason: string): never {
+    return badWith(reason, subject)
+  }
   let nodes = 0
   const seen = new Set<object>()
   const visit = (value: unknown, depth: number): SessionJson => {
@@ -117,7 +128,7 @@ export function validateSessionHeader(
   raw: unknown,
   cut?: number
 ): ValidatedSessionHeader {
-  const copy = capture(raw)
+  const copy = captureSessionJson(raw)
   if (copy === null || typeof copy !== 'object' || Array.isArray(copy))
     bad('header must be an object')
   const h = copy as { readonly [key: string]: SessionJson }

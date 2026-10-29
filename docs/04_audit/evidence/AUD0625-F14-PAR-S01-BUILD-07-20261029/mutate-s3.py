@@ -4,6 +4,7 @@ import json, os, subprocess, sys
 F1 = 'packages/persistence/src/session-persistence.ts'
 F2 = 'packages/persistence/src/session-connection-lease.ts'
 T = 'packages/persistence/src/__tests__/par-s01-session-adapter-postgres.test.ts'
+T2 = 'packages/persistence/src/__tests__/par-s01-session-writer-postgres.test.ts'
 M = [
  (F1, 'capacity-gte', "this.#writers >= this.options.maxOpenWriters", "this.#writers > this.options.maxOpenWriters"),
  (F1, 'capacity-off', "if (this.#writers >= this.options.maxOpenWriters)", "if (false)"),

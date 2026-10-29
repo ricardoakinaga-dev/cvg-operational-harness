@@ -304,10 +304,11 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
       const flaky: PostgresPhysicalSessionPool = {
         acquire: async (o) => {
           const lease = await inner.acquire(o)
+          let commits = 0
           return {
             backendPid: lease.backendPid,
             query: (sql: string, v?: unknown[]) =>
-              sql === 'COMMIT'
+              sql === 'COMMIT' && ++commits === 2
                 ? Promise.reject(new Error('lost ack'))
                 : lease.query(sql, v),
             onLost: (l) => lease.onLost(l),

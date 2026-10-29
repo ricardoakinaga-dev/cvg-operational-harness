@@ -1,4 +1,6 @@
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
+import { canonicalizeJson } from '@cvg/shared'
 import type {
   SessionAccess,
   SessionCreateOptions,
@@ -18,6 +20,8 @@ import {
   SessionOwnershipLostError,
   SessionPersistenceCorruptionError,
   SessionPersistenceError,
+  SessionAppendConflictError,
+  captureSessionJson,
   SessionPersistenceNotFoundError,
   SessionReadOnlyError,
   SessionStorageUnavailableError,
@@ -47,6 +51,7 @@ export { createPgPhysicalSessionPool } from './session-connection-lease.ts'
 
 const MIGRATION = '0034_session_writer_ownership'
 const PAGE = 256
+const SESSION_BATCH_MAX_BYTES = 8 * 1024 * 1024
 const OPERATION_TIMEOUT_MS = 5_000
 const MAX_SAFE = Number.MAX_SAFE_INTEGER
 const SCHEMA = /^[a-z][a-z0-9_]{0,62}$/
@@ -405,7 +410,10 @@ class PostgresSessionPersistence implements SessionPersistence {
       ...(signal ? { signal } : {})
     })
     try {
+      await lease.query('BEGIN')
+      await lease.query("SET LOCAL statement_timeout = '5s'")
       const base = await qualify(lease, this.options)
+      await lease.query('COMMIT')
       if (base !== this.keyBase)
         throw new SessionMigrationRequiredError(
           'Session persistence preflight: the writer connection does not see the same session tables'
@@ -607,6 +615,7 @@ class PostgresSessionHandle implements SessionHandle {
   #queue: Promise<unknown> = Promise.resolve()
   #closing: Promise<void> | undefined
   #lost: Error | undefined
+  #unknown: SessionCommitUnknownError | undefined
   #highWater = 0
   constructor(state: HandleState) {
     this.#s = state
@@ -751,36 +760,232 @@ class PostgresSessionHandle implements SessionHandle {
     }
   }
 
-  append(): Promise<void> {
-    return this.#unavailable('append')
-  }
-  flush(): Promise<void> {
-    return this.#unavailable('flush')
-  }
-  #unavailable(method: string): Promise<void> {
-    if (this.#closing)
-      return Promise.reject(
-        new SessionHandleClosedError('Session handle is closed', this.id)
-      )
-    if (this.access === 'read')
-      return Promise.reject(
-        new SessionReadOnlyError(`${method} needs a writer handle`, this.id)
-      )
-    if (this.#lost)
-      return Promise.reject(
-        new SessionOwnershipLostError('Session ownership was lost', this.id, {
-          cause: this.#lost
-        })
-      )
-    return Promise.reject(
-      new SessionStorageUnavailableError(
-        `${method} is not part of this slice`,
-        this.id
-      )
+  /**
+   * One ticket in the single queue. The batch is captured and validated at admission, before
+   * any await, so a getter or a later mutation of the caller's objects cannot change what is
+   * stored. An empty batch is a valid no-op on an active writer only.
+   */
+  append(
+    events: readonly SessionEvent[],
+    options?: SessionPersistenceOptions
+  ): Promise<void> {
+    const refusal = this.#writerRefusal()
+    if (refusal) return Promise.reject(refusal)
+    let batch: ValidatedBatch
+    try {
+      batch = this.#captureBatch(events)
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    return this.#admit(options, () =>
+      batch.events.length === 0 ? this.#assertActive() : this.#appendNow(batch)
     )
   }
+  flush(options?: SessionPersistenceOptions): Promise<void> {
+    const refusal = this.#writerRefusal()
+    if (refusal) return Promise.reject(refusal)
+    return this.#admit(options, () => this.#flushNow())
+  }
 
-  /** Marks CLOSING before the first await, memoizes the promise, drains the queue, releases once. */
+  /** closed > read-only > lost: the first applicable error wins. */
+  #writerRefusal(): Error | undefined {
+    if (this.#closing)
+      return new SessionHandleClosedError('Session handle is closed', this.id)
+    if (this.access === 'read')
+      return new SessionReadOnlyError('Writing needs a writer handle', this.id)
+    if (this.#lost)
+      return new SessionOwnershipLostError(
+        'Session ownership was lost',
+        this.id,
+        { cause: this.#lost }
+      )
+    return undefined
+  }
+  #assertActive(): Promise<void> {
+    const lost = this.#writerRefusal()
+    return lost ? Promise.reject(lost) : Promise.resolve()
+  }
+
+  #captureBatch(events: readonly SessionEvent[]): ValidatedBatch {
+    if (!Array.isArray(events))
+      throw new SessionHeaderValidationError('Events must be an array', this.id)
+    const out: Array<{ event: SessionEvent; digest: string; text: string }> = []
+    let bytes = 0
+    for (const raw of events) {
+      const copy = captureSessionJson(raw, 'session event')
+      let event: SessionEvent
+      try {
+        event = validateSessionEvent(copy)
+      } catch (cause) {
+        throw new SessionHeaderValidationError(
+          'Invalid session event, schema, version or fingerprint',
+          this.id,
+          { cause }
+        )
+      }
+      if (
+        event.tenantId !== this.#s.options.tenantId ||
+        event.sessionId !== this.id
+      )
+        throw new SessionHeaderValidationError(
+          'Event envelope differs from the handle',
+          this.id
+        )
+      const { sequence: _s, schemaFingerprint: _f, ...input } = event
+      void _s
+      void _f
+      const text = canonicalizeJson(event)
+      bytes += Buffer.byteLength(text, 'utf8')
+      if (bytes > SESSION_BATCH_MAX_BYTES)
+        throw new SessionHeaderValidationError('Batch exceeds 8 MiB', this.id)
+      out.push({ event, digest: sessionEventInputDigest(input), text })
+    }
+    return { events: out }
+  }
+
+  /** Runs one short transaction on the owner connection; COMMIT outcome unknown = terminal. */
+  async #transaction<T>(
+    body: (lease: PhysicalSessionLease) => Promise<T>
+  ): Promise<T> {
+    const lease = this.#s.lease as PhysicalSessionLease
+    const refusal = this.#lost
+      ? new SessionOwnershipLostError('Session ownership was lost', this.id, {
+          cause: this.#lost
+        })
+      : undefined
+    if (refusal) throw refusal
+    let value: T
+    try {
+      await lease.query('BEGIN')
+      await lease.query("SET LOCAL statement_timeout = '5s'")
+      await lease.query("SET LOCAL lock_timeout = '5s'")
+      await lease.query('SET LOCAL synchronous_commit = on')
+      await lease.query("SELECT set_config('cvg.tenant_id', $1, true)", [
+        this.#s.options.tenantId
+      ])
+      value = await body(lease)
+    } catch (error) {
+      try {
+        await lease.query('ROLLBACK')
+      } catch (cause) {
+        throw this.#lose(cause)
+      }
+      throw this.#classify(error)
+    }
+    try {
+      await lease.query('COMMIT')
+    } catch (cause) {
+      this.#unknown = new SessionCommitUnknownError(
+        'The session write outcome is unknown',
+        this.id,
+        { cause }
+      )
+      throw this.#lose(cause, this.#unknown)
+    }
+    return value
+  }
+  /** Terminal loss: never reconnect, never re-claim; the connection is destroyed. */
+  #lose(cause: unknown, as?: Error): Error {
+    this.#lost ??= cause instanceof Error ? cause : new Error('Session lost')
+    void this.#s.lease?.destroy()
+    return (
+      as ??
+      new SessionOwnershipLostError('Session ownership was lost', this.id, {
+        cause
+      })
+    )
+  }
+  #classify(error: unknown): Error {
+    if (error instanceof SessionPersistenceError) return error
+    const code = (error as { code?: unknown } | null)?.code
+    if (
+      typeof code !== 'string' ||
+      code === '55P03' ||
+      code.startsWith('08') ||
+      code.startsWith('57')
+    )
+      return this.#lose(error)
+    if (code.startsWith('23'))
+      return new SessionAppendConflictError(
+        'The batch conflicts with the stored session',
+        this.id,
+        { cause: error }
+      )
+    return new SessionStorageUnavailableError('Session write failed', this.id, {
+      cause: error
+    })
+  }
+
+  async #appendNow(batch: ValidatedBatch): Promise<void> {
+    const schema = quote(this.#s.options.schemaName)
+    const tenant = this.#s.options.tenantId
+    const last = await this.#transaction(async (lease) => {
+      const cursor = await lease.query<{ next_sequence: string }>(
+        `SELECT next_sequence FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+        [tenant, this.id]
+      )
+      if (cursor.rows.length !== 1)
+        throw new SessionPersistenceNotFoundError('Session not found', this.id)
+      let next = Number(cursor.rows[0]?.next_sequence)
+      for (const { event, digest, text } of batch.events) {
+        // The sequence is the caller's; a stale one fails, it is never renumbered.
+        if (event.sequence !== next)
+          throw new SessionAppendConflictError(
+            'The event sequence is not the stream cursor',
+            this.id
+          )
+        await lease.query(
+          `INSERT INTO ${schema}.session_events (tenant_id,session_id,sequence,event_id,format_version,event_type,schema_fingerprint,input_digest,record)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+          [
+            tenant,
+            this.id,
+            event.sequence,
+            event.eventId,
+            event.formatVersion,
+            event.type,
+            event.schemaFingerprint,
+            digest,
+            text
+          ]
+        )
+        const advanced = await lease.query(
+          `UPDATE ${schema}.session_streams SET next_sequence=$3 WHERE tenant_id=$1 AND session_id=$2`,
+          [tenant, this.id, next + 1]
+        )
+        if (advanced.rowCount !== 1)
+          throw new SessionStorageUnavailableError(
+            'Session cursor was not advanced',
+            this.id
+          )
+        next++
+      }
+      return next - 1
+    })
+    this.#highWater = Math.max(this.#highWater, last)
+  }
+
+  /**
+   * The durability barrier: an UPDATE of the cursor to its own value under ownership, with a
+   * synchronous COMMIT. It writes WAL even when nothing changed logically; a read-only COMMIT
+   * would not be a barrier.
+   */
+  async #flushNow(): Promise<void> {
+    const schema = quote(this.#s.options.schemaName)
+    await this.#transaction(async (lease) => {
+      const done = await lease.query(
+        `UPDATE ${schema}.session_streams SET next_sequence=next_sequence WHERE tenant_id=$1 AND session_id=$2`,
+        [this.#s.options.tenantId, this.id]
+      )
+      if (done.rowCount !== 1)
+        throw new SessionPersistenceNotFoundError('Session not found', this.id)
+    })
+  }
+
+  /**
+   * Marks CLOSING before the first await, memoizes the promise (and its error), drains the
+   * admitted queue, tries a final flush and releases ownership and the connection once.
+   */
   close(): Promise<void> {
     this.#closing ??= this.#drainAndRelease()
     return this.#closing
@@ -792,24 +997,45 @@ class PostgresSessionHandle implements SessionHandle {
     await this.#queue
     const lease = this.#s.lease
     if (!lease) return
+    let failure: unknown
     try {
+      if (!this.#lost) {
+        try {
+          await this.#flushNow()
+        } catch (error) {
+          // A failed flush is not a successful close: keep the error, drop the connection.
+          failure = error
+          await lease.destroy()
+        }
+      }
       if (this.#lost) {
         await lease.destroy()
-        return
+        failure ??= this.#unknown
+      } else if (!failure) {
+        const released = await lease.query<{ ok: boolean }>(
+          'SELECT pg_advisory_unlock($1,$2) AS ok',
+          [this.#s.keyBase, this.#s.key]
+        )
+        // Never hand back a physical session that may still hold the lock.
+        if (released.rows[0]?.ok === true) await lease.release()
+        else await lease.destroy()
       }
-      const released = await lease.query<{ ok: boolean }>(
-        'SELECT pg_advisory_unlock($1,$2) AS ok',
-        [this.#s.keyBase, this.#s.key]
-      )
-      // Never hand back a physical session that may still hold the lock.
-      if (released.rows[0]?.ok === true) await lease.release()
-      else await lease.destroy()
-    } catch {
+    } catch (error) {
+      failure ??= error
       await lease.destroy()
     } finally {
       this.#s.onClosed?.()
     }
+    if (failure) throw failure
   }
+}
+
+interface ValidatedBatch {
+  readonly events: ReadonlyArray<{
+    readonly event: SessionEvent
+    readonly digest: string
+    readonly text: string
+  }>
 }
 
 function checkEvent(
