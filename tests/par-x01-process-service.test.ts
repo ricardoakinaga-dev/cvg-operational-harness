@@ -535,6 +535,46 @@ describe('PAR-X01 slice 2: process service engine', () => {
       expect(outcome.exitCode).toBeNull()
     }, 30_000)
 
+    it('keeps the first cause and a single cleanup when expiry lands during a graceful stop', async () => {
+      const file = join(workspace, `sigterms-${randomBytes(4).toString('hex')}`)
+      const handler = `process.on('SIGTERM',()=>{require('node:fs').appendFileSync(${JSON.stringify(file)},'x');setTimeout(()=>process.exit(0),900)});setInterval(()=>{},1000)`
+      const launched = await service.launch(
+        request(handler, {
+          limits: limits({ lifetimeMs: 1500, graceMs: 2500, cleanupMs: 5000 })
+        })
+      )
+      await new Promise((r) => setTimeout(r, 700))
+      const outcome = await launched.stop()
+      // The lifetime timer fired while the payload was still shutting down: it changes nothing.
+      expect(outcome.cause).toBe('cancelled')
+      expect(readFileSync(file, 'utf8')).toBe('x')
+      clean(outcome)
+    }, 30_000)
+
+    it('a forced end never borrows an exit code from the status channel', async () => {
+      const svc = fakeLauncher(
+        (fd) =>
+          `const fs=require('node:fs');fs.writeSync(${fd},'{ "child-pid": '+process.pid+', "pid-namespace": 4026999999 }\\n{ "exit-code": 5 }\\n');setInterval(()=>{},1000)`
+      )
+      const launched = await svc.launch(
+        request('x', { limits: limits({ graceMs: 0, cleanupMs: 2000 }) })
+      )
+      await new Promise((r) => setTimeout(r, 500))
+      const outcome = await launched.stop()
+      expect(outcome.cause).toBe('cancelled')
+      expect(outcome.exitCode).toBeNull()
+    }, 30_000)
+
+    it('records a failed spawn as a secondary error', async () => {
+      const svc = createProcessService({
+        spawn: (() =>
+          realSpawn('/nonexistent/launcher', [], { stdio: 'pipe' })) as never
+      })
+      const outcome = await (await svc.launch(request('x'))).wait()
+      expect(outcome.cause).toBe('spawn_failed')
+      expect(outcome.secondaryErrors).toContain('spawn_error')
+    }, 30_000)
+
     it('SIGKILLs a namespace member the observer still sees, after re-checking it', async () => {
       const fakeProc = mkdtempSync(join(base, 'fakeproc2-'))
       const victim = realSpawn(
