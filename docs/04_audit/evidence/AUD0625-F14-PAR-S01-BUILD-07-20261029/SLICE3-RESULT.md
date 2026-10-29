@@ -15,6 +15,12 @@ Task `AUD0625-F14-PAR-S01-BUILD-07-20261029`, Claude Sonnet sessão 07. Base: fa
   - `maxOpenWriters`: recusa a saturação sem claim parcial; a vaga volta em close, falha ou COMMIT incerto.
 - `append` e `flush` ainda NÃO existem (fatia 4): o writer devolve erro explícito, e o reader devolve `SessionReadOnlyError`.
 
+## Revisão DF da fatia 3 (CHANGES_REQUESTED) e correção
+
+- **P2** (a conexão que escreve nunca passava pelo preflight): as checagens viraram `qualify()` e rodam também em CADA lease de escritor, logo depois da aquisição e antes de qualquer escrita: role (superuser, BYPASSRLS, dona das tabelas), standby, durabilidade, RLS, triggers, constraints e a identidade `to_regclass(...)::oid − 2^31 === keyBase` vista por aquela sessão. Falhou: `destroy` do lease, a vaga de `maxOpenWriters` volta e sai `SessionMigrationRequiredError` sem role nem chave. Testes: escritor superuser e escritor dono recusam `create` e `open` duas vezes com capacidade 1, sem gravar nada e sem conexão remanescente; escritor apontando para outro banco com as mesmas 0028+0034 recusa por identidade. Mutantes `writer-qualify-skipped`, `writer-key-identity` e `writer-qualify-destroy` mortos.
+- **P3-1**: o preflight exige agora `session_streams_no_truncate` e `session_events_no_truncate` e as cinco constraints da 0034 validadas (`convalidated`); testes e três mutantes.
+- **P3-2** (observação, candidato a emenda da SPEC): a SPEC manda validar o prefixo inteiro a cada `read`, em páginas de 256. Com eventos de até ~2 MiB em jsonb o pico é de ~512 MiB por página e o custo é O(head) por leitura. Proposta de emenda: paginar por bytes e validar só o delta depois do high-water, já que fatos imutáveis com PK preservam a contiguidade (SPEC l.178). Não implementado: a fatia segue fiel à SPEC aprovada.
+
 ## Provas (PG 16.15 descartável, role non-owner NOBYPASSRLS)
 
 - `par-s01-session-adapter-postgres.test.ts`: 44 testes. Toda a pasta persistence PG da sessão: 26 (0034) + 9 (0028) + 44 = 79 verdes.
