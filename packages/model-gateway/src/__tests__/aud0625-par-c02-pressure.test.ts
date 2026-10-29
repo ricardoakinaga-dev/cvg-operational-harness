@@ -678,3 +678,96 @@ describe('PAR-C02 review P3 (Codex 19102): the fallback profile has its own wind
     ).toHaveLength(0)
   })
 })
+
+describe('PAR-C02 review R2 (Codex 19558): a failed settlement stops the whole request', () => {
+  class CountingFlakyStore extends InMemoryCostBudgetStore {
+    faults = 0
+    constructor(private failures: number) {
+      super()
+    }
+    override consume(scopeKey: string, amountUsd: number): void {
+      if (amountUsd > 0.001 && this.failures > 0) {
+        this.failures -= 1
+        this.faults += 1
+        throw new Error('synthetic settlement store outage')
+      }
+      super.consume(scopeKey, amountUsd)
+    }
+  }
+
+  function withFallback(failures: number) {
+    const store = new CountingFlakyStore(failures)
+    const events: ModelGatewayEvent[] = []
+    const calls: string[] = []
+    const gateway = new ModelGateway({
+      providers: [
+        {
+          id: 'fake',
+          location: 'local',
+          models: ['fake-v1', 'fake-v2'],
+          execute: async () => {
+            throw new Error('unreachable')
+          },
+          executeStream: (req: ProviderRequest) => {
+            calls.push(req.model)
+            return req.model === 'fake-v1'
+              ? cutAfterOutput(req, calls.length)
+              : ok(req, calls.length)
+          }
+        } as never
+      ],
+      profiles: {
+        fast: profile({
+          fallbackProfile: 'balanced',
+          estimatedCostUsd: 0.001,
+          maxRetries: 2
+        }),
+        balanced: profile({
+          name: 'balanced',
+          model: 'fake-v2',
+          estimatedCostUsd: 0.001
+        })
+      },
+      routing: { allowFallback: true },
+      prompts: registry(),
+      clock: () => NOW,
+      sleep: async () => undefined,
+      budget: { store, limits: { tenant: 100 } },
+      onEvent: (event) => events.push(event)
+    })
+    return { gateway, store, events, calls }
+  }
+
+  it('a settlement that fails once neither retries nor falls back, and never reports success', async () => {
+    const w = withFallback(1)
+    await expect(w.gateway.generate(request())).rejects.toMatchObject({
+      code: 'internal_error',
+      retryable: false
+    })
+    expect(w.store.faults).toBe(1)
+    expect(w.calls).toEqual(['fake-v1'])
+    expect(w.events.some((e) => e.type === 'model.routing.fallback')).toBe(
+      false
+    )
+    expect(w.events.filter((e) => e.type === 'model.call.failed')).toHaveLength(
+      1
+    )
+  })
+
+  it('a settlement that always fails stops after the first attempt too', async () => {
+    const w = withFallback(Number.POSITIVE_INFINITY)
+    await expect(w.gateway.generate(request())).rejects.toMatchObject({
+      code: 'internal_error'
+    })
+    expect(w.store.faults).toBe(1)
+    expect(w.calls).toEqual(['fake-v1'])
+  })
+
+  it('control: with a healthy store the cut is retried and the fallback still serves', async () => {
+    const w = withFallback(0)
+    const result = await w.gateway.generate(request())
+    expect(result.fallbackUsed).toBe(true)
+    expect(w.calls).toEqual(['fake-v1', 'fake-v1', 'fake-v1', 'fake-v2'])
+    expect(w.store.faults).toBe(0)
+  })
+})
