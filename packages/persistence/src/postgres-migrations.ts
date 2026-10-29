@@ -49,7 +49,9 @@ const defaultPostgresMigrations = [
   // 0028_session_events is opt-in (dedicated schema); not in the default run.
   '0029_case_assignment_authorization',
   // SPEC 0257: durable receipts of HTTP creations.
-  '0030_api_creation_receipts'
+  '0030_api_creation_receipts',
+  // SPEC 0282: the "not before" of a rate-limited channel operation.
+  '0031_channel_effect_retry_not_before'
 ]
 
 function assertSafeSchemaName(schemaName: string): void {
