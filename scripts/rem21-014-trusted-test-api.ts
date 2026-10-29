@@ -7,7 +7,7 @@
  * principals the spec signs tokens for, through the same internal port a
  * verified adapter uses. It refuses to start outside NODE_ENV=test.
  */
-import { fileURLToPath } from 'node:url'
+import type { CaseAuthorityPort } from '@cvg/persistence'
 import {
   buildServerFromEnv,
   type BuildServerFromEnvOptions
@@ -93,8 +93,11 @@ export async function buildRem21014TrustedTestApi(
     casePrincipalAuthority: { authorityVersion: REM21_014_AUTHORITY_VERSION }
   })
   try {
+    const { caseAuthority } = app as unknown as {
+      caseAuthority: CaseAuthorityPort
+    }
     for (const principal of REM21_014_PRINCIPALS) {
-      await app.caseAuthority.applyVerifiedPrincipalState({
+      await caseAuthority.applyVerifiedPrincipalState({
         tenantId: principal.tenantId as never,
         operatorId: principal.operatorId,
         role: principal.role,
@@ -120,7 +123,8 @@ async function start(): Promise<void> {
   })
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// scripts/ compiles as CommonJS for the typecheck, so no import.meta here.
+if (/rem21-014-trusted-test-api\.[cm]?[jt]s$/.test(process.argv[1] ?? '')) {
   start().catch((error) => {
     console.error(serializeStartupFailure(error))
     process.exit(1)
