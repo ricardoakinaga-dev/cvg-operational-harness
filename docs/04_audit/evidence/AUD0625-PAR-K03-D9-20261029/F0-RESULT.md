@@ -15,3 +15,5 @@ para todo o resto (K03b), que NÃO foi integrado.
   (superconjunto, sem conflito).
 - Barrel `packages/contracts/src/index.ts` exporta ambos (como em `2f0cc11f7`).
 - Verificação: vitest `packages/contracts` 25/25, typecheck, eslint, prettier PASS.
+- **Superfície pública nova de `@cvg/harness-contracts`** (coberta pelo recibo 17): `canonicalizeCompleteJson`,
+  `CompleteJsonError` e os tipos `CompleteJsonValue`, `CompleteJsonLimits`, `CompleteJsonErrorCode`.
