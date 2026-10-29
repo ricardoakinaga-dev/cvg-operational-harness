@@ -80,6 +80,10 @@ function snapshot<T>(value: T): T {
   }
 }
 
+function durationOf(outcome: ToolOutcome | undefined): number {
+  return outcome && 'durationMs' in outcome ? outcome.durationMs : 0
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown failure'
 }
@@ -577,8 +581,7 @@ async function dispatch(
         ? {
             kind: 'threw',
             error: `${entry.plugin} failed: ${reason}`,
-            durationMs:
-              physical && 'durationMs' in physical ? physical.durationMs : 0
+            durationMs: durationOf(physical)
           }
         : {
             kind: 'not_started',
@@ -610,16 +613,17 @@ async function dispatch(
     )
   }
   const outcome = await run(0)
-  if (started) {
+  // `physical` is assigned exactly when the body was started.
+  if (physical) {
     try {
-      await host.get('effects').finished(ref, (physical ?? outcome).kind)
+      await host.get('effects').finished(ref, physical.kind)
     } catch {
       // The body already ran. A missing settlement is uncertain, never a
       // successful effect or permission to retry the body/ledger.
       return {
         kind: 'threw',
         error: 'unknown_effect: effect_settlement_failed',
-        durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+        durationMs: durationOf(outcome)
       }
     }
   }
