@@ -15,6 +15,7 @@ import {
   runPostgresMigrations,
   type PostgresPoolLike
 } from '@cvg/persistence'
+import { reconcileStuckApprovalDecisions } from '../../../worker/src/homolog-worker.ts'
 import { ApprovalError, type ApprovalRequestInput } from '@cvg/approval-engine'
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL
@@ -460,6 +461,121 @@ describe(
       }
     )
 
+    itWithPostgres(
+      'D9 PA: after the expiry commit a retry is a 409 and nothing changes (0279: terminal is never re-expired)',
+      async () => {
+        const h = await harness()
+        try {
+          await h.authority.submit(
+            tenantA,
+            h.fixture.approvalId,
+            'agent.atomic.pg.synthetic'
+          )
+          clockOffsetMs = 60 * 60 * 1000
+          await h.unit.decide(h.command()).catch(() => undefined)
+          const before = await h.snapshot()
+          expect(before.approval.status).toBe('EXPIRED')
+          for (const verdict of ['APPROVED', 'REJECTED'] as const) {
+            await expect(
+              h.unit.decide(h.command({ verdict, actorId: 'approver.two' }))
+            ).rejects.toMatchObject({ code: 'conflict' })
+            expect(await h.snapshot()).toEqual(before)
+          }
+        } finally {
+          await teardown(h.setup)
+        }
+      }
+    )
+    itWithPostgres(
+      'D9 PB: a decided approval whose expiry passed converges and is not expired',
+      async () => {
+        const h = await harness()
+        try {
+          await h.unit.decide(h.command())
+          clockOffsetMs = 60 * 60 * 1000
+          const before = await h.snapshot()
+          const again = await h.unit.decide(
+            h.command({ actorId: 'approver.two' })
+          )
+          expect(again.approval.status).toBe('APPROVED')
+          expect(await h.snapshot()).toEqual(before)
+        } finally {
+          await teardown(h.setup)
+        }
+      }
+    )
+    itWithPostgres(
+      'D9 PC: the F08 reconciler leaves a committed expiry alone',
+      async () => {
+        const h = await harness()
+        try {
+          await h.authority.submit(
+            tenantA,
+            h.fixture.approvalId,
+            'agent.atomic.pg.synthetic'
+          )
+          clockOffsetMs = 60 * 60 * 1000
+          await h.unit.decide(h.command()).catch(() => undefined)
+          const before = await h.snapshot()
+          const recovered = await reconcileStuckApprovalDecisions(
+            h.setup.pool,
+            tenantA as never,
+            {
+              approvalAuthority: h.authority,
+              store: h.store,
+              pool: h.setup.pool
+            } as never,
+            { window: { minAgeSeconds: 0, maxAgeSeconds: null } }
+          )
+          expect(recovered).toBe(0)
+          expect(await h.snapshot()).toEqual(before)
+        } finally {
+          await teardown(h.setup)
+        }
+      }
+    )
+    itWithPostgres(
+      'D9 PD: concurrent mixed decisions, reservations and resolutions neither deadlock nor split',
+      async () => {
+        const h = await harness()
+        try {
+          const verdicts = [
+            'APPROVED',
+            'REJECTED',
+            'APPROVED',
+            'REJECTED',
+            'APPROVED',
+            'REJECTED'
+          ] as const
+          const results = await Promise.allSettled(
+            verdicts.map((verdict, index) =>
+              h.unit.decide(
+                h.command({ verdict, actorId: `approver.c${index}` })
+              )
+            )
+          )
+          const failures = results.filter(
+            (r) => r.status === 'rejected'
+          ) as PromiseRejectedResult[]
+          for (const failure of failures) {
+            expect(failure.reason).toMatchObject({ code: 'conflict' })
+          }
+          const fulfilled = results.filter(
+            (r) => r.status === 'fulfilled'
+          ) as PromiseFulfilledResult<{ approval: { status: string } }>[]
+          expect(fulfilled.length).toBeGreaterThanOrEqual(1)
+          const finalStatuses = new Set(
+            fulfilled.map((r) => r.value.approval.status)
+          )
+          expect(finalStatuses.size).toBe(1)
+          const snap = await h.snapshot()
+          expect(snap.events).toBe(1)
+          expect(snap.approval.status).toBe([...finalStatuses][0])
+        } finally {
+          await teardown(h.setup)
+        }
+      }
+    )
     itWithPostgres(
       'expired REQUESTED: the intermediate submit is discarded, only EXPIRED commits (R13)',
       async () => {
