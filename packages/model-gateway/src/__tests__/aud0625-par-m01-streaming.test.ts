@@ -285,39 +285,35 @@ describe('PAR-M01 controls — fixtures and the default path', () => {
 // Transport: the bound Node transport buffers the whole body today.
 // ---------------------------------------------------------------------------
 describe('PAR-M01 §5 — bound transport in stream mode', () => {
-  it.fails(
-    'hands over the Response while the server still holds the rest of the body',
-    async () => {
-      let releaseSecond: () => void = () => undefined
-      const gate = new Promise<void>((r) => (releaseSecond = r))
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(sseData(openAiChunk('primeiro')))
-        void gate.then(() => response.end('data: [DONE]\n\n'))
-      })
-      const pending = fetchWithResolvedAddress(
-        `${server.url}/chat/completions`,
-        {
-          method: 'POST',
-          body: '{}',
-          responseMode: 'stream',
-          maxResponseBytes: 65_536
-        },
-        ['127.0.0.1']
-      )
-      const outcome = await Promise.race([
-        pending.then(() => 'resolved' as const),
-        sleep(400).then(() => 'still-buffering' as const)
-      ])
-      releaseSecond()
-      expect(outcome).toBe('resolved')
-      const reader = (await pending).body!.getReader()
-      const first = await reader.read()
-      expect(Buffer.from(first.value!).toString('utf8')).toContain('primeiro')
-      await reader.cancel()
-    },
-    10_000
-  )
+  it('hands over the Response while the server still holds the rest of the body', async () => {
+    let releaseSecond: () => void = () => undefined
+    const gate = new Promise<void>((r) => (releaseSecond = r))
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('primeiro')))
+      void gate.then(() => response.end('data: [DONE]\n\n'))
+    })
+    const pending = fetchWithResolvedAddress(
+      `${server.url}/chat/completions`,
+      {
+        method: 'POST',
+        body: '{}',
+        responseMode: 'stream',
+        maxResponseBytes: 65_536
+      },
+      ['127.0.0.1']
+    )
+    const outcome = await Promise.race([
+      pending.then(() => 'resolved' as const),
+      sleep(400).then(() => 'still-buffering' as const)
+    ])
+    releaseSecond()
+    expect(outcome).toBe('resolved')
+    const reader = (await pending).body!.getReader()
+    const first = await reader.read()
+    expect(Buffer.from(first.value!).toString('utf8')).toContain('primeiro')
+    await reader.cancel()
+  }, 10_000)
 
   // Control: SPEC 0248 already cuts the socket at the byte ceiling in the
   // buffered mode, so this holds today (the mode flag is ignored) and must keep
@@ -358,6 +354,139 @@ describe('PAR-M01 §5 — bound transport in stream mode', () => {
     expect(server.closedEarly()).toBe(true)
     expect(written).toBeLessThan(8_192 * 4)
   }, 10_000)
+})
+
+describe('PAR-M01 §5 — bound transport in stream mode: terminal behavior', () => {
+  const streamInit = {
+    method: 'POST',
+    body: '{}',
+    responseMode: 'stream',
+    maxResponseBytes: 65_536
+  }
+  const target = (url: string) => `${url}/chat/completions`
+
+  async function drain(response: Response): Promise<string> {
+    const reader = response.body!.getReader()
+    const parts: Buffer[] = []
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) return Buffer.concat(parts).toString('utf8')
+      parts.push(Buffer.from(value))
+    }
+  }
+
+  it('a clean end closes the body with every byte, in order', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write('um ')
+      setTimeout(() => response.end('dois'), 20)
+    })
+    const response = await fetchWithResolvedAddress(
+      target(server.url),
+      streamInit,
+      ['127.0.0.1']
+    )
+    expect(response.status).toBe(200)
+    expect(await drain(response)).toBe('um dois')
+  })
+
+  it('a connection cut mid-body errors the stream, it never ends cleanly', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, { ...SSE_HEADERS, 'content-length': '1000' })
+      response.write('parcial')
+      setTimeout(() => response.destroy(), 20)
+    })
+    const response = await fetchWithResolvedAddress(
+      target(server.url),
+      streamInit,
+      ['127.0.0.1']
+    )
+    await expect(drain(response)).rejects.toBeDefined()
+  })
+
+  it('an abort mid-body errors the stream with the abort reason and closes the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write('comecou')
+    })
+    const controller = new AbortController()
+    const response = await fetchWithResolvedAddress(
+      target(server.url),
+      { ...streamInit, signal: controller.signal },
+      ['127.0.0.1']
+    )
+    const reader = response.body!.getReader()
+    await reader.read()
+    controller.abort()
+    await expect(reader.read()).rejects.toBeDefined()
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('cancelling the reader destroys the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write('x')
+    })
+    const response = await fetchWithResolvedAddress(
+      target(server.url),
+      streamInit,
+      ['127.0.0.1']
+    )
+    await response.body!.cancel()
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('a non-2xx status keeps the buffered handling: status wins', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(503, { 'content-type': 'text/plain' })
+      response.end('indisponivel')
+    })
+    const response = await fetchWithResolvedAddress(
+      target(server.url),
+      streamInit,
+      ['127.0.0.1']
+    )
+    expect(response.status).toBe(503)
+  })
+
+  it('a declared length above the ceiling is refused before any byte is kept', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, { ...SSE_HEADERS, 'content-length': '70000' })
+      response.write('x'.repeat(100))
+    })
+    const response = await fetchWithResolvedAddress(
+      target(server.url),
+      streamInit,
+      ['127.0.0.1']
+    )
+    await expect(drain(response)).rejects.toMatchObject({
+      name: 'ResponseTooLargeError'
+    })
+  })
+
+  it('the default mode stays buffered: nothing resolves before the body ends', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write('primeiro')
+      void gate.then(() => response.end('fim'))
+    })
+    const pending = fetchWithResolvedAddress(
+      target(server.url),
+      { method: 'POST', body: '{}', maxResponseBytes: 65_536 },
+      ['127.0.0.1']
+    )
+    const outcome = await Promise.race([
+      pending.then(() => 'resolved' as const),
+      sleep(300).then(() => 'buffering' as const)
+    ])
+    release()
+    expect(outcome).toBe('buffering')
+    expect(await drain(await pending)).toBe('primeirofim')
+  })
 })
 
 // ---------------------------------------------------------------------------
