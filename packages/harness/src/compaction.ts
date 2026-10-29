@@ -1,3 +1,4 @@
+import { coreHook } from './kernel/hook-authority.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { canonicalizeJson } from '@cvg/harness-contracts'
 import type { ModelMessage, SessionEventStore } from '@cvg/harness-contracts'
@@ -147,35 +148,38 @@ export function createCompactionControl(
     name: 'control.context-compaction',
     kind: 'control',
     apply(ctx) {
-      ctx.on('model/before-call', async (call, next) => {
-        const messages: CompactableMessage[] = call.request.messages.map(
-          (message, index) => ({
-            sequence: index + 1,
-            role: message.role,
-            content: message.content
-          })
-        )
-        const result = compactConversation(messages, options)
-        if (!result.compacted) return next()
-        if (options.onCompacted) {
-          try {
-            await options.onCompacted(result)
-          } catch {
-            return stop(
-              'INSUFFICIENT_EVIDENCE',
-              'Context compaction could not be recorded; the model call was not started.'
-            )
+      ctx.on(
+        'model/before-call',
+        coreHook('model/before-call', async (call, next) => {
+          const messages: CompactableMessage[] = call.request.messages.map(
+            (message, index) => ({
+              sequence: index + 1,
+              role: message.role,
+              content: message.content
+            })
+          )
+          const result = compactConversation(messages, options)
+          if (!result.compacted) return next()
+          if (options.onCompacted) {
+            try {
+              await options.onCompacted(result)
+            } catch {
+              return stop(
+                'INSUFFICIENT_EVIDENCE',
+                'Context compaction could not be recorded; the model call was not started.'
+              )
+            }
           }
-        }
-        // I6: the pipeline logs and sends the request after every control
-        // adjusted it, so the compacted view is what leaves this point.
-        ;(call.request as { messages: readonly ModelMessage[] }).messages =
-          result.messages.map(({ role, content }) => ({
-            role,
-            content
-          }))
-        return next()
-      })
+          // I6: the pipeline logs and sends the request after every control
+          // adjusted it, so the compacted view is what leaves this point.
+          ;(call.request as { messages: readonly ModelMessage[] }).messages =
+            result.messages.map(({ role, content }) => ({
+              role,
+              content
+            }))
+          return next()
+        })
+      )
     }
   }
 }

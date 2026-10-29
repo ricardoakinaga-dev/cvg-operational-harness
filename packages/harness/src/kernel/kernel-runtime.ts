@@ -1,3 +1,9 @@
+import {
+  hookState,
+  hookValue,
+  isCoreHook,
+  reconcileTurn
+} from './hook-authority.ts'
 import type {
   HarnessRuntime,
   RuntimeInput,
@@ -636,14 +642,21 @@ class Turn {
     let current = initial
     for (const entry of this.#host.listeners('turn/end')) {
       try {
-        current = await entry.fn(this.#state, current)
+        const exposed = hookValue(entry, current)
+        const proposed = await entry.fn(hookState(entry, this.#state), exposed)
+        current = reconcileTurn(current, proposed, exposed, isCoreHook(entry))
       } catch (error) {
         if (entry.kind === 'control') {
-          current = {
-            ...current,
-            response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
-            stopReason: 'INSUFFICIENT_EVIDENCE'
-          }
+          current = reconcileTurn(
+            current,
+            {
+              ...current,
+              response: `Execution could not be completed because ${entry.plugin} failed: ${errorMessage(error)}.`,
+              stopReason: 'INSUFFICIENT_EVIDENCE'
+            },
+            undefined,
+            true
+          )
         }
       }
     }

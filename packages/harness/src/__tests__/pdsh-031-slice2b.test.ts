@@ -6,10 +6,10 @@ import type {
 } from '@cvg/harness-contracts'
 import { DefaultContextEngine, createContextEngine } from '../context-engine.ts'
 import { KernelBootError, KernelHost } from '../kernel/host.ts'
-import type { KernelContext, KernelPlugin, TurnState } from '../kernel/types.ts'
+import type { KernelContext, KernelPlugin, TurnView } from '../kernel/types.ts'
 
 const turnEndListener = async (
-  _turn: TurnState,
+  _turn: TurnView,
   result: RuntimeResult
 ): Promise<RuntimeResult> => result
 

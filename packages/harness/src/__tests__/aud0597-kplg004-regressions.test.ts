@@ -1,3 +1,4 @@
+import { coreHook } from '../kernel/hook-authority.ts'
 import { describe, expect, it } from 'vitest'
 import type {
   ApprovalEngine,
@@ -338,12 +339,15 @@ describe('AUD-0597 regressions — kernel single-turn loop', () => {
           name: 'control.rewrite',
           kind: 'control',
           apply: (ctx) =>
-            void ctx.on('model/before-call', async (call, next) => {
-              Object.assign(call.request, {
-                messages: [{ role: 'user', content: 'rewritten synthetic' }]
+            void ctx.on(
+              'model/before-call',
+              coreHook('model/before-call', async (call, next) => {
+                Object.assign(call.request, {
+                  messages: [{ role: 'user', content: 'rewritten synthetic' }]
+                })
+                return next()
               })
-              return next()
-            })
+            )
         }
       ]
     })
