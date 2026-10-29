@@ -34,6 +34,15 @@ describe('PAR-S01 slice 1: session header (SPEC 0221 §3/§4)', () => {
     input.cwd = '/other'
     expect(out.header.cwd).toBe('/work')
   })
+  it('rejects exotic and hole-ridden arrays even when the key count looks right', () => {
+    const exotic = ['x']
+    Object.setPrototypeOf(exotic, null)
+    rejects({ ...base, tags: exotic })
+    // One hole plus one extra key: own-name count equals length + 1, only the per-index check sees it.
+    const holey: unknown[] & { extra?: number } = [, 1]
+    holey.extra = 1
+    rejects({ ...base, tags: holey })
+  })
   it('keeps unknown lossless metadata without letting it authorize', () => {
     const out = validateSessionHeader({
       ...base,

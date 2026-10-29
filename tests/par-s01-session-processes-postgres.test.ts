@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- IPC replies from the synthetic child are untyped JSON */
 import { execFileSync, fork, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { Client, Pool } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { materializeSessionEvent, sessionEventInputDigest } from '@cvg/harness'
@@ -26,9 +26,7 @@ const tenantA = 'tenant-synthetic-A'
 const tenantB = 'tenant-synthetic-B'
 const OPERATION_MS = 5_000
 const CHILD_MS = 180_000
-const childScript = fileURLToPath(
-  new URL('./support/par-s01-child.ts', import.meta.url)
-)
+const childScript = join(process.cwd(), 'tests', 'support', 'par-s01-child.ts')
 
 interface Reply {
   readonly id: number
