@@ -23,7 +23,12 @@ export async function fetchWithResolvedAddress(
     throw new Error(`Unsupported transport protocol: ${url.protocol}`)
   }
 
+  // SPEC 0263 §4: a request is never created once the operation signal is
+  // aborted, including while a Blob body is still being encoded.
+  const signal = asAbortSignal(init.signal)
+  throwIfSignalAborted(signal)
   const body = await encodeBody(init.body)
+  throwIfSignalAborted(signal)
   const headers = toHeaders(init.headers)
   headers.delete('host')
   headers.set('host', url.host)
@@ -44,6 +49,11 @@ export async function fetchWithResolvedAddress(
   }
 
   return new Promise<Response>((resolve, reject) => {
+    // Last check before the request exists; no await between it and creation.
+    if (signal?.aborted) {
+      reject(transportAbortError(signal))
+      return
+    }
     let settled = false
     const finish = (callback: () => void) => {
       if (settled) return
@@ -68,14 +78,8 @@ export async function fetchWithResolvedAddress(
 
     request.once('error', (error) => finish(() => reject(error)))
 
-    const signal = asAbortSignal(init.signal)
     const abort = () => {
-      const reason = signal?.reason
-      const error =
-        reason instanceof Error
-          ? reason
-          : new DOMException('Request aborted', 'AbortError')
-      request.destroy(error)
+      if (signal) request.destroy(transportAbortError(signal))
     }
     if (signal) {
       if (signal.aborted) {
@@ -88,6 +92,18 @@ export async function fetchWithResolvedAddress(
 
     request.end(body === undefined ? undefined : Buffer.from(body))
   })
+}
+
+/** SPEC 0180: an Error reason is preserved; anything else is an AbortError. */
+function transportAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason
+  return reason instanceof Error
+    ? reason
+    : new DOMException('Request aborted', 'AbortError')
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw transportAbortError(signal)
 }
 
 function stripBrackets(value: string): string {
