@@ -81,6 +81,7 @@ Typecheck 0, `docs:check-links` (DOC_LINKS_OK e EVIDENCE_HYGIENE_OK), `prettier`
 - **F13 (SPEC 0283, produto):** entra nesta onda (fatias 1 e 2 da sessão 07, revisadas pelo DF, APPROVE; `products/shift-assistant` mais docs). Recibo `docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-13.json`.
 - **F18 (SPEC 0280, recibo human-decisions-11):** a fatia 1 (fail-closed de aprovação sem grant, Codex) entra revisada pela D9 (APPROVE); o F18 segue aberto: S1 na onda 3; S2 em correção (P2-1/P2-2, revisão 07 `4ffbda710e`), em PR pequeno depois.
 - **F14:** escopo mapeado nas carteiras PAR/C100, sem BUILD nesta remediação (`docs/04_audit/evidence/AUD0625-F14-SCOPE-07-20261029/SCOPE.md`).
+- **Prova de navegador REM21-014:** o perfil HMAC sem OIDC responde 503 (0262, recibo 12). A prova passa a subir `scripts/rem21-014-trusted-test-api.ts`, que só inicia com `NODE_ENV=test` (teste prova a recusa), com autoridade de principais sintética. Spec inalterado; 18/18 em chromium, firefox e webkit.
 - **Com o Codex:** F19.
 - **Com o Ricardo e o hospital:** servidor (U10), IdP (U09) e piloto (U23).
 
