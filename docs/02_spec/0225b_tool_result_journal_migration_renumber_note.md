@@ -4,7 +4,7 @@ R1, 29/10/2026. Task `AUD0625-MIGRATION-RESERVE-07-20261029`. Nota adjacente à
 [SPEC 0225](0225_pare100_complete_tool_result_journal.md) (SHA-256
 `04b92ba4d13b1ed58157a24258cade87d8d6d31df833ef6c1969059772cc6da5`,
 `APPROVED_WITH_ADJUSTMENTS` em 16/10/2026), cujo corpo é hash-bound e **não foi
-editado**. Estado: `PROPOSED_FOR_TECHNICAL_REVIEW`. Não autoriza BUILD.
+editado**. Estado: `TECHNICAL_REVIEW_APPROVED`. Revisão técnica independente: APPROVE (Claude DF, 29/10/2026, sobre o commit `a13fbab13`). Não autoriza BUILD.
 
 ## Autoridade
 

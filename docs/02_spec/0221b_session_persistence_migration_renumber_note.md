@@ -6,7 +6,7 @@ R1, 29/10/2026. Task `AUD0625-MIGRATION-RESERVE-07-20261029`. Nota adjacente à
 `APPROVED_WITH_ADJUSTMENTS` em 16/10/2026) e à recomposição aprovada
 `f64a1b89` ([proposta](../04_audit/evidence/CLAUDE100-EXEC-20261017/foundation0221-recomposition/adjusted-spec-proposal.md),
 §5 "Migration0031 e adoção"). Os corpos são hash-bound e **não foram editados**.
-Estado: `PROPOSED_FOR_TECHNICAL_REVIEW`. Não autoriza BUILD; a recomposição
+Estado: `TECHNICAL_REVIEW_APPROVED`. Não autoriza BUILD; a recomposição
 mantém `BUILD_ENTRY_READY=false`.
 
 ## Autoridade
