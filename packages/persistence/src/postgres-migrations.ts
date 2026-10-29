@@ -51,7 +51,10 @@ const defaultPostgresMigrations = [
   // SPEC 0257: durable receipts of HTTP creations.
   '0030_api_creation_receipts',
   // SPEC 0282: the "not before" of a rate-limited channel operation.
-  '0031_channel_effect_retry_not_before'
+  '0031_channel_effect_retry_not_before',
+  // SPEC 0225 (note 0225b: renumbered from 0030): additive, closed expansion of
+  // the operational effect journal for the complete tool result storage.
+  '0033_complete_tool_result_journal'
 ]
 
 /**
