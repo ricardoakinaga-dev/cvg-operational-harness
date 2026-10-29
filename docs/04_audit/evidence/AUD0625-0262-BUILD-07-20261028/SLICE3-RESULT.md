@@ -22,3 +22,6 @@ Branch claude/aud0625-0257-07. Implementação local; SPEC intacta.
 
 ## Fora desta fatia
 Guard preHandler e inventário de rotas (fatia 4), invalidação global e `revoke-operator-sessions.ts` (fatia 5), docs 0107/0305.
+
+## Decisão humana sobre a consequência 1 (recibo human-decisions-12)
+O Ricardo manteve a SPEC: nada muda no código. Depois da fatia 4, toda rota de operador no perfil HMAC sem OIDC responde 503 (cookie de sessão pelo hook; token HMAC no header pelo guard de principal), porque não há `authorityVersion` nem produtor de principal fora do login OIDC. O ensaio passa a usar OIDC.
