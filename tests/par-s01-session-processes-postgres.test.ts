@@ -408,13 +408,16 @@ describe.skipIf(!url)(
         ).toBe(2)
         for (const sql of [
           `ALTER TABLE ${schema}.session_events ADD COLUMN x int`,
-          `UPDATE ${schema}.session_streams SET header = '{}'::jsonb WHERE session_id='dup'`,
+          `UPDATE ${schema}.session_streams SET header_json = '{}' WHERE session_id='dup'`,
           `UPDATE ${schema}.session_streams SET writer_lock_id = 1 WHERE session_id='dup'`,
           `DELETE FROM ${schema}.session_streams WHERE session_id='dup'`,
           `TRUNCATE ${schema}.session_events`
         ]) {
           const r = await a.call('sql', { sql })
           expect(r.ok, sql).toBe(false)
+          expect(r.error!.code, sql).toBe(
+            sql.includes('writer_lock_id') ? '428C9' : '42501'
+          )
         }
         expect(await stored(tenantA, 'dup')).toEqual([1, 2, 3])
         await Promise.all([
@@ -486,28 +489,81 @@ describe.skipIf(!url)(
         await b.ok('close', { name: 'w' })
       })
 
-      it('never exposes a partial batch: a killed owner leaves only whole acknowledged batches', async () => {
+      it('never exposes a partial batch: a batch killed mid-transaction, after earlier events of it were inserted, leaves nothing, and the next one enters whole', async () => {
         const a = spawn()
         await a.ok('create', { session: 's4p', name: 'w' })
         await a.ok('append', { session: 's4p', name: 'w', from: 1, count: 4 })
-        // A large second batch is in flight when the process dies.
-        const inflight = a
-          .call('append', { session: 's4p', name: 'w', from: 5, count: 200 })
-          .catch(() => undefined)
-        await a.kill()
-        await inflight
-        await waitFor(async () => (await holderPids('s4p')).length === 0)
-        const seq = await stored(tenantA, 's4p')
-        expect([4, 204]).toContain(seq.length)
-        expect(seq).toEqual(seq.map((_, i) => i + 1))
-        const next = Number(
-          (
-            await admin.query(
-              `SELECT next_sequence FROM ${schema}.session_streams WHERE session_id='s4p'`
-            )
-          ).rows[0].next_sequence
+        // Test-only gate: the INSERT of sequence 9 waits on an advisory lock this test holds, so the
+        // owner stands inside its open transaction with events 5..8 already inserted (a per-event
+        // COMMIT implementation would have made them durable by now).
+        const gateKey = 7_770_001
+        await admin.query(
+          `CREATE FUNCTION ${schema}.test_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+           BEGIN IF NEW.sequence = 9 THEN PERFORM pg_advisory_xact_lock(${gateKey}); END IF; RETURN NEW; END $$`
         )
-        expect(next).toBe(seq.length + 1)
+        await admin.query(
+          `CREATE TRIGGER zz_test_gate BEFORE INSERT ON ${schema}.session_events
+             FOR EACH ROW EXECUTE FUNCTION ${schema}.test_gate()`
+        )
+        const gate = new Client({ connectionString: url })
+        await gate.connect()
+        try {
+          await gate.query('SELECT pg_advisory_lock($1)', [gateKey])
+          const inflight = a
+            .call('append', { session: 's4p', name: 'w', from: 5, count: 200 })
+            .catch(() => undefined)
+          // Observable barrier: the owner's backend is waiting on the gate inside its transaction.
+          await waitFor(
+            async () =>
+              (
+                await admin.query(
+                  `SELECT 1 FROM pg_stat_activity
+                    WHERE usename=$1 AND wait_event_type='Lock' AND wait_event='advisory' AND xact_start IS NOT NULL`,
+                  [role]
+                )
+              ).rowCount! > 0
+          )
+          await a.kill()
+          // Releasing the gate lets the backend continue; it finds the client gone before COMMIT.
+          await gate.query('SELECT pg_advisory_unlock($1)', [gateKey])
+          await inflight
+          await waitFor(async () => (await holderPids('s4p')).length === 0)
+          await waitFor(
+            async () =>
+              (
+                await admin.query(
+                  `SELECT 1 FROM pg_stat_activity WHERE usename=$1 AND xact_start IS NOT NULL AND state <> 'idle'`,
+                  [role]
+                )
+              ).rowCount === 0
+          )
+        } finally {
+          await gate.end()
+          await admin.query(
+            `DROP TRIGGER zz_test_gate ON ${schema}.session_events`
+          )
+          await admin.query(`DROP FUNCTION ${schema}.test_gate()`)
+        }
+        // Nothing of the killed batch is visible: exactly the acknowledged prefix, cursor intact.
+        expect(await stored(tenantA, 's4p')).toEqual([1, 2, 3, 4])
+        expect(
+          Number(
+            (
+              await admin.query(
+                `SELECT next_sequence FROM ${schema}.session_streams WHERE session_id='s4p' AND tenant_id=$1`,
+                [tenantA]
+              )
+            ).rows[0].next_sequence
+          )
+        ).toBe(5)
+        // Positive: the next owner's batch enters whole (204 events, no hole where the killed one was).
+        const b = spawn()
+        await b.ok('open', { session: 's4p', name: 'w', access: 'write' })
+        await b.ok('append', { session: 's4p', name: 'w', from: 5, count: 200 })
+        const all = await stored(tenantA, 's4p')
+        expect(all).toHaveLength(204)
+        expect(all).toEqual(all.map((_, i) => i + 1))
+        await b.ok('close', { name: 'w' })
       })
     })
 
