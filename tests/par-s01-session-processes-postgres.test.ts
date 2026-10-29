@@ -1,4 +1,5 @@
 // @vitest-environment node
+/* eslint-disable @typescript-eslint/no-explicit-any -- IPC replies from the synthetic child are untyped JSON */
 import { execFileSync, fork, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
