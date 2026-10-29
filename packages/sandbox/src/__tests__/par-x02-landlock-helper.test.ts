@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, rmSync } from 'node:fs'
+import { createServer, type Server } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -229,5 +230,147 @@ describe.skipIf(!cc || !kernelAbi())(
       if (!existsSync('/usr/bin/python3')) return
       expect(r.code).toBe(7)
     })
+
+    /** Spawns the helper with a caller-chosen fd 3, to test a broken status channel. */
+    function runWithStatusFd(
+      fd3: number | 'ignore',
+      args: string[],
+      rules: string
+    ): Promise<{ code: number | null; stdout: string }> {
+      return new Promise((done, reject) => {
+        const child = spawn(helper, args, {
+          stdio: ['ignore', 'pipe', 'ignore', fd3, 'pipe'],
+          env: { PATH: '/usr/bin:/bin' }
+        })
+        let stdout = ''
+        child.stdout!.on('data', (d) => (stdout += d))
+        const rulesPipe = child.stdio[4] as NodeJS.WritableStream
+        rulesPipe.on('error', () => undefined)
+        rulesPipe.end(rules)
+        child.on('error', reject)
+        child.on('close', (code) => done({ code, stdout }))
+      })
+    }
+
+    it('review P2: a status channel that cannot be written stops before the payload', async () => {
+      const sentinel = join(workspace, 'status-sentinel')
+      const payload = ['/bin/sh', '-c', `echo ran > ${sentinel}`]
+      // (a) status fd not open at all
+      const closed = await runWithStatusFd(
+        'ignore',
+        ['--status-fd', '9', '--rules-fd', '4', '--', ...payload],
+        baseRules()
+      )
+      expect(closed.code).toBe(125)
+      // (b) status fd open read-only
+      const readOnly = openSync('/dev/null', 'r')
+      try {
+        const ro = await runWithStatusFd(
+          readOnly,
+          applyArgs(payload),
+          baseRules()
+        )
+        expect(ro.code).toBe(125)
+      } finally {
+        closeSync(readOnly)
+      }
+      // (c) the same descriptor for status and rules
+      const alias = await run(
+        ['--status-fd', '4', '--rules-fd', '4', '--', ...payload],
+        baseRules()
+      )
+      expect(alias.code).toBe(125)
+      expect(existsSync(sentinel)).toBe(false)
+      // (d) a writable channel whose write fails (ENOSPC): no proof, no payload
+      const full = openSync('/dev/full', 'w')
+      try {
+        const nospace = await runWithStatusFd(
+          full,
+          applyArgs(payload),
+          baseRules()
+        )
+        expect(nospace.code).toBe(125)
+      } finally {
+        closeSync(full)
+      }
+      expect(existsSync(sentinel)).toBe(false)
+      // healthy control: the same payload runs when the channel works
+      const healthy = await run(applyArgs(payload), baseRules())
+      expect(JSON.parse(healthy.status)).toMatchObject({ applied: true })
+      expect(existsSync(sentinel)).toBe(true)
+    })
+
+    const python = existsSync('/usr/bin/python3')
+    const pyArgs = (code: string, ...extra: string[]) =>
+      applyArgs(['/usr/bin/python3', '-I', '-c', code, ...extra])
+
+    it.skipIf(!python)(
+      'review P3: TCP bind is denied when the ABI handles the network',
+      async () => {
+        const probe = JSON.parse(
+          (await run(['--probe', '--status-fd', '3'])).status
+        )
+        if (probe.abi < 4) return
+        const r = await run(
+          pyArgs(
+            "import socket,sys\ns=socket.socket()\ntry:\n s.bind(('127.0.0.1',0))\nexcept PermissionError:\n sys.exit(7)\nsys.exit(0)"
+          ),
+          baseRules()
+        )
+        expect(r.code).toBe(7)
+      }
+    )
+
+    it.skipIf(!python)(
+      'review P3: a signal to a process outside the domain is denied (ABI ≥ 6)',
+      async () => {
+        const probe = JSON.parse(
+          (await run(['--probe', '--status-fd', '3'])).status
+        )
+        if (probe.abi < 6) return
+        const target = spawn('/bin/sleep', ['30'], { stdio: 'ignore' })
+        try {
+          const r = await run(
+            pyArgs(
+              'import os,signal,sys\ntry:\n os.kill(int(sys.argv[1]), signal.SIGUSR1)\nexcept PermissionError:\n sys.exit(7)\nsys.exit(0)',
+              String(target.pid)
+            ),
+            baseRules()
+          )
+          expect(r.code).toBe(7)
+          // control: the target is still alive (SIGUSR1 would have killed sleep)
+          expect(target.exitCode).toBeNull()
+        } finally {
+          target.kill('SIGKILL')
+        }
+      }
+    )
+
+    it.skipIf(!python)(
+      'review P3: an abstract UNIX socket outside the domain is unreachable (ABI ≥ 6)',
+      async () => {
+        const probe = JSON.parse(
+          (await run(['--probe', '--status-fd', '3'])).status
+        )
+        if (probe.abi < 6) return
+        const name = `cvg-x02-${process.pid}-${Date.now()}`
+        const server: Server = createServer((c) => c.end())
+        await new Promise<void>((ok) =>
+          server.listen({ path: `\0${name}` }, ok)
+        )
+        try {
+          const r = await run(
+            pyArgs(
+              'import socket,sys\ns=socket.socket(socket.AF_UNIX)\ntry:\n s.connect("\\0"+sys.argv[1])\nexcept PermissionError:\n sys.exit(7)\nsys.exit(0)',
+              name
+            ),
+            baseRules()
+          )
+          expect(r.code).toBe(7)
+        } finally {
+          await new Promise<void>((ok) => server.close(() => ok()))
+        }
+      }
+    )
   }
 )

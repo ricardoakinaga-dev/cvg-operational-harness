@@ -60,27 +60,38 @@ struct ruleset_attr {
 
 static int status_fd = -1;
 
-static void status_write(const char *json) {
-  if (status_fd < 0) return;
+/* Returns 0 only when every byte reached the status channel; any other outcome is a failure. */
+static int status_write(const char *json) {
+  if (status_fd < 0) return -1;
   size_t left = strlen(json);
   const char *p = json;
   while (left > 0) {
     ssize_t n = write(status_fd, p, left);
     if (n < 0) {
       if (errno == EINTR) continue;
-      return;
+      return -1;
     }
+    if (n == 0) return -1;
     p += n;
     left -= (size_t)n;
   }
+  return 0;
 }
 
 /* Reports the failure on the status channel and exits; the payload never runs. */
 static void fail(const char *code, int err) {
   char buf[160];
   snprintf(buf, sizeof buf, "{\"applied\":false,\"error\":\"%s\",\"errno\":%d}\n", code, err);
-  status_write(buf);
+  (void)status_write(buf);
   _exit(125);
+}
+
+/* The status channel must be an open, writable descriptor of its own. */
+static int writable_fd(int fd) {
+  int flags = fcntl(fd, F_GETFL);
+  if (flags < 0) return 0;
+  int mode = flags & O_ACCMODE;
+  return mode == O_WRONLY || mode == O_RDWR;
 }
 
 static long abi_version(void) {
@@ -177,15 +188,18 @@ int main(int argc, char **argv) {
       fail("usage", 0);
     }
   }
-  if (status_fd < 0) return 125;
+  /* Without a writable private channel nothing can be proven: stop before anything else. */
+  if (status_fd < 0 || !writable_fd(status_fd)) return 125;
   long abi = abi_version();
   if (probe) {
     char buf[64];
     snprintf(buf, sizeof buf, "{\"abi\":%ld}\n", abi > 0 ? abi : 0);
-    status_write(buf);
+    if (status_write(buf) != 0) return 125;
     return abi >= 1 ? 0 : 3;
   }
-  if (rules_fd < 0 || payload < 0 || payload >= argc || argv[payload][0] != '/') fail("usage", 0);
+  if (rules_fd < 0 || rules_fd == status_fd || payload < 0 || payload >= argc ||
+      argv[payload][0] != '/')
+    fail("usage", 0);
   if (abi < MIN_ABI) fail("abi_too_low", abi < 0 ? errno : 0);
 
   static char rules[RULES_MAX_BYTES];
@@ -217,7 +231,8 @@ int main(int argc, char **argv) {
            "{\"applied\":true,\"abi\":%ld,\"handledFs\":%llu,\"handledNet\":%llu,\"scoped\":%llu}\n",
            abi, (unsigned long long)attr.handled_access_fs,
            (unsigned long long)attr.handled_access_net, (unsigned long long)attr.scoped);
-  status_write(buf);
+  /* The payload runs only after the proof of application reached the caller. */
+  if (status_write(buf) != 0) _exit(125);
   close(status_fd);
   execv(argv[payload], &argv[payload]);
   _exit(127);

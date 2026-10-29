@@ -43,3 +43,22 @@ Na primeira rodada, o mutante do fd herdado sobreviveu: o teste XL06 usava `2>/d
 - Fatia 2: `landlockAbi` em `SandboxCapabilities`, probe pelo helper e gate com D-D.
 - Fatia 3: integração ao lançamento do X01 (depende da fatia 3 da 07), XL04 e mutações do status.
 - Fatia 4: build do helper na CI. A imagem de produção não muda (D-C).
+
+## Correção da revisão do Codex (GBrain 20658, relatório de1fe68c)
+
+**P2.** O helper ignorava erro de escrita no fd de status. Com o fd fechado, somente leitura ou igual ao fd de regras, ele aplicava o ruleset mas executava o payload sem deixar prova no canal privado. Correção:
+- o fd de status precisa estar aberto e aceitar escrita, senão sai com 125 antes de tudo;
+- status igual a regras é `usage`;
+- qualquer falha da escrita final do status (inclusive ENOSPC) sai com 125 sem `execve`.
+
+Regressão com 4 subcasos (fd 9 não aberto, `/dev/null` somente leitura, alias 4/4, `/dev/full`) e controle saudável. Ela falha no helper anterior.
+
+**P3a.** Testes nativos de TCP bind (ABI ≥ 4), de sinal para fora do domínio e de socket unix abstrato de fora (ABI ≥ 6). Os mutantes que retiram cada direito agora morrem.
+
+**P3b.** A nota técnica [0288b](../../../02_spec/0288b_landlock_helper_protocol_note.md) registra o protocolo real (regras por linha e campos do status), sem editar a SPEC aprovada.
+
+Mutantes novos:
+- mortos: final status ignorado, sem TCP bind, sem escopo de sinal, sem escopo unix;
+- equivalentes por redundância documentada: "sem checagem de fd gravável" e "alias permitido". Nesta montagem, o fd de regras é só de leitura no filho, então a checagem de gravável já recusa antes; as duas checagens ficam como defesa em profundidade.
+
+Resultado: 11 testes nativos.
