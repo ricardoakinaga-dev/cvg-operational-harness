@@ -72,7 +72,7 @@ Cada frente segue a mesma ordem: achado, SPEC e recibo, o que mudou, SHAs locais
 
 ## Gates locais
 
-Typecheck 0, `docs:check-links` (DOC_LINKS_OK e EVIDENCE_HYGIENE_OK), `prettier`, `skip:governance` PASS, `mutation-guard` 3/3 e `gitleaks` 8.28.0 sem achados. A suíte completa com PostgreSQL ainda não rodou (janela de disco pedida pelo cvg-claw); o resultado e a triagem entram aqui antes de abrir o PR.
+Typecheck 0, `docs:check-links` (DOC_LINKS_OK e EVIDENCE_HYGIENE_OK), `prettier`, `skip:governance` PASS, `mutation-guard` 3/3 e `gitleaks` 8.28.0 sem achados. Suíte completa com PostgreSQL 16 (`npm test`): 561 arquivos e 7920 testes, 7908 passam e 11 falham, todos por causa do ambiente: 9 em `b6-0241-integral-body` (a árvore de teste usava `node_modules` por link, e o arquivo dá 28/28 com cópia real) e 2 em `rate-limit-distributed-postgres` (prazo de 15 s sob carga de I/O; isolado dá 9/9). Nenhuma regressão real. Detalhes em `docs/04_audit/evidence/AUD0625-WAVE3-PR-D9-20261029/SUITE-RESULT.md`.
 
 ## Fica para depois
 
