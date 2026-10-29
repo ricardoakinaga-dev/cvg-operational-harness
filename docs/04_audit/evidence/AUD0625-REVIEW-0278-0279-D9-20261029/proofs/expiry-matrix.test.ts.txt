@@ -1,0 +1,127 @@
+import { describe, expect, it } from 'vitest'
+import { ApprovalEngine, ApprovalError, type ApprovalEvent } from '../engine.ts'
+import type { ApprovalRecord } from '../contracts.ts'
+
+// AUD0625 F08e / SPEC 0279: the expiry guard must never rewrite a decided
+// or in-flight approval. The ten target cases were `it.fails` in phase 1
+// (the guard flipped the status to EXPIRED before the caller's status check)
+// and are plain tests after the BUILD; controls pass before and after it.
+// Synthetic data only.
+
+const TENANT = 'tenant_00000000-0000-4000-8000-0000000f08e1'
+const CORRELATION = 'corr_00000000-0000-4000-8000-0000000f08e1'
+const AGENT = 'agent_00000000-0000-4000-8000-0000000f08e1'
+const START = new Date('2026-10-29T12:00:00.000Z')
+const AFTER_EXPIRY = new Date(START.getTime() + 16 * 60 * 1000)
+
+const ACTION = 'appointment.cancel'
+const RESOURCE = { type: 'appointment', id: 'apt_f08e' }
+const PAYLOAD = { appointmentId: 'apt_f08e', reason: 'synthetic' }
+
+function world() {
+  let now = START
+  let counter = 0
+  const events: ApprovalEvent[] = []
+  const engine = new ApprovalEngine({
+    clock: () => now,
+    idFactory: () => {
+      counter += 1
+      return `appr_00000000-0000-4000-8000-${String(counter).padStart(12, '0')}`
+    },
+    reservationTtlMs: 60_000,
+    onEvent: (event) => events.push(event)
+  })
+  const request = (extra: Record<string, unknown> = {}): ApprovalRecord =>
+    engine.request({
+      tenantId: TENANT,
+      operatorId: 'op_requester',
+      agentId: AGENT,
+      agentVersion: 'v1',
+      action: ACTION,
+      resource: RESOURCE,
+      payload: PAYLOAD,
+      policyVersion: 'policy_v1',
+      correlationId: CORRELATION,
+      ...extra
+    } as Parameters<ApprovalEngine['request']>[0])
+  const approved = (extra: Record<string, unknown> = {}): string => {
+    const { approvalId } = request(extra)
+    engine.submit(TENANT, approvalId, 'op_requester')
+    engine.approve(TENANT, approvalId, { approverId: 'op_approver' })
+    return approvalId
+  }
+  const reserve = (approvalId: string) =>
+    engine.reserve({
+      tenantId: TENANT,
+      approvalId,
+      action: ACTION,
+      resource: RESOURCE,
+      payload: PAYLOAD
+    }).reservationId
+  const consume = (approvalId: string) =>
+    engine.verifyAndConsume({
+      tenantId: TENANT,
+      approvalId,
+      action: ACTION,
+      resource: RESOURCE,
+      payload: PAYLOAD
+    })
+  return {
+    engine,
+    events,
+    request,
+    approved,
+    reserve,
+    consume,
+    expire: () => {
+      now = AFTER_EXPIRY
+    },
+    expiredEvents: () =>
+      events.filter((event) => event.type === 'approval.expired').length,
+    status: (approvalId: string) => engine.get(TENANT, approvalId).status
+  }
+}
+
+
+import { appendFileSync } from 'node:fs'
+const OUT = '/mnt/dados/tmp/ricardo/rev78/matrix-out.txt'
+type World = ReturnType<typeof world>
+const BUILD: Record<string, (w: World) => string> = {
+  REQUESTED: (w) => w.request().approvalId,
+  PENDING: (w) => { const { approvalId } = w.request(); w.engine.submit(TENANT, approvalId, 'op_requester'); return approvalId },
+  APPROVED: (w) => w.approved(),
+  REJECTED: (w) => { const { approvalId } = w.request(); w.engine.submit(TENANT, approvalId, 'op_requester'); w.engine.reject(TENANT, approvalId, { approverId: 'op_approver' }); return approvalId },
+  CANCELLED: (w) => { const { approvalId } = w.request(); w.engine.cancel(TENANT, approvalId, 'op_requester'); return approvalId },
+  RESERVED: (w) => { const id = w.approved(); w.reserve(id); return id },
+  EXECUTING: (w) => { const id = w.approved(); const r = w.reserve(id); w.engine.markExecuting({ tenantId: TENANT, approvalId: id, reservationId: r }); return id },
+  FAILED: (w) => { const id = w.approved(); const r = w.reserve(id); w.engine.fail({ tenantId: TENANT, approvalId: id, reservationId: r, evidence: { outcome: 'no_effect', source: 'journal', evidenceRef: 'journal:x' } }); return id },
+  UNCERTAIN: (w) => { const id = w.approved(); const r = w.reserve(id); w.engine.markUncertain({ tenantId: TENANT, approvalId: id, reservationId: r, reason: 'x', evidence: { outcome: 'unknown', reason: 'x' } }); return id },
+  'EXECUTED single-use': (w) => { const id = w.approved(); const r = w.reserve(id); w.engine.confirm({ tenantId: TENANT, approvalId: id, reservationId: r, evidence: { outcome: 'effect_confirmed', executionRef: 'e', evidenceRef: 'a:e' } }); return id },
+  'EXECUTED reusable': (w) => { const id = w.approved({ singleUse: false }); w.consume(id); return id }
+}
+const CALLERS: Record<string, (w: World, id: string) => unknown> = {
+  submit: (w, id) => w.engine.submit(TENANT, id, 'op_requester'),
+  approve: (w, id) => w.engine.approve(TENANT, id, { approverId: 'op_approver2' }),
+  reject: (w, id) => w.engine.reject(TENANT, id, { approverId: 'op_approver2' }),
+  verifyAndConsume: (w, id) => w.consume(id),
+  reserve: (w, id) => w.reserve(id)
+}
+describe('review 0279 matrix', () => {
+  it('matrix', () => {
+    for (const [state, build] of Object.entries(BUILD)) {
+      const cells: string[] = []
+      for (const [callerName, call] of Object.entries(CALLERS)) {
+        const w = world()
+        let id: string
+        try { id = build(w) } catch (e) { cells.push(callerName + '=BUILDERR:' + (e as Error).message.slice(0, 30)); continue }
+        const startStatus = w.status(id)
+        w.expire()
+        let code = 'ok'
+        try { call(w, id) } catch (e) { code = (e as { code?: string }).code ?? (e as Error).message.slice(0, 25) }
+        cells.push(`${callerName}=${code}->${w.status(id)}${w.expiredEvents() ? '+evt' : ''}`)
+        if (callerName === 'submit') void startStatus
+      }
+      appendFileSync(OUT, state.padEnd(20) + cells.join('  ') + '\n')
+    }
+  })
+})
