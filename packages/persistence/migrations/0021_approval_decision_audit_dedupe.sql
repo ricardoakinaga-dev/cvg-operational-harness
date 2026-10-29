@@ -34,6 +34,11 @@ BEGIN
     SELECT 1
     FROM audit_events
     WHERE type = 'approval_decision'
+      -- SPEC 0271: only what the unique index can reject. A NULL key part is
+      -- distinct for the index (attendance decisions carry approvalRequestId/
+      -- status and no approvalId/decision), so it must not form a group here.
+      AND payload->>'approvalId' IS NOT NULL
+      AND payload->>'decision' IS NOT NULL
     GROUP BY COALESCE(tenant_id, ''), payload->>'approvalId', payload->>'decision'
     HAVING COUNT(*) > 1
   ) AS duplicates;

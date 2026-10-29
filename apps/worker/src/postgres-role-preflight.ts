@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
   CVG_TENANT_CONTEXT_SETTING,
+  isAcceptedMigrationChecksum,
   readPostgresMigrationSql,
   TENANT_READ_INSERT_TABLES,
   TENANT_SCHEMA_INVENTORY,
@@ -310,7 +311,10 @@ export async function assertPostgresWorkerPreflight(
         const migration = applied.get(version)
         const sql = await readPostgresMigrationSql(version)
         const checksum = createHash('sha256').update(sql).digest('hex')
-        if (!migration || migration.checksum !== checksum) {
+        if (
+          !migration ||
+          !isAcceptedMigrationChecksum(version, migration.checksum, checksum)
+        ) {
           throw new Error(
             `PostgreSQL worker migration is not verified: ${version}`
           )
