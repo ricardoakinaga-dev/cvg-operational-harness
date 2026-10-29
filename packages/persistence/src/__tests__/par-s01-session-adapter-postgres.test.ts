@@ -996,7 +996,6 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
     })
     it.each([
       ['key', { writer_lock_id: 987654 }],
-      ['cut', { inherited_event_count: '9' }],
       ['head', { next_sequence: '1' }]
     ])(
       'a %s that moves between the claim and the publish is not published',
@@ -1049,14 +1048,38 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
         name: 'SessionFormatUnsupportedError'
       })
     })
-    it('a cut that changes under a live reader is corruption', async () => {
-      await seed('s6', 1)
+    it('a seeded cut that moves is not published and is corruption under a live reader', async () => {
       const svc = await service()
-      const r = await svc.open('s6', 'read')
-      await tamper('s6', 'inherited_event_count=5')
-      await expect(r.read()).rejects.toBeInstanceOf(
+      await (
+        await svc.create(hdr('s6', { isSeeded: true }), {
+          inheritedEventCount: 7
+        })
+      ).close()
+      const real = (
+        await admin.query(
+          `SELECT header_json, writer_lock_id, next_sequence, inherited_event_count, format_version FROM ${schema}.session_streams WHERE session_id='s6'`
+        )
+      ).rows[0]
+      const log: string[] = []
+      const forged = await service(
+        tenantA,
+        2,
+        wrapped(
+          (sql, calls) =>
+            sql.includes('writer_lock_id, header_json') && calls === 2
+              ? { rows: [{ ...real, inherited_event_count: '8' }], rowCount: 1 }
+              : undefined,
+          log
+        )
+      )
+      await expect(forged.open('s6', 'write')).rejects.toBeInstanceOf(
         SessionPersistenceCorruptionError
       )
+      expect(log).toContain('destroy')
+      const r = await svc.open('s6', 'read')
+      expect(r.inheritedEventCount).toBe(7)
+      await tamper('s6', 'inherited_event_count=8')
+      await expect(r.read()).rejects.toThrow(/header changed/)
       await r.close()
     })
     it('refuses a head that regresses, and keeps the high-water mark across reads', async () => {
@@ -1209,6 +1232,27 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
       } finally {
         await admin.query(`DROP ROLE IF EXISTS ${late}`)
       }
+    })
+    it('validates every page of a long prefix, also beyond a short slice', async () => {
+      await seed('s10', 300)
+      const svc = await service()
+      const r = await svc.open('s10', 'read')
+      await admin.query('BEGIN')
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events DISABLE TRIGGER USER`
+      )
+      await admin.query(
+        `UPDATE ${schema}.session_events SET input_digest=$1 WHERE session_id='s10' AND sequence=290`,
+        ['d'.repeat(64)]
+      )
+      await admin.query(
+        `ALTER TABLE ${schema}.session_events ENABLE TRIGGER USER`
+      )
+      await admin.query('COMMIT')
+      await expect(r.read(0, 1)).rejects.toBeInstanceOf(
+        SessionPersistenceCorruptionError
+      )
+      await r.close()
     })
   })
 })

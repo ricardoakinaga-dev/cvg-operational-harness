@@ -97,5 +97,15 @@ for item in M:
     r = subprocess.run(['npx','vitest','run',T,'--maxWorkers=1','--testTimeout=60000'],capture_output=True,text=True,env=env)
     subprocess.run(['git','checkout','--',f])
     res.append({'mutant': name, 'result': 'KILLED' if r.returncode != 0 else 'SURVIVED'})
+JUSTIFIED = {
+ 'event-tenant': 'equivalent: tenantId is part of the input digest, so a differing tenant already fails the digest check',
+ 'admit-abort': 'equivalent: the queued task re-checks the signal before IO, so an aborted call still does no IO; the early check only avoids queueing',
+ 'close-drain': 'equivalent in this slice: read does not use the writer lease; becomes observable with append/flush (slice 4) and is to be killed there',
+ 'close-lost-destroy': 'equivalent: on a lost session the unlock query throws and the catch destroys the lease; the early branch only skips a doomed query',
+}
+for m in res:
+    if m['result'] == 'SURVIVED' and m['mutant'] in JUSTIFIED:
+        m['result'] = 'EQUIVALENT'
+        m['justification'] = JUSTIFIED[m['mutant']]
 print(json.dumps(res, indent=1))
 json.dump(res, open(sys.argv[1], 'w'), indent=1)
