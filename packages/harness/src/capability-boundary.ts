@@ -5,6 +5,7 @@ import type {
   CapabilityOrigin,
   CapabilityRegistration,
   CapabilityRegistry as CapabilityRegistryPort,
+  SandboxMode,
   ToolDefinition,
   ToolExecutionContext,
   ToolRegistry,
@@ -246,6 +247,23 @@ function normalizeDescriptor(value: unknown): CapabilityDescriptor {
 
   const inputSchema = cloneJsonValue(descriptor.inputSchema)
   const outputSchema = cloneJsonValue(descriptor.outputSchema)
+  // Only own data properties carry authority. An accessor must never run
+  // while a capability is being registered (SPEC 0222 §5.3 / AUD0625 F01).
+  const sandboxProperty = Object.getOwnPropertyDescriptor(descriptor, 'sandbox')
+  if (sandboxProperty && !('value' in sandboxProperty)) {
+    throw invalidDescriptor('Capability sandbox must be a data property')
+  }
+  const sandbox: unknown = sandboxProperty?.value
+  if (
+    sandbox !== undefined &&
+    sandbox !== 'NONE' &&
+    sandbox !== 'IN_PROCESS' &&
+    sandbox !== 'WORKSPACE' &&
+    sandbox !== 'PROCESS' &&
+    sandbox !== 'EGRESS'
+  ) {
+    throw invalidDescriptor('Capability sandbox mode is invalid')
+  }
   return deepFreeze({
     id: descriptor.id,
     version: descriptor.version,
@@ -256,6 +274,10 @@ function normalizeDescriptor(value: unknown): CapabilityDescriptor {
     sideEffect: descriptor.sideEffect,
     idempotent: descriptor.idempotent,
     requiresApproval: descriptor.requiresApproval,
+    // Omission is the canonical legacy representation of undefined/NONE.
+    ...(sandbox !== undefined && sandbox !== 'NONE'
+      ? { sandbox: sandbox as SandboxMode }
+      : {}),
     origin: descriptor.origin,
     providerId: descriptor.providerId,
     providerVersion: descriptor.providerVersion

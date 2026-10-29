@@ -12,6 +12,8 @@ export interface ContainedRunRequest {
   /** Defaults to `handle.deadlineMs`, then 30s. */
   readonly timeoutMs?: number
   readonly stdin?: string
+  /** Pre-abort refuses launch; in-flight tree supervision belongs to X01. */
+  readonly signal?: AbortSignal
   /** Override for tests/detection; defaults to `bwrap` on PATH. */
   readonly bwrapPath?: string
   /** Per-stream output cap; default 1 MiB. */
@@ -50,6 +52,9 @@ export function runContained(
       truncated: false
     })
 
+  if (request.signal?.aborted) {
+    return refused('command_cancelled_before_launch')
+  }
   if (!handle.allowSubprocess) {
     return refused('handle does not allow subprocesses')
   }
