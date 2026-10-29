@@ -14,13 +14,13 @@ import { sessionEventInputDigest } from '@cvg/harness'
 import {
   PostgresSessionEventStore,
   runSessionEventMigrations
-} from '../session-events.ts'
+} from '../packages/persistence/src/session-events.ts'
 import {
   createPgPhysicalSessionPool,
   createPostgresSessionPersistence,
   sessionEventStoreForHandle,
   type PostgresPhysicalSessionPool
-} from '../session-persistence.ts'
+} from '../packages/persistence/src/session-persistence.ts'
 
 // PAR-S01 slice 5: the SDK bridge over one writer handle (SPEC 0221 §8).
 const url = process.env.TEST_DATABASE_URL

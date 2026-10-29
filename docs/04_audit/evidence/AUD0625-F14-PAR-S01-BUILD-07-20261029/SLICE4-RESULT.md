@@ -31,3 +31,7 @@ Task `AUD0625-F14-PAR-S01-BUILD-07-20261029`, Claude Sonnet sessão 07. Base: fa
 - tmpfs: kill abrupto do processo com PG vivo e crash/restart do PG ficam para a fatia 6 (S5). A barreira é provada pelo avanço do WAL e pelo SQL; a durabilidade sob queda real do disco não é afirmada.
 - Ainda sem a ponte `sessionEventStoreForHandle` (fatia 5), sem os testemunhos S1–S5 em processos distintos (fatia 6) e sem adoção em lote/restore (fatia 7).
 - `skip-catalog` e `mutation-manifest` não foram tocados.
+
+## Governança (adendo, 29/10/2026)
+
+`SessionAppendConflictError` foi aprovada pelo Ricardo como categoria CVG adicional: recibo `docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-16.json` (sha256 `38414aee211a857d38af4237d74e44eef8eababb44c770fd4f149cb9e14eeeac`, copiado byte a byte). O mesmo recibo decide que o S01 integra depois da fase 1 do K03 (migration 0033), sem esperar K03b/0224.

@@ -13,7 +13,7 @@ Task `AUD0625-F14-PAR-S01-BUILD-07-20261029`, Claude Sonnet sessão 07. Base: fa
 
 ## Provas (PG 16.15 descartável)
 
-- `par-s01-session-bridge-postgres.test.ts`: 17 testes.
+- `tests/par-s01-session-bridge-postgres.test.ts` (movido da fatia 6 para a raiz: persistence não depende do SDK): 17 testes.
   - Aceita/recusa de handles (incluindo Proxy, clone, objeto que imita a interface, leitor, fechado, perdido), sem IO para decidir.
   - Transação única medida pelo log do lease (um BEGIN, um COMMIT, ordem lookup → INSERT → UPDATE) e replay sem escrita.
   - Dois adaptadores concorrentes: sequências 1..10 contíguas e um só fato por duplicata; adaptador, `append` direto, flush e close na mesma fila.

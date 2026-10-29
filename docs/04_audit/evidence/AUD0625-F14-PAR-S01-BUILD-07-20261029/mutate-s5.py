@@ -2,7 +2,7 @@
 """Mutation check for PAR-S01 slice 5 (sessionEventStoreForHandle). Commit first; each mutant is reverted by git checkout."""
 import json, os, re, subprocess, sys
 F = 'packages/persistence/src/session-persistence.ts'
-TESTS = ['packages/persistence/src/__tests__/par-s01-session-bridge-postgres.test.ts']
+TESTS = ['tests/par-s01-session-bridge-postgres.test.ts']
 M = [
  ('capability-missing', "if (!capability || !capability.active())", "if (!capability)"),
  ('capability-active', "if (!capability || !capability.active())", "if (false)"),
