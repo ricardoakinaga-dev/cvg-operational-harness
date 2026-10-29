@@ -157,11 +157,8 @@ describe('PAR-X01 phase 1: tree ownership of the contained runner', () => {
     20000
   )
 
-  it.fails(
-    'X01 exposes one process service (spawn, group, kill, wait, dispose) to every consumer',
-    () => {
-      const exported = sandbox as unknown as Record<string, unknown>
-      expect(typeof exported.createProcessService).toBe('function')
-    }
-  )
+  it('X01 exposes one process service (spawn, group, kill, wait, dispose) to every consumer', () => {
+    const exported = sandbox as unknown as Record<string, unknown>
+    expect(typeof exported.createProcessService).toBe('function')
+  })
 })
