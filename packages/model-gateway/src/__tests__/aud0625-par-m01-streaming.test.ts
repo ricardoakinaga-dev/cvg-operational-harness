@@ -891,45 +891,42 @@ describe('PAR-M01 §6.1 — SSE reader edge cases', () => {
 })
 
 describe('PAR-M01 §6 — Ollama NDJSON reader', () => {
-  it.fails(
-    'asks for a stream and assembles lines, with usage only from the done line',
-    async () => {
-      const line = (value: unknown) => `${JSON.stringify(value)}\n`
-      const first = Buffer.from(
-        line({ message: { content: 'Olá, ' }, done: false }),
-        'utf8'
-      )
-      const cut = first.indexOf(0xc3) + 1
-      const server = await startServer((response) => {
-        response.writeHead(200, { 'content-type': 'application/x-ndjson' })
-        response.write(first.subarray(0, cut))
-        setTimeout(() => {
-          response.write(first.subarray(cut))
-          response.write(line({ message: { content: 'mundo' }, done: false }))
-          response.end(
-            line({
-              message: { content: '' },
-              done: true,
-              done_reason: 'stop',
-              prompt_eval_count: 5,
-              eval_count: 2
-            })
-          )
-        }, 30)
-      })
-      const events = await collect(
-        streamOf(ollamaProvider(server.url))(providerRequest())
-      )
-      expect(server.bodies[0]).toMatchObject({ stream: true })
-      expect(textOf(events)).toBe('Olá, mundo')
-      expect(events.find((e) => e.type === 'usage')).toEqual({
-        type: 'usage',
-        usage: { inputTokens: 5, outputTokens: 2 }
-      })
-    }
-  )
+  it('asks for a stream and assembles lines, with usage only from the done line', async () => {
+    const line = (value: unknown) => `${JSON.stringify(value)}\n`
+    const first = Buffer.from(
+      line({ message: { content: 'Olá, ' }, done: false }),
+      'utf8'
+    )
+    const cut = first.indexOf(0xc3) + 1
+    const server = await startServer((response) => {
+      response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+      response.write(first.subarray(0, cut))
+      setTimeout(() => {
+        response.write(first.subarray(cut))
+        response.write(line({ message: { content: 'mundo' }, done: false }))
+        response.end(
+          line({
+            message: { content: '' },
+            done: true,
+            done_reason: 'stop',
+            prompt_eval_count: 5,
+            eval_count: 2
+          })
+        )
+      }, 30)
+    })
+    const events = await collect(
+      streamOf(ollamaProvider(server.url))(providerRequest())
+    )
+    expect(server.bodies[0]).toMatchObject({ stream: true })
+    expect(textOf(events)).toBe('Olá, mundo')
+    expect(events.find((e) => e.type === 'usage')).toEqual({
+      type: 'usage',
+      usage: { inputTokens: 5, outputTokens: 2 }
+    })
+  })
 
-  it.fails('ends without done:true as a connection failure', async () => {
+  it('ends without done:true as a connection failure', async () => {
     const server = await startServer((response) => {
       response.writeHead(200, { 'content-type': 'application/x-ndjson' })
       response.end(
@@ -941,21 +938,231 @@ describe('PAR-M01 §6 — Ollama NDJSON reader', () => {
     ).rejects.toMatchObject({ kind: 'connection' })
   })
 
-  it.fails(
-    'a done line without counters reports no usage (unknown, never zero)',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, { 'content-type': 'application/x-ndjson' })
-        response.end(
-          `${JSON.stringify({ message: { content: 'x' }, done: false })}\n${JSON.stringify({ done: true, done_reason: 'stop' })}\n`
-        )
-      })
-      const events = await collect(
-        streamOf(ollamaProvider(server.url))(providerRequest())
+  it('a done line without counters reports no usage (unknown, never zero)', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+      response.end(
+        `${JSON.stringify({ message: { content: 'x' }, done: false })}\n${JSON.stringify({ done: true, done_reason: 'stop' })}\n`
       )
-      expect(events.some((e) => e.type === 'usage')).toBe(false)
+    })
+    const events = await collect(
+      streamOf(ollamaProvider(server.url))(providerRequest())
+    )
+    expect(events.some((e) => e.type === 'usage')).toBe(false)
+  })
+})
+
+describe('PAR-M01 §6.2 — NDJSON reader edge cases', () => {
+  const line = (value: unknown) => `${JSON.stringify(value)}\n`
+  const NDJSON = { 'content-type': 'application/x-ndjson' }
+  const run = (url: string, extra: Record<string, unknown> = {}) =>
+    collect(streamOf(ollamaProvider(url, extra))(providerRequest()))
+  const done = (extra: Record<string, unknown> = {}) =>
+    line({
+      message: { content: '' },
+      done: true,
+      done_reason: 'stop',
+      ...extra
+    })
+
+  it('reads the generate-style `response` field and a length finish', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write(line({ response: 'g', done: false }))
+      response.end(line({ response: '', done: true, done_reason: 'length' }))
+    })
+    const events = await run(server.url)
+    expect(textOf(events)).toBe('g')
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' })
+  })
+
+  it('accepts CRLF line ends and defaults the finish reason to stop', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write(
+        `${JSON.stringify({ message: { content: 'w' }, done: false })}\r\n`
+      )
+      response.end(`${JSON.stringify({ done: true })}\r\n`)
+    })
+    const events = await run(server.url)
+    expect(textOf(events)).toBe('w')
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'stop' })
+  })
+
+  it('refuses a line after done as malformed_response', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.end(
+        done() + line({ message: { content: 'tarde' }, done: false })
+      )
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'malformed_response'
+    })
+  })
+
+  it('refuses a line that is not valid JSON or not the contract', async () => {
+    for (const bad of ['{not json}\n', '{"done":"yes"}\n']) {
+      const server = await startServer((response) => {
+        response.writeHead(200, NDJSON)
+        response.end(bad)
+      })
+      await expect(run(server.url)).rejects.toMatchObject({
+        kind: 'malformed_response'
+      })
     }
-  )
+  })
+
+  it('never interprets an unterminated last line, even at a clean end', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write(line({ message: { content: 'inteira' }, done: false }))
+      response.end(JSON.stringify({ message: { content: 'meia' }, done: true }))
+    })
+    const seen: string[] = []
+    const running = (async () => {
+      for await (const event of streamOf(ollamaProvider(server.url))(
+        providerRequest()
+      )) {
+        if (event.type === 'delta') seen.push(event.text)
+      }
+    })()
+    await expect(running).rejects.toMatchObject({ kind: 'connection' })
+    expect(seen.join('')).not.toContain('meia')
+  })
+
+  it('a cut mid-line is a connection failure', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write(line({ message: { content: 'a' }, done: false }))
+      response.write('{"message":{"content":"par')
+      setTimeout(() => response.destroy(), 20)
+    })
+    await expect(run(server.url)).rejects.toMatchObject({ kind: 'connection' })
+  })
+
+  it('keeps the status classification before any line (503 is unavailable)', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(503)
+      response.end()
+    })
+    await expect(run(server.url)).rejects.toMatchObject({ kind: 'unavailable' })
+  })
+
+  it('rejects invalid ceilings at construction', () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() =>
+        ollamaProvider('http://127.0.0.1:1', { maxStreamEvents: bad })
+      ).toThrowError(expect.objectContaining({ kind: 'invalid_request' }))
+    }
+  })
+
+  it('stops at the event ceiling with response_too_large and closes the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      const timer = setInterval(() => {
+        if (response.destroyed) return clearInterval(timer)
+        response.write(line({ message: { content: '.' }, done: false }))
+      }, 1)
+      response.on('close', () => clearInterval(timer))
+    })
+    await expect(
+      run(server.url, {
+        maxStreamEvents: 32,
+        maxResponseBytes: 64 * 1024 * 1024
+      })
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('stops at the single-line size ceiling', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write('{"message":{"content":"')
+      const timer = setInterval(() => {
+        if (response.destroyed) return clearInterval(timer)
+        response.write('z'.repeat(256))
+      }, 1)
+      response.on('close', () => clearInterval(timer))
+    })
+    await expect(
+      run(server.url, {
+        maxStreamEventBytes: 2_048,
+        maxResponseBytes: 64 * 1024 * 1024
+      })
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('stops at the byte ceiling', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      const timer = setInterval(() => {
+        if (response.destroyed) return clearInterval(timer)
+        response.write(
+          line({ message: { content: 'y'.repeat(512) }, done: false })
+        )
+      }, 1)
+      response.on('close', () => clearInterval(timer))
+    })
+    await expect(
+      run(server.url, { maxResponseBytes: 4_096 })
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('times out on idle, cancelling the reader and closing the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write(line({ message: { content: 'parou' }, done: false }))
+    })
+    const started = Date.now()
+    await expect(
+      run(server.url, { streamIdleTimeoutMs: 150 })
+    ).rejects.toMatchObject({ kind: 'timeout' })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  }, 10_000)
+
+  it('a caller abort is cancelled and closes the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.write(line({ message: { content: 'x' }, done: false }))
+    })
+    const controller = new AbortController()
+    const running = collect(
+      streamOf(ollamaProvider(server.url))(
+        providerRequest({ signal: controller.signal })
+      )
+    )
+    setTimeout(() => controller.abort(), 60)
+    await expect(running).rejects.toMatchObject({ kind: 'cancelled' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('a usage pair with one counter is unknown usage, not zero', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, NDJSON)
+      response.end(done({ prompt_eval_count: 5 }))
+    })
+    expect((await run(server.url)).some((e) => e.type === 'usage')).toBe(false)
+  })
+
+  it('sends the bearer key', async () => {
+    let auth: string | undefined
+    const server = await startServer((response, request) => {
+      auth = request.headers.authorization
+      response.writeHead(200, NDJSON)
+      response.end(done())
+    })
+    await run(server.url, { apiKey: 'synthetic-key' })
+    expect(auth).toBe('Bearer synthetic-key')
+  })
 })
 
 // ---------------------------------------------------------------------------
