@@ -18,9 +18,9 @@ const PROFILE_OWNED = new Set([
   'LC_ALL',
   'TZ'
 ])
-/** Loader, interpreter and shell injection names, refused even if a consumer is allowed them. */
+/** Loader, interpreter, shell, TLS-trust and indirect-command names, refused even if a consumer is allowed them. */
 const FORBIDDEN =
-  /^(LD_|DYLD_|NODE_|PYTHON|PERL5|RUBY|JAVA_TOOL|_JAVA|GCONV_|LOCPATH$|NLSPATH$|HOSTALIASES$|RES_OPTIONS$|BASH_ENV$|ENV$|IFS$|SHELLOPTS$|BASHOPTS$|PS4$|PROMPT_COMMAND$|CDPATH$|GLOBIGNORE$|TERMINFO|LC_)|_PROXY$|^PROXY$/
+  /^(LD_|DYLD_|NODE_|PYTHON|PERL5|RUBY|JAVA_TOOL|_JAVA|GCONV_|LOCPATH$|NLSPATH$|HOSTALIASES$|RES_OPTIONS$|BASH_ENV$|ENV$|IFS$|SHELLOPTS$|BASHOPTS$|PS4$|PROMPT_COMMAND$|CDPATH$|GLOBIGNORE$|TERMINFO|LC_|OPENSSL_|SSL_CERT_|GIT_|SSH_|CURL_CA_BUNDLE$|REQUESTS_CA_BUNDLE$|EDITOR$|VISUAL$|PAGER$)|_PROXY$|^PROXY$/
 
 export type EnvAllowlist = Readonly<Record<ProcessConsumer, readonly string[]>>
 

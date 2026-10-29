@@ -96,72 +96,57 @@ describe('PAR-X01 phase 1: tree ownership of the contained runner', () => {
     expect(await until(() => members(marker).length === 0, 3000)).toBe(true)
   }, 20000)
 
-  it.fails(
-    'X01 an abort after launch stops the whole tree promptly, with its own outcome',
-    async () => {
-      const marker = `CVG_X01_${randomBytes(6).toString('hex')}`
-      const controller = new AbortController()
-      const started = Date.now()
-      const run = runContained({
-        processProfile: reviewedNodeProfile(workspace),
-        argv: [...treePayload(marker, 'setInterval(()=>{},1000)')],
-        handle: handle(),
-        timeoutMs: 6000,
-        signal: controller.signal
-      })
-      // Abort only once the grandchild is really running: no race with launch.
-      expect(await until(() => members(marker).length >= 2, 5000)).toBe(true)
-      controller.abort()
-      const result = await run
-      // Today the abort is ignored until the 6s timeout fires.
-      expect(Date.now() - started).toBeLessThan(3000)
-      expect(result.exitCode).not.toBe('timeout')
-      expect(await until(() => members(marker).length === 0, 3000)).toBe(true)
-    },
-    30000
-  )
+  it('X01 an abort after launch stops the whole tree promptly, with its own outcome', async () => {
+    const marker = `CVG_X01_${randomBytes(6).toString('hex')}`
+    const controller = new AbortController()
+    const started = Date.now()
+    const run = runContained({
+      processProfile: reviewedNodeProfile(workspace),
+      argv: [...treePayload(marker, 'setInterval(()=>{},1000)')],
+      handle: handle(),
+      timeoutMs: 6000,
+      signal: controller.signal
+    })
+    // Abort only once the grandchild is really running: no race with launch.
+    expect(await until(() => members(marker).length >= 2, 5000)).toBe(true)
+    controller.abort()
+    const result = await run
+    // Today the abort is ignored until the 6s timeout fires.
+    expect(Date.now() - started).toBeLessThan(3000)
+    expect(result.exitCode).not.toBe('timeout')
+    expect(await until(() => members(marker).length === 0, 3000)).toBe(true)
+  }, 30000)
 
-  it.fails(
-    'X01 a payload that prints a bwrap-looking line keeps its real exit status',
-    async () => {
-      const result = await runContained({
-        processProfile: reviewedNodeProfile(workspace),
-        argv: [
-          process.execPath,
-          '-e',
-          `process.stderr.write('bwrap: forged setup failure\\n');process.exit(3)`
-        ],
-        handle: handle(),
-        timeoutMs: 5000
-      })
-      // Containment status must come from a channel the payload cannot write, not from its stderr text.
-      expect(result.exitCode).toBe(3)
-      expect(result.stderr).toContain('bwrap: forged setup failure')
-    },
-    20000
-  )
+  it('X01 a payload that prints a bwrap-looking line keeps its real exit status', async () => {
+    const result = await runContained({
+      processProfile: reviewedNodeProfile(workspace),
+      argv: [
+        process.execPath,
+        '-e',
+        `process.stderr.write('bwrap: forged setup failure\\n');process.exit(3)`
+      ],
+      handle: handle(),
+      timeoutMs: 5000
+    })
+    // Containment status must come from a channel the payload cannot write, not from its stderr text.
+    expect(result.exitCode).toBe(3)
+    expect(result.stderr).toContain('bwrap: forged setup failure')
+  }, 20000)
 
-  it.fails(
-    'X01 the result reports the cleanup it observed, not only the first exit',
-    async () => {
-      const result = (await runContained({
-        processProfile: reviewedNodeProfile(workspace),
-        argv: [process.execPath, '-e', 'process.exit(0)'],
-        handle: handle(),
-        timeoutMs: 5000
-      })) as unknown as { cleanup?: { state?: string; leftover?: number } }
-      expect(result.cleanup).toEqual(
-        expect.objectContaining({ state: 'clean', leftover: 0 })
-      )
-    },
-    20000
-  )
+  it('X01 the result reports the cleanup it observed, not only the first exit', async () => {
+    const result = (await runContained({
+      processProfile: reviewedNodeProfile(workspace),
+      argv: [process.execPath, '-e', 'process.exit(0)'],
+      handle: handle(),
+      timeoutMs: 5000
+    })) as unknown as { cleanup?: { state?: string; leftover?: number } }
+    expect(result.cleanup).toEqual(
+      expect.objectContaining({ state: 'clean', leftover: 0 })
+    )
+  }, 20000)
 
-  it.fails(
-    'X01 exposes one process service (spawn, group, kill, wait, dispose) to every consumer',
-    () => {
-      const exported = sandbox as unknown as Record<string, unknown>
-      expect(typeof exported.createProcessService).toBe('function')
-    }
-  )
+  it('X01 exposes one process service (spawn, group, kill, wait, dispose) to every consumer', () => {
+    const exported = sandbox as unknown as Record<string, unknown>
+    expect(typeof exported.createProcessService).toBe('function')
+  })
 })

@@ -37,6 +37,11 @@ export interface ProcessLaunchRequest {
   readonly mode: 'oneshot' | 'persistent'
   readonly stdin?: Uint8Array
   readonly limits: ProcessLimits
+  /**
+   * Past `maxOutputBytes`: `terminate` ends the launch with `output_limit` (SPEC 0286 I8, the
+   * default); `drop` keeps the process and discards the excess, as the legacy shell runner did.
+   */
+  readonly outputOverflow?: 'terminate' | 'drop'
   readonly signal?: AbortSignal
 }
 
@@ -80,4 +85,41 @@ export interface ProcessServiceLimitsCaps {
   readonly graceMs: number
   readonly maxOutputBytes: number
   readonly maxStdinBytes: number
+}
+
+export interface ProcessChunk {
+  readonly stream: 'stdout' | 'stderr'
+  readonly bytes: Uint8Array
+}
+
+/** Persistent mode only: bytes into the payload, bounded by `maxStdinBytes` for the whole launch. */
+export interface ProcessInput {
+  write(chunk: Uint8Array): Promise<void>
+  end(): Promise<void>
+}
+
+export interface ProcessHandle {
+  readonly id: string
+  /** Persistent mode only. */
+  readonly stdin?: ProcessInput
+  /**
+   * Persistent mode only, single consumer. The queue is capped by `maxOutputBytes`: when the
+   * consumer is slow the payload is held back (backpressure), never buffered without bound.
+   */
+  readonly output?: AsyncIterable<ProcessChunk>
+  /** Resolves once, after cleanup, with the single immutable outcome. */
+  wait(): Promise<ProcessOutcome>
+  /** Asks for the launch to end (cause `cancelled`); resolves with the same outcome as `wait`. */
+  stop(reason?: string): Promise<ProcessOutcome>
+}
+
+export interface ProcessDisposeReport {
+  readonly stopped: number
+  readonly clean: number
+  readonly cleanupFailed: number
+}
+
+export interface ProcessService {
+  launch(request: ProcessLaunchRequest): Promise<ProcessHandle>
+  dispose(): Promise<ProcessDisposeReport>
 }
