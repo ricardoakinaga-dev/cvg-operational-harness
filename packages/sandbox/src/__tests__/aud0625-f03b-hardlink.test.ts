@@ -17,11 +17,12 @@ import type {
 } from '@cvg/harness-contracts'
 import { createFsTools, type FsWriteJournal } from '../index.ts'
 
-// AUD0625 F03b / SPEC 0278 (phase 1): a hard link inside the workspace to a
-// file outside it must not carry the outside content into the tool result,
-// the workspace or the write journal. The `it.fails` cases fail today for the
-// audited defect; controls pass before and after the BUILD. Synthetic owned
-// directories only; every outside file is created by the test itself.
+// AUD0625 F03b / SPEC 0278: a hard link inside the workspace to a file
+// outside it must not carry the outside content into the tool result, the
+// workspace or the write journal. The three target cases were `it.fails` in
+// phase 1 and are plain tests after the BUILD; controls pass before and after
+// it. Synthetic owned directories only; every outside file is created by the
+// test itself.
 
 const dirs: string[] = []
 
@@ -85,60 +86,51 @@ function workspaceText(root: string): string {
 }
 
 describe('F03b: hard links to outside files (SPEC 0278)', () => {
-  it.fails(
-    'fs.read refuses a hard link to a file outside the workspace',
-    async () => {
-      const { root, secret } = layout()
-      linkSync(secret, join(root, 'link.txt'))
-      const result = await tool(root, 'fs.read').execute(
-        { path: 'link.txt' },
-        context(root)
-      )
-      expect(result.status).toBe('REJECTED')
-      expect(JSON.stringify(result)).not.toContain('SYNTHETIC-OUTSIDE-SECRET')
-    }
-  )
+  it('fs.read refuses a hard link to a file outside the workspace', async () => {
+    const { root, secret } = layout()
+    linkSync(secret, join(root, 'link.txt'))
+    const result = await tool(root, 'fs.read').execute(
+      { path: 'link.txt' },
+      context(root)
+    )
+    expect(result.status).toBe('REJECTED')
+    expect(JSON.stringify(result)).not.toContain('SYNTHETIC-OUTSIDE-SECRET')
+  })
 
-  it.fails(
-    'fs.edit refuses it and records nothing and leaves no outside content in the workspace',
-    async () => {
-      const { root, secret } = layout()
-      linkSync(secret, join(root, 'link.txt'))
-      const journaled: string[] = []
-      const journal: FsWriteJournal = {
-        record: async (entry) => {
-          journaled.push(JSON.stringify(entry))
-        }
+  it('fs.edit refuses it and records nothing and leaves no outside content in the workspace', async () => {
+    const { root, secret } = layout()
+    linkSync(secret, join(root, 'link.txt'))
+    const journaled: string[] = []
+    const journal: FsWriteJournal = {
+      record: async (entry) => {
+        journaled.push(JSON.stringify(entry))
       }
-      const result = await tool(root, 'fs.edit', journal).execute(
-        {
-          path: 'link.txt',
-          find: 'SECRET',
-          replace: 'EDITED',
-          intent: 'synthetic probe'
-        },
-        context(root)
-      )
-      expect(result.status).toBe('REJECTED')
-      expect(journaled).toEqual([])
-      expect(workspaceText(root)).not.toContain('SYNTHETIC-OUTSIDE-EDITED')
-      expect(readFileSync(secret, 'utf8')).toBe('SYNTHETIC-OUTSIDE-SECRET')
     }
-  )
+    const result = await tool(root, 'fs.edit', journal).execute(
+      {
+        path: 'link.txt',
+        find: 'SECRET',
+        replace: 'EDITED',
+        intent: 'synthetic probe'
+      },
+      context(root)
+    )
+    expect(result.status).toBe('REJECTED')
+    expect(journaled).toEqual([])
+    expect(workspaceText(root)).not.toContain('SYNTHETIC-OUTSIDE-EDITED')
+    expect(readFileSync(secret, 'utf8')).toBe('SYNTHETIC-OUTSIDE-SECRET')
+  })
 
-  it.fails(
-    'fs.read refuses a file with two links even when both are inside (D1, strict)',
-    async () => {
-      const { root } = layout()
-      writeFileSync(join(root, 'a.txt'), 'SYNTHETIC-INSIDE')
-      linkSync(join(root, 'a.txt'), join(root, 'b.txt'))
-      const result = await tool(root, 'fs.read').execute(
-        { path: 'a.txt' },
-        context(root)
-      )
-      expect(result.status).toBe('REJECTED')
-    }
-  )
+  it('fs.read refuses a file with two links even when both are inside (D1, strict)', async () => {
+    const { root } = layout()
+    writeFileSync(join(root, 'a.txt'), 'SYNTHETIC-INSIDE')
+    linkSync(join(root, 'a.txt'), join(root, 'b.txt'))
+    const result = await tool(root, 'fs.read').execute(
+      { path: 'a.txt' },
+      context(root)
+    )
+    expect(result.status).toBe('REJECTED')
+  })
 
   describe('controls (pass before and after the BUILD)', () => {
     it('fs.read of an ordinary file with one link succeeds', async () => {

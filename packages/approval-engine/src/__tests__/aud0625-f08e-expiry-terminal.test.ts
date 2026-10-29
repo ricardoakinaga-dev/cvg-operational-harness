@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { ApprovalEngine, ApprovalError, type ApprovalEvent } from '../engine.ts'
 import type { ApprovalRecord } from '../contracts.ts'
 
-// AUD0625 F08e / SPEC 0279 (phase 1): the expiry guard must never rewrite a
-// decided or in-flight approval. The `it.fails` cases fail today for the
-// audited defect (the guard flips the status to EXPIRED before the caller's
-// status check); controls pass before and after the BUILD. Synthetic data.
+// AUD0625 F08e / SPEC 0279: the expiry guard must never rewrite a decided
+// or in-flight approval. The ten target cases were `it.fails` in phase 1
+// (the guard flipped the status to EXPIRED before the caller's status check)
+// and are plain tests after the BUILD; controls pass before and after it.
+// Synthetic data only.
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000f08e1'
 const CORRELATION = 'corr_00000000-0000-4000-8000-0000000f08e1'
@@ -166,64 +167,79 @@ function expectCode(fn: () => unknown, code: string): void {
 
 describe('F08e: expiry never rewrites a decided or in-flight approval (SPEC 0279)', () => {
   for (const [state, build] of STATES) {
-    it.fails(
-      `verifyAndConsume after expiry keeps ${state} and answers invalid_state`,
-      () => {
-        const w = world()
-        const approvalId = build(w)
-        expect(w.status(approvalId)).toBe(state)
-        const before = w.expiredEvents()
-        w.expire()
-        expectCode(() => w.consume(approvalId), 'invalid_state')
-        expect(w.status(approvalId)).toBe(state)
-        expect(w.expiredEvents()).toBe(before)
-      }
-    )
+    it(`verifyAndConsume after expiry keeps ${state} and answers invalid_state`, () => {
+      const w = world()
+      const approvalId = build(w)
+      expect(w.status(approvalId)).toBe(state)
+      const before = w.expiredEvents()
+      w.expire()
+      expectCode(() => w.consume(approvalId), 'invalid_state')
+      expect(w.status(approvalId)).toBe(state)
+      expect(w.expiredEvents()).toBe(before)
+    })
   }
 
   for (const state of ['REJECTED', 'CANCELLED', 'FAILED'] as const) {
-    it.fails(
-      `submit after expiry keeps ${state} and answers invalid_state`,
-      () => {
-        const w = world()
-        const approvalId = STATES.find(([name]) => name === state)![1](w)
-        w.expire()
-        expectCode(
-          () => w.engine.submit(TENANT, approvalId, 'op_requester'),
-          'invalid_state'
-        )
-        expect(w.status(approvalId)).toBe(state)
-        expect(w.expiredEvents()).toBe(0)
-      }
-    )
+    it(`submit after expiry keeps ${state} and answers invalid_state`, () => {
+      const w = world()
+      const approvalId = STATES.find(([name]) => name === state)![1](w)
+      w.expire()
+      expectCode(
+        () => w.engine.submit(TENANT, approvalId, 'op_requester'),
+        'invalid_state'
+      )
+      expect(w.status(approvalId)).toBe(state)
+      expect(w.expiredEvents()).toBe(0)
+    })
   }
 
-  it.fails(
-    'an EXECUTING approval keeps confirming after a stray verifyAndConsume past expiry',
-    () => {
-      const w = world()
-      const approvalId = w.approved()
-      const reservationId = w.reserve(approvalId)
-      w.engine.markExecuting({ tenantId: TENANT, approvalId, reservationId })
-      w.expire()
-      try {
-        w.consume(approvalId)
-      } catch {
-        // The stray call is refused; the in-flight execution must survive it.
+  it('a single-use EXECUTED approval past expiry stays EXECUTED (BUILD, mutation M279-3)', () => {
+    const w = world()
+    const approvalId = w.approved()
+    const reservationId = w.reserve(approvalId)
+    w.engine.confirm({
+      tenantId: TENANT,
+      approvalId,
+      reservationId,
+      evidence: {
+        outcome: 'effect_confirmed',
+        executionRef: 'exec_f08e_single',
+        evidenceRef: 'adapter:exec_f08e_single'
       }
-      const confirmed = w.engine.confirm({
-        tenantId: TENANT,
-        approvalId,
-        reservationId,
-        evidence: {
-          outcome: 'effect_confirmed',
-          executionRef: 'exec_f08e',
-          evidenceRef: 'adapter:exec_f08e'
-        }
-      })
-      expect(confirmed.status).toBe('EXECUTED')
+    })
+    w.expire()
+    expectCode(
+      () => w.engine.submit(TENANT, approvalId, 'op_requester'),
+      'invalid_state'
+    )
+    expectCode(() => w.consume(approvalId), 'already_executed')
+    expect(w.status(approvalId)).toBe('EXECUTED')
+    expect(w.expiredEvents()).toBe(0)
+  })
+
+  it('an EXECUTING approval keeps confirming after a stray verifyAndConsume past expiry', () => {
+    const w = world()
+    const approvalId = w.approved()
+    const reservationId = w.reserve(approvalId)
+    w.engine.markExecuting({ tenantId: TENANT, approvalId, reservationId })
+    w.expire()
+    try {
+      w.consume(approvalId)
+    } catch {
+      // The stray call is refused; the in-flight execution must survive it.
     }
-  )
+    const confirmed = w.engine.confirm({
+      tenantId: TENANT,
+      approvalId,
+      reservationId,
+      evidence: {
+        outcome: 'effect_confirmed',
+        executionRef: 'exec_f08e',
+        evidenceRef: 'adapter:exec_f08e'
+      }
+    })
+    expect(confirmed.status).toBe('EXECUTED')
+  })
 
   describe('controls (pass before and after the BUILD)', () => {
     it('APPROVED past expiry still expires on verifyAndConsume', () => {
