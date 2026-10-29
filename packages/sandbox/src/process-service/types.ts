@@ -37,6 +37,11 @@ export interface ProcessLaunchRequest {
   readonly mode: 'oneshot' | 'persistent'
   readonly stdin?: Uint8Array
   readonly limits: ProcessLimits
+  /**
+   * Past `maxOutputBytes`: `terminate` ends the launch with `output_limit` (SPEC 0286 I8, the
+   * default); `drop` keeps the process and discards the excess, as the legacy shell runner did.
+   */
+  readonly outputOverflow?: 'terminate' | 'drop'
   readonly signal?: AbortSignal
 }
 

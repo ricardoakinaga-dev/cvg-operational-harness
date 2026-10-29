@@ -51,7 +51,8 @@ export const hostProbe: SandboxProbe = {
       execFileSync(
         'bwrap',
         ['--ro-bind', '/', '/', '--unshare-net', '/bin/true'],
-        { stdio: 'ignore', timeout: 5000 }
+        // The probe has no payload: it gets an empty environment, never the host's.
+        { stdio: 'ignore', timeout: 5000, env: {}, cwd: '/' }
       )
       return true
     } catch {

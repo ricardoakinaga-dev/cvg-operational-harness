@@ -62,8 +62,8 @@ function checkRequest(
   if (request === null || typeof request !== 'object') bad('request')
   if (!PROCESS_CONSUMERS.includes(request.consumer)) bad('consumer')
   if (request.mode !== 'oneshot' && request.mode !== 'persistent') bad('mode')
-  if (request.profile === undefined || request.handle === undefined)
-    bad('profile or handle')
+  // The profile itself (absent, copied, stale) is judged by the launch preparation.
+  if (request.handle === undefined || request.handle === null) bad('handle')
   const argv = request.argv
   if (
     !Array.isArray(argv) ||
@@ -78,6 +78,12 @@ function checkRequest(
   }
   if (bytes > ARGV_MAX_BYTES) bad('argv')
   if (request.cwd !== undefined && typeof request.cwd !== 'string') bad('cwd')
+  if (
+    request.outputOverflow !== undefined &&
+    request.outputOverflow !== 'terminate' &&
+    request.outputOverflow !== 'drop'
+  )
+    bad('outputOverflow')
   if (request.signal !== undefined && !(request.signal instanceof AbortSignal))
     bad('signal')
   const limits = validateProcessLimits(request.limits, caps)
@@ -408,7 +414,7 @@ function supervise(s: Supervision): ProcessHandle {
     else errBytes = bytes
     if (chunk.length > kept.length) {
       truncated = true
-      trigger('output_limit')
+      if (s.request.outputOverflow !== 'drop') trigger('output_limit')
     }
   }
   child.stdout?.on('data', (chunk: Buffer) => take('out', chunk))
