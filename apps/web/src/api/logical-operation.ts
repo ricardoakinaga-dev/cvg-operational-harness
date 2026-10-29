@@ -61,9 +61,15 @@ function newKey(): string {
 }
 
 function read(storage: StorageLike, scope: LogicalOperationScope) {
+  let raw: string | null
   try {
-    const raw = storage.getItem(storageKey(scope))
-    if (!raw) return null
+    raw = storage.getItem(storageKey(scope))
+  } catch {
+    // The registry itself is unreadable: nothing safe to send with.
+    throw new LogicalOperationStorageError()
+  }
+  if (!raw) return null
+  try {
     const parsed = JSON.parse(raw) as Partial<LogicalOperation>
     if (
       typeof parsed.key === 'string' &&
@@ -71,11 +77,12 @@ function read(storage: StorageLike, scope: LogicalOperationScope) {
     ) {
       return parsed as LogicalOperation
     }
-    return null
-  } catch (error) {
-    if (error instanceof LogicalOperationStorageError) throw error
-    throw new LogicalOperationStorageError()
+  } catch {
+    // A truncated or foreign value is not a record: discard it. The next write
+    // overwrites it with a fresh key, so it cannot block the scope until the
+    // tab closes (SPEC 0257 follow-up O2). The lost key was unrecoverable.
   }
+  return null
 }
 
 function write(

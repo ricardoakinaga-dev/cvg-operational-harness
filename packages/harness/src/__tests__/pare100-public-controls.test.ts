@@ -16,6 +16,7 @@ import type {
   ToolExecutionContext
 } from '@cvg/harness-contracts'
 import { ScriptedOrchestrator } from '@cvg/harness-orchestrator'
+import { reviewedNodeProfile } from '../../../../tests/helpers/aud0625-node-process-profile.ts'
 import { createShellTool, type ShellRunRequest } from '@cvg/sandbox'
 import {
   createOperationalHarness,
@@ -488,10 +489,13 @@ describe.each(profiles)('SPEC0212 public controls %s', (profile) => {
               })
             }
           },
-          createShellTool({ workspaceRoot: root }),
+          createShellTool({
+            workspaceRoot: root,
+            processProfile: reviewedNodeProfile(root)
+          }),
           'tool',
           {
-            argv: ['/bin/true'],
+            argv: [process.execPath, '-e', 'void 0'],
             intent: 'synthetic identity check',
             timeoutMs: 1000
           }

@@ -128,6 +128,7 @@ const succeeded = (output: unknown): ToolResult => ({
 })
 
 const SYMLINK_IN_PATH = 'path traverses a symlink'
+const MULTIPLE_HARD_LINKS = 'file has more than one hard link'
 
 /** Reads `name` inside the directory behind `dirFd`, never following it. */
 function readBodyAt(
@@ -159,6 +160,11 @@ function readBodyAt(
     const stats = fstatSync(opened.fd)
     if (!stats.isFile()) {
       return { ok: false, result: failed('path is not a regular file') }
+    }
+    // SPEC 0278: another name for this inode may live outside the workspace,
+    // and there is no way to tell where; refuse before reading any byte.
+    if (stats.nlink > 1) {
+      return { ok: false, result: rejected(MULTIPLE_HARD_LINKS) }
     }
     if (stats.size > maxBytes) {
       return { ok: false, result: failed('file exceeds maxReadBytes') }

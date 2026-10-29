@@ -49,8 +49,38 @@ const defaultPostgresMigrations = [
   // 0028_session_events is opt-in (dedicated schema); not in the default run.
   '0029_case_assignment_authorization',
   // SPEC 0257: durable receipts of HTTP creations.
-  '0030_api_creation_receipts'
+  '0030_api_creation_receipts',
+  // SPEC 0282: the "not before" of a rate-limited channel operation.
+  '0031_channel_effect_retry_not_before'
 ]
+
+/**
+ * SPEC 0271: checksums of earlier texts of a migration that databases already
+ * applied. A migration whose text changed only in a way that leaves its effect
+ * identical (here: the 0021 pre-check no longer counts NULL key parts) keeps
+ * those databases valid: nothing is rewritten in the database, the recorded
+ * checksum is simply also accepted. Any other checksum stays an error.
+ */
+export const supersededMigrationChecksums: Readonly<
+  Record<string, readonly string[]>
+> = {
+  '0021_approval_decision_audit_dedupe': [
+    // Text before SPEC 0271 (pre-check counted NULL/NULL groups).
+    '038de370b42478ee8987109c4d799ce15bf00d93cba973f19d189c244cadeb7e'
+  ]
+}
+
+export function isAcceptedMigrationChecksum(
+  version: string,
+  recorded: string | null | undefined,
+  current: string
+): boolean {
+  if (!recorded) return false
+  return (
+    recorded === current ||
+    (supersededMigrationChecksums[version] ?? []).includes(recorded)
+  )
+}
 
 function assertSafeSchemaName(schemaName: string): void {
   if (!/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
@@ -168,7 +198,7 @@ export async function runPostgresMigrations(
         if (!current.checksum) {
           throw new Error(`PostgreSQL migration checksum missing: ${version}`)
         }
-        if (current.checksum !== checksum) {
+        if (!isAcceptedMigrationChecksum(version, current.checksum, checksum)) {
           throw new Error(`PostgreSQL migration checksum mismatch: ${version}`)
         }
       } else {

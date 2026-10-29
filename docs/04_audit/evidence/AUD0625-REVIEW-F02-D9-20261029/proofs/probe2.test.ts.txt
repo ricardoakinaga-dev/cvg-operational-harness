@@ -1,0 +1,49 @@
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, it } from 'vitest'
+import { runContained } from '../packages/sandbox/src/run.ts'
+import { createShellTool } from '../packages/sandbox/src/shell-tool.ts'
+import { createProcessContainmentProfile, prepareProcessLaunch } from '../packages/sandbox/src/process-profile.ts'
+import { reviewedNodeProfile, reviewedNodeRuntimeFiles } from './helpers/aud0625-node-process-profile.ts'
+import { phase3RuntimeInput } from '../packages/harness/src/__tests__/fixtures/phase3-fixtures.ts'
+
+const OUT = '/mnt/dados/tmp/ricardo/revf02/probe2-out.txt'
+const log = (m: string) => appendFileSync(OUT, m + '\n')
+const fdCount = () => readdirSync('/proc/self/fd').length
+describe('review F02 probes 2', () => {
+  it('probes', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'rev-f02b-'))
+    const root = join(parent, 'workspace'); mkdirSync(root)
+    const handle = { mode: 'PROCESS' as const, workspaceRoot: root, allowNetwork: false, allowSubprocess: true, deadlineMs: 10000 }
+    // (c) default without profile
+    const noProfile = await runContained({ argv: [process.execPath, '-e', '1'], handle, timeoutMs: 3000 } as never)
+    log('(c1) runContained without profile => ' + JSON.stringify(noProfile))
+    const withBwrapOverride = await runContained({ argv: ['/bin/echo', 'x'], handle, bwrapPath: '/usr/bin/bwrap', timeoutMs: 3000 } as never)
+    log('(c2) legacy call (host /bin/echo, bwrapPath, no profile) => ' + JSON.stringify(withBwrapOverride))
+    const shell = createShellTool({ workspaceRoot: root })
+    const input = phase3RuntimeInput()
+    const r = await shell.execute({ argv: ['/bin/echo', 'x'], intent: 'probe', timeoutMs: 3000 } as never, { tenantId: input.tenantId, agentId: input.agent.id, correlationId: input.correlationId, traceId: input.traceId, sandboxHandle: handle } as never)
+    log('(c3) shell default runner without profile => ' + JSON.stringify(r))
+    // fd leak per launch
+    const profile = reviewedNodeProfile(root)
+    const before = fdCount()
+    for (let i = 0; i < 3; i++) await runContained({ argv: [process.execPath, '-e', '1'], handle, processProfile: profile, timeoutMs: 8000 } as never)
+    log(`(leak) parent fds before=${before} after 3 launches=${fdCount()}`)
+    // refused launch leaks?
+    const b2 = fdCount()
+    for (let i = 0; i < 3; i++) await runContained({ argv: ['/bin/not-approved'], handle, processProfile: profile, timeoutMs: 8000 } as never)
+    log(`(leak refused) before=${b2} after=${fdCount()}`)
+    // (d) in-place write after preparation: FD does not freeze content
+    const data = join(parent, 'data'); mkdirSync(data)
+    const dataFile = join(data, 'runtime.txt'); writeFileSync(dataFile, 'ORIGINAL')
+    const p2 = createProcessContainmentProfile({ workspaceRoot: root, bwrapPath: '/usr/bin/bwrap', runtimeFiles: [...reviewedNodeRuntimeFiles(), { source: dataFile }], executablePaths: [process.execPath] })
+    const prepared = prepareProcessLaunch({ profile: p2, handle, argv: [process.execPath, '-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(dataFile)},'utf8'))`], cwd: root })
+    writeFileSync(dataFile, 'TAMPERED') // same inode, in place, after hashing
+    const res = spawnSync(prepared.executable, [...prepared.args], { stdio: ['pipe', 'pipe', 'pipe', ...prepared.fds], env: prepared.env, encoding: 'utf8' })
+    prepared.close()
+    log('(d) payload reads runtime file written in place after preparation => ' + JSON.stringify(res.stdout) + ' stderr=' + res.stderr.slice(0, 120))
+    rmSync(parent, { recursive: true, force: true })
+  })
+})

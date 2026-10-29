@@ -1,0 +1,28 @@
+from pathlib import Path
+import json,subprocess,hashlib
+r=Path('/mnt/dados/cvg-work/aud0625-sandbox-build-codex-20261029');c=r/'candidate';paths={n:c/'packages/sandbox/src'/n for n in ['shell-tool.ts','run.ts']};original={n:p.read_text() for n,p in paths.items()};rows=[]
+mutations={
+ 'drop-injected-signal':{'shell-tool.ts':[("...(signal ? { signal } : {}),","...({}),")]},
+ 'drop-default-signal':{'shell-tool.ts':[("...(request.signal ? { signal: request.signal } : {}),","...({}),")]},
+ 'ignore-shell-abort':{'shell-tool.ts':[("signal?.aborted","false")]},
+ 'late-success':{'shell-tool.ts':[("'effect_uncertain: cleanup_incomplete after cancellation'","'mutated failure'")]},
+ 'clone-signal':{'shell-tool.ts':[("...(signal ? { signal } : {}),","...(signal ? { signal: new AbortController().signal } : {}),")]},
+ 'ignore-backend-preabort':{'run.ts':[("if (request.signal?.aborted)","if (false)")]}
+}
+try:
+ for name,changes in mutations.items():
+  for n,p in paths.items():p.write_text(original[n])
+  for n,replacements in changes.items():
+   s=original[n]
+   for before,after in replacements:
+    assert before in s,(name,before);s=s.replace(before,after)
+   paths[n].write_text(s)
+  report=r/('f05-mutant-'+name+'-vitest.json')
+  cmd=['python3',str(r/'run.py'),'f05-mutant-'+name,'90','node','node_modules/vitest/vitest.mjs','run','tests/aud0625-shell-cancellation-red.test.ts','tests/aud0625-shell-default-signal.test.ts','tests/aud0625-contained-preabort.test.ts','--no-file-parallelism','--maxWorkers=2','--reporter=json','--outputFile='+str(report)]
+  result=subprocess.run(cmd);d=json.loads(report.read_text());failures=[t for s in d['testResults'] for t in s['assertionResults'] if t['status']=='failed'];assert result.returncode==1 and failures,(name,d)
+  assert any('AssertionError' in msg for t in failures for msg in t['failureMessages']),(name,'not an assertion failure')
+  rows.append({'name':name,'exit':result.returncode,'failed':d['numFailedTests'],'passed':d['numPassedTests'],'assertions':[t['fullName'] for t in failures]})
+finally:
+ for n,p in paths.items():p.write_text(original[n])
+ (r/'f05-mutations.json').write_text(json.dumps({'restored':all(p.read_text()==original[n] for n,p in paths.items()),'source_sha256':{n:hashlib.sha256(s.encode()).hexdigest() for n,s in original.items()},'mutations':rows},indent=2)+'\n')
+print(json.dumps({'killed':len(rows),'total':len(mutations),'restored':True}))

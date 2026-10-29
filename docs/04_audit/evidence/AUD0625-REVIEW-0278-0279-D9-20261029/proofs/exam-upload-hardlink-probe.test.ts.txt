@@ -1,0 +1,28 @@
+import { appendFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, it } from 'vitest'
+import type { ToolExecutionContext } from '@cvg/harness-contracts'
+import { InMemoryChannelEffectJournal, createExamUploadTool } from '../index.ts'
+
+const OUT = '/mnt/dados/tmp/ricardo/rev78/probe-out.txt'
+const log = (m: string) => appendFileSync(OUT, m + '\n')
+const ctx: ToolExecutionContext = { tenantId: 'tenant-exam' as never, agentId: 'agent-exam' as never, correlationId: 'corr-exam' as never, traceId: 'trace-exam' as never }
+describe('review 0278: exam.upload through a hardlink', () => {
+  it('probe', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'rev78-'))
+    const root = join(base, 'workspace'); mkdirSync(root)
+    const outside = join(base, 'service-secret.txt'); writeFileSync(outside, 'OUTSIDE-SERVICE-SECRET')
+    linkSync(outside, join(root, 'report.pdf')) // hardlink inside the workspace to a file outside it
+    let sent = ''
+    const tool = createExamUploadTool({
+      effectJournal: new InMemoryChannelEffectJournal(), workspaceRoot: root,
+      urlGuard: { allowedHosts: ['exams.example.com'] }, requireApproval: true,
+      dnsLookup: async () => ['93.184.216.34'],
+      fetchImpl: (async (_url: unknown, init: { body?: unknown }) => { sent = Buffer.from(init.body as Uint8Array).toString(); return new Response(JSON.stringify({ id: 'x' }), { status: 200 }) }) as never
+    })
+    const result = await tool.execute({ path: 'report.pdf', url: 'https://exams.example.com/u', intent: 'send', operationKey: 'op-hardlink-probe' }, ctx)
+    log('exam.upload via hardlink => status=' + result.status + ' bodySentToHost=' + JSON.stringify(sent))
+    rmSync(base, { recursive: true, force: true })
+  })
+})

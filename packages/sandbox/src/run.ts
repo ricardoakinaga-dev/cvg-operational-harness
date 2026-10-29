@@ -1,7 +1,12 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import type { SandboxHandle } from '@cvg/harness-contracts'
+import {
+  prepareProcessLaunch,
+  type ProcessContainmentProfile,
+  type PreparedProcessLaunch
+} from './process-profile.ts'
 
 export interface ContainedRunRequest {
   /** Pure argv array — never a shell string, never interpolated. */
@@ -12,7 +17,11 @@ export interface ContainedRunRequest {
   /** Defaults to `handle.deadlineMs`, then 30s. */
   readonly timeoutMs?: number
   readonly stdin?: string
-  /** Override for tests/detection; defaults to `bwrap` on PATH. */
+  /** Pre-abort refuses launch; in-flight tree supervision belongs to X01. */
+  readonly signal?: AbortSignal
+  /** Explicit reviewed host profile; absence refuses native PROCESS. */
+  readonly processProfile?: ProcessContainmentProfile
+  /** Trusted override must match the backend captured by the profile. */
   readonly bwrapPath?: string
   /** Per-stream output cap; default 1 MiB. */
   readonly maxOutputBytes?: number
@@ -30,7 +39,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
 /**
  * Runs argv inside a bubblewrap namespace per the granted handle (SPEC 0196
- * §5): PID/IPC/UTS isolated, network unshared off, root read-only, workspace
+ * §5): PID/IPC/UTS isolated, network unshared off, empty root with reviewed files, workspace
  * bound read-write. `spawn_failed` (bwrap missing, namespace setup refused)
  * is not an exit code — callers must map it to `unavailable`, never to a
  * normal result.
@@ -50,6 +59,9 @@ export function runContained(
       truncated: false
     })
 
+  if (request.signal?.aborted) {
+    return refused('command_cancelled_before_launch')
+  }
   if (!handle.allowSubprocess) {
     return refused('handle does not allow subprocesses')
   }
@@ -71,34 +83,26 @@ export function runContained(
     }
   }
 
-  const bwrapArgs = [
-    '--new-session',
-    '--die-with-parent',
-    '--unshare-pid',
-    '--unshare-ipc',
-    '--unshare-uts',
-    '--unshare-net',
-    '--ro-bind',
-    '/',
-    '/',
-    // Mount order matters: a tmpfs over /tmp placed after the workspace bind
-    // would shadow a workspace that lives under /tmp (SPEC 0196 §5).
-    '--tmpfs',
-    '/tmp'
-  ]
-  if (workspace !== undefined) {
-    bwrapArgs.push('--bind', workspace, workspace)
+  let launch: PreparedProcessLaunch
+  try {
+    launch = prepareProcessLaunch({
+      ...(request.processProfile ? { profile: request.processProfile } : {}),
+      handle,
+      argv: [program, ...rest],
+      ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
+      ...(request.bwrapPath !== undefined
+        ? { bwrapPath: request.bwrapPath }
+        : {})
+    })
+  } catch (error) {
+    return refused(
+      error instanceof Error ? error.message : 'process_profile_unavailable'
+    )
   }
-  bwrapArgs.push(
-    '--proc',
-    '/proc',
-    '--dev',
-    '/dev',
-    ...(cwd !== undefined ? ['--chdir', cwd] : []),
-    '--',
-    program,
-    ...rest
-  )
+  if (request.signal?.aborted) {
+    launch.close()
+    return refused('command_cancelled_before_launch')
+  }
 
   const timeoutMs = request.timeoutMs ?? handle.deadlineMs ?? DEFAULT_TIMEOUT_MS
 
@@ -111,9 +115,23 @@ export function runContained(
     let stderrBytes = 0
     let truncated = false
 
-    const child = spawn(request.bwrapPath ?? 'bwrap', bwrapArgs, {
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawn(launch.executable, [...launch.args], {
+        stdio: ['pipe', 'pipe', 'pipe', ...launch.fds],
+        env: launch.env
+      }) as ChildProcessWithoutNullStreams
+    } catch {
+      resolvePromise({
+        exitCode: 'spawn_failed',
+        stdout: '',
+        stderr: 'contained_process_launch_failed',
+        truncated: false
+      })
+      return
+    } finally {
+      launch.close()
+    }
 
     const timer = setTimeout(() => {
       timedOut = true

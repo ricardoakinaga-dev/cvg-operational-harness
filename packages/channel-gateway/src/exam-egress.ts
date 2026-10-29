@@ -134,6 +134,9 @@ function readUpload(abs: string, maxBytes: number): Buffer {
   try {
     const stat = fstatSync(fd)
     if (!stat.isFile()) throw new Error('source must be a regular file')
+    // SPEC 0281: another name for this inode may live outside the workspace,
+    // and there is no way to tell where; refuse before reading any byte.
+    if (stat.nlink > 1) throw new Error('source has more than one hard link')
     if (stat.size > maxBytes) throw new Error('source exceeds maxFileBytes')
     const bytes = Buffer.alloc(stat.size + 1)
     let size = 0
@@ -261,8 +264,9 @@ function createExecutor(
     let url: string
     try {
       signal.throwIfAborted()
+      // SPEC 0263 §2: the preliminary resolution shares the operation signal.
       url = (
-        await resolveAndGuardOutboundUrl(parsed.url, guard, deps)
+        await resolveAndGuardOutboundUrl(parsed.url, guard, { ...deps, signal })
       ).url.toString()
       signal.throwIfAborted()
     } catch {

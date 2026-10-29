@@ -1,3 +1,57 @@
+# 29/10/2026 — terceira onda AUD0625 (Claude D9)
+
+- Branch `claude/aud0625-wave3`, local e sem push, sobre `claude/aud0625-wave2` @ `8f511551`, já com a `main` (squash do #31, `bee31e75`) via `3d6da1b6`. Depende do merge do #32 e da onda 2 (PR da onda 2 abre depois do merge do #32). Produção `NO_GO`.
+- Decisões do Ricardo:
+  - [human-decisions-8](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-8.json): SPEC 0281, D1 = recusa total.
+  - [human-decisions-9](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-9.json): SPEC 0282, D3 = A (teto e `Retry-After`, com a migration 0031), D1 = teto 5 e D2 = `Retry-After` cortado em 5 min.
+  - [human-decisions-10](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-10.json): SPEC 0271, D1 = A (filtro na 0021 mais aceitação do checksum anterior num ponto único) e D2 = não nesta SPEC.
+- Frentes (D9, Claude Sonnet):
+  - 0281, F03c (P2): `exam.upload` recusa arquivo com mais de um hardlink (`nlink > 1` no descritor, antes de ler e antes do journal). BUILD `076c160f` (fase 1 `868ff63e`), mutações U1–U5 mortas, `packages/channel-gateway` 239/239. Revisão DF `APPROVE` (`83e5d062`).
+  - 0282, F12c: o 429 respeita `Retry-After` (segundos e data HTTP, corte de 5 min) e as tentativas têm teto 5 (`attempts_exhausted`, sem rede). Journals de memória, arquivo e PostgreSQL (incluindo o `#decideReserve` privado), migration aditiva `0031_channel_effect_retry_not_before`, adaptadores Chatwoot e Evolution. BUILD `49bf28e5` (fase 1 `ab790b1c`), PG 16/16 no journal e 86/86 em modo PG, inventário e outbox; mutações mortas (Q14 equivalente). Revisão DF `APPROVE` (`83e5d062`), sem achados.
+  - F02, P3-1/P3-2 (Codex AUD0625): só teste novo `tests/aud0625-process-profile-lifecycle.test.ts` (`47611886`, sem mudar runtime). Revisão D9 `APPROVE` (`4aa4d764`): os dois mutantes morrem (sem `launch.close()` vaza 10 FDs por lançamento; `allowNetwork` aceito).
+  - 0271, F15 (D9; SPEC e dona DF): o pré-check da migration 0021 só conta o que o índice deduplica (`approvalId` e `decision` não nulos), então eventos de atendimento (`NULL/NULL`) deixam de abortar a migration e de travar 0022–0031 em bancos de homologação e ensaio. `supersededMigrationChecksums` aceita o checksum anterior da 0021 (`038de370…`) no runner e nos preflights da API e do worker, sem regravar nada. BUILD `5692dc57` (fase 1 `43deb9de`), PG 146/146, mutações Q1–Q9 mortas, SKIP-PG-019 e SKIP-PG-043 religados. Revisão DF `APPROVE` (`2cc9f86c`). O terceiro comparador é o preflight do worker, não o baseline.
+  - 0257, O1 e O2 do console (D9, T2): depois de um 2xx, a falha do registro avisa o operador e mantém a chave (replay sem duplicar); um JSON corrompido no `sessionStorage` é descartado e regenerado. `20f0040d`, `apps/web` 174/174. Revisão DF `APPROVE` (`2cc9f86c`).
+  - Revisão DF da 0262 fatia 1 (`331b3f59`) e confirmação (`aa353efe`): só os dois commits de docs (`REVIEW.md`), por cherry-pick; o código da 0262 fica para a onda da sessão 07.
+- Limite conhecido (0278 e 0281): a decisão por `nlink` no descritor fecha o hardlink já existente, mas não vence um escritor concorrente do workspace que **remova o nome entre o `open` e o `fstat`**: o inode aberto fica só com o nome de fora e a conferência passa (sonda `race-probe-out.txt`: `SUCCEEDED`, conteúdo de fora enviado). Reconferir o nome depois da leitura ainda é burlável por religação. A defesa real é o isolamento do PROCESS (F02/X01), que impede o payload de ver o arquivo de fora e de agir no workspace; F02/X01 seguem abertos.
+- Gates na onda 3, com Node 22: typecheck 0; docs:check-links OK; skip:governance PASS; mutation-guard 3/3; vitest focado de `packages/channel-gateway` e `packages/sandbox` e testes PG das frentes (ver os BUILD-RESULT); gitleaks 8.28.0 sobre as faixas da onda sem achados.
+
+# 29/10/2026 — segunda onda AUD0625 (Claude DF, sessões 07 e D9, Codex AUD0625)
+
+- Branch `claude/aud0625-wave2`, local e sem push, sobre o PR #32 (`6628d684`). O PR só abre depois do merge do #32. Produção `NO_GO`.
+- Decisões do Ricardo:
+  - [human-decisions-5](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-5.json): SPEC 0274.
+  - [human-decisions-6](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-6.json): sandbox F01/F02/F05 do Codex e BUILD isolado da 0263.
+  - [human-decisions-7](04_audit/evidence/USER-DECISIONS-20261028/human-decisions-7.json): 0278 e 0279, D1 = sim nas duas.
+- Frentes:
+  - 0257, F07 (sessão 07):
+    - fatias 1–3 até `426399fb`;
+    - correção dos testes PG de perfil legado em `f8903e3f`: o cliente compartilhado responde 503 antes de escrever, como manda a SPEC §2;
+    - BUILD-RESULT `0fa18209`.
+
+    Revisão D9: a fatia 1 recebeu `REVISE` (O1, grants dos testes PG) e foi confirmada depois; as fatias 2–3 tiveram `APPROVE`. Os P3 de teste foram fechados pela D9 em `d984580c`.
+
+  - 0258, U05 (D9): BUILD `31fd2bfb`, revisão DF `APPROVE`. Não fecha U05/HISO-005.
+  - 0263, U06 (DF): BUILD isolado `7a7d0d28`, P3 em `92a1be60`, revisão D9 `APPROVE`. O aceite final depende de HISO-005/006.
+  - 0274, F08b (BUILD D9, SPEC DF): `7ef71bee`, revisão DF `APPROVE`, PG 24/24.
+  - F06b (D9, T2 só teste): nota 0232b e `469b38ef`; servidor de falhas 57/57.
+  - Sandbox (Codex AUD0625): F01/0277 `e6a701ca`, F05/0276 `3e1602f4`, F02/0275 `f4e799b8`, mais docs `5f310fef`. Revisões D9 `APPROVE` em `dba0602c`, `0e52a96c` e `4b95bb56`. F05 global, K08 e X01 seguem abertos. A versão do `shell.run` passa a `v1:<digest do perfil>`, então o fingerprint de composição muda por perfil.
+  - 0278, F03b, e 0279, F08e (DF): fase 1 em `abbe84e0` e BUILD em `879b4e03`. Mutações 10/10 e PG 13/13. Revisão D9 `APPROVE` nas duas (`af3d8cb0`), com a matriz de 5 chamadores × 11 estados, PG 13/13 e 9 mutações próprias. Achado novo, fora do escopo da 0278: F03c (P2), em que `exam.upload` (`readUpload`) também lê um hardlink para fora e envia o conteúdo ao host permitido. Está na fase 1 com a D9, como SPEC 0281.
+  - CI: os jobs do `verify.yml` foram fixados em `ubuntu-24.04` (`6628d684`), porque o `ubuntu-latest` passou a ser o 26.04 e o Playwright 1.59.1 não instala lá.
+  - 0262, U04/F16 (sessão 07): BUILD em 5 fatias, para a onda seguinte.
+
+- Gates na integração, com Node 22:
+  - typecheck 0 e docs:check-links OK;
+  - os 3 logs vazios do F02 catalogados em `45c6b653`;
+  - vitest focado de sandbox, harness e aud0625: 763/763;
+  - API, web e persistence memória: 1033 passam e 2 estouram o prazo com a carga em 12,9; isolados passam.
+- Acompanhamentos:
+  - F02, P3-1: tirar o `launch.close()` do `finally` não quebra teste e vaza 10 FD por lançamento.
+  - F02, P3-2: recusar handle com `allowNetwork` é redundante com o `--unshare-net`; o mutante sobrevive.
+  - F12c: 429 sem espera nem teto.
+  - F08c, opcional.
+  - 0257: O1 (o resolve falha depois de um 2xx e o próximo clique reusa a chave) e O2 (JSON corrompido no sessionStorage).
+  - F13, F18 e F19 continuam com o Codex.
+
 # 28/10/2026 — AUD-SCORE-20261028, PR #29 e onda AUD0625
 
 - **AUD-SCORE-20261028 (Codex):** auditoria documental/técnica da `main` `61e5cf8f` em cópia isolada Node 22; checkout, fontes e trabalho dos pares preservados. Tipos, lint, builds e `npm audit` PASS; 2.897 regressões próprias e 21 sondas, sem dado real nem modelo externo. O [relatório 0625](04_audit/0625_repository_score_audit_2026-10-28.md) entrega 27 notas, média 72 e prontidão 45. Confirmados desvios de sandbox, filesystem, prompt e auditoria; achados estáticos identificados como tais. CI 35 gates/56 hashes e publicação de 24/10 conferidos; image-scan de 26/10 FAIL não ocultado. Nenhum BUILD corretivo, commit, push, merge ou deploy pelo Codex. Delta do [handoff](08_runtime/handoffs/aud_score_20261028.md). Produção `NO_GO`.

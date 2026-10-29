@@ -5,6 +5,7 @@
  * dispatch instead of falling back to a volatile key.
  */
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -172,6 +173,36 @@ describe('logical operation registry (SPEC 0257 §7)', () => {
     expect(raw).not.toMatch(/summary|token|cookie|clinic/i)
   })
 
+  it('O2: a corrupted record is discarded and regenerated, never a lock until the tab closes', () => {
+    const storageKeyOf = () => Object.keys({ ...window.sessionStorage })[0]
+    const first = beginLogicalOperation(scope)
+    const key = storageKeyOf() as string
+    for (const corrupted of ['{"key":"op-1","stat', 'not json', '[1', '{']) {
+      window.sessionStorage.setItem(key, corrupted)
+      const regenerated = beginLogicalOperation(scope)
+      expect(regenerated.status).toBe('pending')
+      expect(regenerated.key).toMatch(/^op-[0-9a-f-]{36}$/)
+      expect(regenerated.key).not.toBe(first.key)
+      // The corrupted value was overwritten: the next call reuses the new key.
+      expect(beginLogicalOperation(scope).key).toBe(regenerated.key)
+    }
+    // Resolving over a corrupted record is a no-op, not an error.
+    window.sessionStorage.setItem(key, '{"key"')
+    expect(() => resolveLogicalOperation(scope, 'approval_1')).not.toThrow()
+  })
+
+  it('O2 control: a storage that cannot be read still blocks (it is not a corrupted record)', () => {
+    const unreadable = {
+      getItem: () => {
+        throw new Error('blocked')
+      },
+      setItem: () => undefined
+    }
+    expect(() => beginLogicalOperation(scope, unreadable)).toThrow(
+      LogicalOperationStorageError
+    )
+  })
+
   it('a failing storage throws instead of returning a volatile key', () => {
     const broken = {
       getItem: () => null,
@@ -250,6 +281,67 @@ describe('export approval request keeps one logical operation (AC06)', () => {
       'Solicitacao de export registrada para aprovacao humana.'
     )
     expect(keys).toHaveLength(1)
+  })
+
+  it('two clicks inside the same act dispatch ONE request (the synchronous guard, not the disabled button)', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const keys = mockApi([
+      () => gate.then(() => ok({ id: 'approval_export_1', status: 'pending' }))
+    ])
+    const button = await openConsole()
+    // React cannot re-render between the two clicks: only the ref blocks the 2nd.
+    act(() => {
+      button.click()
+      button.click()
+    })
+    expect(keys).toHaveLength(1)
+    release()
+    await screen.findByText(
+      'Solicitacao de export registrada para aprovacao humana.'
+    )
+    expect(keys).toHaveLength(1)
+  })
+
+  it('O1: a registry failure after a 2xx warns the operator, and the next click replays the SAME key', async () => {
+    const keys = mockApi([
+      () => ok({ id: 'approval_export_1', status: 'pending' }),
+      () => ok({ id: 'approval_export_1', status: 'pending' })
+    ])
+    const button = await openConsole()
+    const realSetItem = Storage.prototype.setItem
+    let writes = 0
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+      value: string
+    ) {
+      writes += 1
+      // 1st write = begin (before the fetch); 2nd = resolve (after the 2xx).
+      if (writes === 2) throw new Error('quota')
+      realSetItem.call(this, key, value)
+    })
+    click(button)
+    expect(
+      await screen.findByText(/Solicitacao de export registrada/)
+    ).toBeTruthy()
+    expect(await screen.findByText(/registro nao foi guardado/)).toBeTruthy()
+    expect(keys).toHaveLength(1)
+    // The operation is still pending: the next click replays the same request
+    // (the server answers with the same approval) instead of creating another.
+    click(screen.getByRole('button', { name: 'Solicitar export controlado' }))
+    await waitFor(() => expect(keys).toHaveLength(2))
+    expect(keys[1]).toBe(keys[0])
+  })
+
+  it('O1 control: with a working registry there is no warning', async () => {
+    mockApi([() => ok({ id: 'approval_export_1', status: 'pending' })])
+    const button = await openConsole()
+    click(button)
+    await screen.findByText(/Solicitacao de export registrada/)
+    expect(screen.queryByText(/registro nao foi guardado/)).toBeNull()
   })
 
   it('a storage failure blocks the dispatch with a recovery message and sends nothing', async () => {

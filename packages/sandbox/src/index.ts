@@ -29,3 +29,9 @@ export {
   type ShellToolOptions
 } from './shell-tool.ts'
 export { confinePath } from './confine.ts'
+export {
+  createProcessContainmentProfile,
+  type ProcessContainmentProfile,
+  type ProcessContainmentOptions,
+  type ProcessRuntimeFile
+} from './process-profile.ts'

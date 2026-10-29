@@ -122,12 +122,14 @@ export interface PostgresQueryable {
 
 export {
   baselineLegacyPostgresMigration,
+  isAcceptedMigrationChecksum,
   legacyRequiredColumns,
   legacyRequiredIndexes,
   readInitialMigrationSql,
   readPostgresMigrationSql,
   runInitialPostgresMigration,
-  runPostgresMigrations
+  runPostgresMigrations,
+  supersededMigrationChecksums
 } from './postgres-migrations.ts'
 export type {
   LegacyMigrationBaselineApproval,

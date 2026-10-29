@@ -23,6 +23,7 @@ import {
   delay,
   isSupportedHashVersion,
   isTerminalForWaiter,
+  notBeforeAfter,
   type ChannelEffectIdentity,
   type ChannelEffectJournal,
   type ChannelEffectReconciliation,
@@ -103,6 +104,18 @@ export class FileChannelEffectJournal implements ChannelEffectJournal {
         if (existing?.state !== 'UNCERTAIN')
           await this.#writeRecord(key, record)
         return { outcome: 'uncertain', record: cloneEffectRecord(record) }
+      }
+      if (decision.action === 'exhausted') {
+        await this.#writeRecord(key, record)
+        return { outcome: 'replay', record: cloneEffectRecord(record) }
+      }
+      if (decision.action === 'retry_later') {
+        const now = this.#clock()
+        return {
+          outcome: 'retry_later',
+          record: cloneEffectRecord(record),
+          retryAfterMs: Math.max(0, (record.notBeforeMs ?? now) - now)
+        }
       }
       if (decision.action === 'conflict') {
         return { outcome: 'conflict', record: cloneEffectRecord(record) }
@@ -212,7 +225,8 @@ export class FileChannelEffectJournal implements ChannelEffectJournal {
   async release(
     identity: ChannelEffectIdentity,
     leaseOwner: string,
-    errorCode: ChannelErrorCode
+    errorCode: ChannelErrorCode,
+    retryAfterMs?: number
   ): Promise<ChannelEffectTransition> {
     return this.#settle(identity, leaseOwner, (record, now) => ({
       ...record,
@@ -220,6 +234,7 @@ export class FileChannelEffectJournal implements ChannelEffectJournal {
       errorCode,
       leaseOwner: null,
       leaseExpiresAtMs: null,
+      notBeforeMs: notBeforeAfter(now, retryAfterMs),
       updatedAtMs: now,
       revision: record.revision + 1
     }))

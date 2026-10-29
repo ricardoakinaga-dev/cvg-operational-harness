@@ -1,0 +1,54 @@
+import { appendFileSync } from 'node:fs'
+import { describe, it } from 'vitest'
+import { createCapabilityRegistry } from '../packages/harness/src/index.ts'
+
+const OUT = '/mnt/dados/tmp/ricardo/revf01/probe-out.txt'
+const log = (m: string) => appendFileSync(OUT, m + '\n')
+const base = () => ({
+  id: 'synthetic.review.f01', version: '1.0.0', description: 'probe', inputSchema: { type: 'object' }, outputSchema: { type: 'object' },
+  risk: 'LOW', sideEffect: 'READ', idempotent: true, requiresApproval: false, origin: 'core', providerId: 'synthetic', providerVersion: '1.0.0'
+})
+const impl = { validateInput: () => true, execute: async () => ({ status: 'SUCCEEDED', output: {} }), validateOutput: () => true }
+function tryReg(name: string, descriptor: unknown) {
+  try {
+    const r = createCapabilityRegistry([{ descriptor, implementation: impl } as never])
+    log(name + ' => accepted sandbox=' + String((r.listDescriptors()[0] as { sandbox?: unknown }).sandbox) + ' fp=' + r.compositionFingerprint().slice(0, 12))
+  } catch (e) { log(name + ' => rejected ' + (e as { code?: string }).code + ' ' + (e as Error).message) }
+}
+describe('review F01 probes', () => {
+  it('probes', () => {
+    tryReg('plain absent', base())
+    tryReg('WORKSPACE', { ...base(), sandbox: 'WORKSPACE' })
+    tryReg('PROCESS', { ...base(), sandbox: 'PROCESS' })
+    tryReg('NONE', { ...base(), sandbox: 'NONE' })
+    tryReg('String object', { ...base(), sandbox: new String('WORKSPACE') })
+    tryReg('inherited via prototype', Object.assign(Object.create({ sandbox: 'WORKSPACE' }), base()))
+    // Proxy: counts traps; flips the answer between traps
+    const traps: string[] = []
+    const target = { ...base(), sandbox: 'WORKSPACE' }
+    let n = 0
+    const proxy = new Proxy(target, {
+      getOwnPropertyDescriptor(t, k) { traps.push('gopd:' + String(k)); const d = Reflect.getOwnPropertyDescriptor(t, k); if (k === 'sandbox') { n++; return { ...d!, value: n === 1 ? 'WORKSPACE' : 'NONE' } } return d },
+      get(t, k, r) { traps.push('get:' + String(k)); return Reflect.get(t, k, r) },
+      has(t, k) { traps.push('has:' + String(k)); return Reflect.has(t, k) }
+    })
+    tryReg('Proxy flips on 2nd read', proxy)
+    log('proxy traps for sandbox: ' + JSON.stringify(traps.filter((t) => t.includes('sandbox'))))
+    // sandbox getter on the prototype chain of a plain record with own accessor
+    let reads = 0
+    const acc = base() as Record<string, unknown>
+    Object.defineProperty(acc, 'sandbox', { enumerable: false, get: () => { reads++; return 'NONE' } })
+    tryReg('non-enumerable accessor', acc)
+    log('accessor reads=' + reads)
+    const sym = { ...base(), sandbox: 'WORKSPACE', [Symbol('x')]: 1 }
+    tryReg('symbol key extra', sym)
+    // frozen descriptor mutated after registration cannot change the stored mode
+    const live = { ...base(), sandbox: 'WORKSPACE' } as Record<string, unknown>
+    const r = createCapabilityRegistry([{ descriptor: live, implementation: impl } as never])
+    live.sandbox = 'NONE'
+    log('after caller mutation => ' + String((r.listDescriptors()[0] as { sandbox?: unknown }).sandbox))
+    const listed = r.listDescriptors()[0] as Record<string, unknown>
+    try { listed.sandbox = 'NONE' } catch { /* frozen */ }
+    log('after mutating listed clone => ' + String((r.resolveDescriptor('synthetic.review.f01', '1.0.0') as { sandbox?: unknown }).sandbox))
+  })
+})

@@ -472,6 +472,26 @@ describeWithPostgres(
       expect((await counts(tenantA, key)).tasks).toBe(0)
     })
 
+    it('AC11(f): a ROLLBACK that fails destroys the client, rethrows the ORIGINAL error and releases exactly once (PG7)', async () => {
+      const key = unique('rollback-key')
+      const releases: Array<Error | undefined> = []
+      const broken = new PostgresApiCreation(
+        faultyPool('rollback-fails', releases)
+      )
+      // A session that does not exist fails the operation after BEGIN, so the
+      // helper issues a ROLLBACK, which the faulty pool then refuses.
+      await expect(
+        broken.createTaskWithAudit(
+          taskCommand(key, {}, 'sess_does_not_exist'),
+          tenantA
+        )
+      ).rejects.toThrow('Session not found')
+      expect(releases).toHaveLength(1)
+      expect(releases[0]).toBeInstanceOf(Error)
+      expect(releases[0]?.message).toBe('ROLLBACK failed')
+      expect((await counts(tenantA, key)).tasks).toBe(0)
+    })
+
     it('AC11: the helper releases exactly once on success and never leaves a tenant context behind', async () => {
       let releases = 0
       const pool: PostgresPoolLike = {

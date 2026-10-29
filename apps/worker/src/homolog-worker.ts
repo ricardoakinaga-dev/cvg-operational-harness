@@ -168,6 +168,23 @@ export async function assertHomologHealthPreflight(
  * the tick converges without risking a second effect.
  */
 /**
+ * SPEC 0274: the decision of a FAILED/EXPIRED approval is not in its status
+ * but in the timestamps (`approved_at` xor `rejected_at`).
+ */
+const TERMINAL_STATUSES = `a.status IN ('FAILED', 'EXPIRED')`
+// Author's clarification: FAILED only follows an approval, so a rejection is
+// only ever recovered from EXPIRED.
+const REJECTED_DECISION = `(a.status = 'REJECTED' OR (a.status = 'EXPIRED' AND a.rejected_at IS NOT NULL AND a.approved_at IS NULL))`
+const TERMINAL_COHERENT = `((a.status = 'FAILED' AND a.approved_at IS NOT NULL AND a.rejected_at IS NULL) OR (a.status = 'EXPIRED' AND (a.approved_at IS NULL) <> (a.rejected_at IS NULL)))`
+/** FAILED/EXPIRED with no recoverable decision: out of the batch, silently or not. */
+const TERMINAL_UNRECOVERABLE = `(${TERMINAL_STATUSES} AND NOT ${TERMINAL_COHERENT})`
+/**
+ * The anomalous part of the above: an EXPIRED without any timestamp is a
+ * request that expired undecided (normal) and is NOT counted.
+ */
+const TERMINAL_INCOHERENT = `((a.status = 'FAILED' AND NOT (a.approved_at IS NOT NULL AND a.rejected_at IS NULL)) OR (a.status = 'EXPIRED' AND a.approved_at IS NOT NULL AND a.rejected_at IS NOT NULL))`
+
+/**
  * SPEC 0272: also approvals whose execution already advanced. The anti-join
  * uses the expression of uq_audit_approval_decision (COALESCE(tenant_id, ''),
  * approvalId, decision) so the index serves it; the age window keeps the tick
@@ -180,7 +197,7 @@ function stuckDecisionsFrom(minParam: string, maxParam: string): string {
        INNER JOIN runtime_approvals AS a
          ON a.tenant_id = e.tenant_id AND a.approval_id = e.approval_id
        WHERE e.tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')
-          AND a.status IN ('APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED', 'REJECTED')
+          AND a.status IN ('APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED', 'REJECTED', 'FAILED', 'EXPIRED')
           AND e.updated_at < now() - make_interval(secs => ${minParam}::double precision)
           AND (${maxParam}::double precision IS NULL
                OR e.updated_at > now() - make_interval(secs => ${maxParam}::double precision))
@@ -191,7 +208,7 @@ function stuckDecisionsFrom(minParam: string, maxParam: string): string {
               AND COALESCE(audit.tenant_id, '') = COALESCE(e.tenant_id, '')
               AND audit.payload->>'approvalId' = a.approval_id
               AND audit.payload->>'decision' =
-                CASE WHEN a.status = 'REJECTED' THEN 'rejected' ELSE 'approved' END
+                CASE WHEN ${REJECTED_DECISION} THEN 'rejected' ELSE 'approved' END
           )`
 }
 
@@ -207,8 +224,9 @@ const ENVELOPE_COMPLETE = `COALESCE(a.approver_id, '') <> ''
 
 /** Parameters: $1 limit, $2 minimum age (s), $3 maximum age (s) or NULL. */
 export const STUCK_APPROVAL_DECISIONS_SQL = `SELECT e.id AS execution_id, e.approval_id,
-               CASE WHEN a.status = 'REJECTED' THEN 'REJECTED' ELSE 'APPROVED' END AS decision
+               CASE WHEN ${REJECTED_DECISION} THEN 'REJECTED' ELSE 'APPROVED' END AS decision
        ${stuckDecisionsFrom('$2', '$3')}
+          AND NOT ${TERMINAL_UNRECOVERABLE}
           AND ${ENVELOPE_COMPLETE}
        ORDER BY e.updated_at ASC
        LIMIT $1`
@@ -216,7 +234,20 @@ export const STUCK_APPROVAL_DECISIONS_SQL = `SELECT e.id AS execution_id, e.appr
 /** Parameters: $1 minimum age (s), $2 maximum age (s) or NULL. */
 export const INCOMPLETE_ENVELOPE_COUNT_SQL = `SELECT count(*)::integer AS incomplete
        ${stuckDecisionsFrom('$1', '$2')}
+          AND NOT ${TERMINAL_UNRECOVERABLE}
           AND NOT (${ENVELOPE_COMPLETE})`
+
+/**
+ * SPEC 0274 (author's clarification): FAILED/EXPIRED rows with no coherent
+ * recorded decision stay out of the batch. Only the INCOHERENT ones are counted
+ * (FAILED without approved_at or with rejected_at, or any terminal with both
+ * timestamps); an EXPIRED with neither timestamp expired undecided, which is
+ * normal, and leaves silently.
+ * Parameters: $1 minimum age (s), $2 maximum age (s) or NULL.
+ */
+export const INCOHERENT_TERMINAL_COUNT_SQL = `SELECT count(*)::integer AS incoherent
+       ${stuckDecisionsFrom('$1', '$2')}
+          AND ${TERMINAL_INCOHERENT}`
 
 /**
  * Errors that belong to one row and repeat on every tick for it: the reconciler's
@@ -247,6 +278,8 @@ export interface StuckDecisionOptions {
   onRowFailed?: (failure: { approvalId: string; reason: string }) => void
   /** Rows in the window that have no complete envelope (manual handling). */
   onIncompleteEnvelope?: (count: number) => void
+  /** FAILED/EXPIRED rows in the window whose recorded decision is incoherent. */
+  onIncoherentTerminal?: (count: number) => void
 }
 
 export async function reconcileStuckApprovalDecisions(
@@ -279,6 +312,15 @@ export async function reconcileStuckApprovalDecisions(
           count
         })
       ))
+  const onIncoherentTerminal =
+    options.onIncoherentTerminal ??
+    ((count) =>
+      console.error(
+        JSON.stringify({
+          event: 'worker.homolog_reconcile_incoherent_terminal',
+          count
+        })
+      ))
   const stuck = await withTenantContext(pool, tenantId, async (client) => {
     const incomplete = await client.query<{ incomplete: number }>(
       INCOMPLETE_ENVELOPE_COUNT_SQL,
@@ -286,6 +328,12 @@ export async function reconcileStuckApprovalDecisions(
     )
     const incompleteCount = Number(incomplete.rows[0]?.incomplete ?? 0)
     if (incompleteCount > 0) onIncompleteEnvelope(incompleteCount)
+    const incoherent = await client.query<{ incoherent: number }>(
+      INCOHERENT_TERMINAL_COUNT_SQL,
+      [window.minAgeSeconds, window.maxAgeSeconds]
+    )
+    const incoherentCount = Number(incoherent.rows[0]?.incoherent ?? 0)
+    if (incoherentCount > 0) onIncoherentTerminal(incoherentCount)
     return client.query<{
       execution_id: string
       approval_id: string
