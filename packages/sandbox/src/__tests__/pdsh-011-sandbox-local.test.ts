@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { reviewedNodeProfile } from '../../../../tests/helpers/aud0625-node-process-profile.ts'
 import type {
   SandboxGate,
   SandboxGateOutcome,
@@ -377,7 +378,12 @@ describe('PDSH-011 runContained (SPEC 0196 §5)', () => {
     async () => {
       const workspace = tempWorkspace()
       const result = await runContained({
-        argv: ['/bin/echo', 'contained-ok'],
+        argv: [
+          process.execPath,
+          '-e',
+          'process.stdout.write("contained-ok\\n")'
+        ],
+        processProfile: reviewedNodeProfile(workspace),
         handle: handle({ workspaceRoot: workspace }),
         cwd: workspace
       })
@@ -388,18 +394,26 @@ describe('PDSH-011 runContained (SPEC 0196 §5)', () => {
   )
 
   it.skipIf(!bwrapWorks)('kills the namespace on timeout', async () => {
+    const workspace = tempWorkspace()
     const result = await runContained({
-      argv: ['/bin/sleep', '30'],
-      handle: handle(),
+      argv: [process.execPath, '-e', 'setTimeout(()=>{},30000)'],
+      processProfile: reviewedNodeProfile(workspace),
+      handle: handle({ workspaceRoot: workspace }),
       timeoutMs: 300
     })
     expect(result.exitCode).toBe('timeout')
   })
 
   it.skipIf(!bwrapWorks)('truncates output at the byte cap', async () => {
+    const workspace = tempWorkspace()
     const result = await runContained({
-      argv: ['/usr/bin/seq', '1', '200000'],
-      handle: handle(),
+      argv: [
+        process.execPath,
+        '-e',
+        'process.stdout.write("x".repeat(200000))'
+      ],
+      processProfile: reviewedNodeProfile(workspace),
+      handle: handle({ workspaceRoot: workspace }),
       maxOutputBytes: 1024
     })
     expect(result.exitCode).toBe(0)
@@ -408,14 +422,20 @@ describe('PDSH-011 runContained (SPEC 0196 §5)', () => {
   })
 
   it.skipIf(!bwrapWorks)('keeps the network namespace unshared', async () => {
+    const workspace = tempWorkspace()
     const result = await runContained({
-      argv: ['/bin/sh', '-c', 'ip link 2>/dev/null | grep -c DOWN || true'],
-      handle: handle(),
+      argv: [
+        process.execPath,
+        '-e',
+        'process.stdout.write(JSON.stringify(Object.keys(require("node:os").networkInterfaces())))'
+      ],
+      processProfile: reviewedNodeProfile(workspace),
+      handle: handle({ workspaceRoot: workspace }),
       timeoutMs: 5000
     })
-    // Without a network namespace the command sees host interfaces; inside
-    // --unshare-net only `lo` exists, so `ip link` never shows a real NIC.
     expect(result.exitCode).toBe(0)
-    expect(result.stdout.trim()).not.toContain('eth0')
+    expect(
+      JSON.parse(result.stdout).every((name: string) => name === 'lo')
+    ).toBe(true)
   })
 })
