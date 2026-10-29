@@ -35,3 +35,19 @@ export {
   type ProcessContainmentOptions,
   type ProcessRuntimeFile
 } from './process-profile.ts'
+export {
+  createProcessService,
+  type ProcessServiceOptions
+} from './process-service/service.ts'
+export type {
+  ProcessCause,
+  ProcessCleanup,
+  ProcessConsumer,
+  ProcessDisposeReport,
+  ProcessHandle,
+  ProcessLaunchRequest,
+  ProcessLimits,
+  ProcessOutcome,
+  ProcessService
+} from './process-service/types.ts'
+export { ProcessServiceError } from './process-service/errors.ts'

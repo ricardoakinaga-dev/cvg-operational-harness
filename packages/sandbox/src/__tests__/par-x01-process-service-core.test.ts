@@ -21,6 +21,7 @@ import {
   validateProcessLimits
 } from '../process-service/limits.ts'
 import {
+  inPidNamespace,
   readStartTime,
   sameProcess,
   scanPidNamespace
@@ -377,6 +378,8 @@ describe('PAR-X01 slice 1: /proc observation (I5, I9)', () => {
       uid?: number
       stat?: string
       unreadableNs?: boolean
+      nspid?: string
+      ppid?: number
     }
   ): void => {
     const dir = join(root, String(pid))
@@ -385,10 +388,15 @@ describe('PAR-X01 slice 1: /proc observation (I5, I9)', () => {
     else if (options.ns) symlinkSync(options.ns, join(dir, 'ns', 'pid'))
     writeFileSync(
       join(dir, 'status'),
-      `Name:\tx\nUid:\t${options.uid ?? 1000}\t${options.uid ?? 1000}\t0\t0\n`
+      `Name:\tx\nUid:\t${options.uid ?? 1000}\t${options.uid ?? 1000}\t0\t0\n` +
+        (options.nspid ? `NSpid:\t${options.nspid}\n` : '')
     )
-    if (options.stat !== undefined)
-      writeFileSync(join(dir, 'stat'), options.stat)
+    const stat =
+      options.stat ??
+      (options.ppid !== undefined
+        ? `${pid} (c) S ${options.ppid} 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 5 0 0\n`
+        : undefined)
+    if (stat !== undefined) writeFileSync(join(dir, 'stat'), stat)
   }
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), 'x01-proc-'))
@@ -419,6 +427,35 @@ describe('PAR-X01 slice 1: /proc observation (I5, I9)', () => {
       scanPidNamespace(500, { procRoot: root, uid: 1000 }).unverified
     ).toBe(1)
     expect(scanPidNamespace(500, { procRoot: root, uid: 0 }).unverified).toBe(1)
+  })
+  it('places a process that hides its namespace link by depth and by descent from the init', () => {
+    // 30 = init (readable link). 31 hides its link and descends from it: a member.
+    entry(30, { ns: 'pid:[700]', ppid: 5 })
+    entry(31, { unreadableNs: true, nspid: '31 7', ppid: 30 })
+    entry(32, { unreadableNs: true, nspid: '32 8', ppid: 31 }) // grandchild of the init
+    entry(33, { unreadableNs: true, nspid: '33', ppid: 1 }) // host namespace only: ignored
+    entry(34, { unreadableNs: true, nspid: '34 2', ppid: 1 }) // some other sandbox: ignored
+    entry(35, { unreadableNs: true, nspid: '35 2' }) // no stat: cannot be placed
+    const scan = scanPidNamespace(700, {
+      procRoot: root,
+      uid: 1000,
+      initPid: 30
+    })
+    expect([...scan.members].sort()).toEqual([30, 31, 32])
+    // 14 (no NSpid, no stat), 15 is another user's, 35 has nothing to walk: the rest are unverified.
+    expect(scan.unverified).toBeGreaterThanOrEqual(2)
+  })
+  it('without the init pid a hidden-link process stays unverified, never assumed absent', () => {
+    expect(
+      scanPidNamespace(700, { procRoot: root, uid: 1000 }).unverified
+    ).toBeGreaterThan(0)
+  })
+  it('re-checks membership before a kill, with the same fallback', () => {
+    expect(inPidNamespace(30, 700, root)).toBe(true)
+    expect(inPidNamespace(31, 700, root)).toBe(false) // no init given: link unreadable
+    expect(inPidNamespace(31, 700, root, 30)).toBe(true)
+    expect(inPidNamespace(34, 700, root, 30)).toBe(false)
+    expect(inPidNamespace(9999, 700, root, 30)).toBe(false)
   })
   it('cannot prove anything without a readable /proc', () => {
     const scan = scanPidNamespace(500, { procRoot: join(root, 'missing') })

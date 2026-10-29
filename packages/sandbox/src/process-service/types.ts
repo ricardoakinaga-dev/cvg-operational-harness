@@ -81,3 +81,22 @@ export interface ProcessServiceLimitsCaps {
   readonly maxOutputBytes: number
   readonly maxStdinBytes: number
 }
+
+export interface ProcessHandle {
+  readonly id: string
+  /** Resolves once, after cleanup, with the single immutable outcome. */
+  wait(): Promise<ProcessOutcome>
+  /** Asks for the launch to end (cause `cancelled`); resolves with the same outcome as `wait`. */
+  stop(reason?: string): Promise<ProcessOutcome>
+}
+
+export interface ProcessDisposeReport {
+  readonly stopped: number
+  readonly clean: number
+  readonly cleanupFailed: number
+}
+
+export interface ProcessService {
+  launch(request: ProcessLaunchRequest): Promise<ProcessHandle>
+  dispose(): Promise<ProcessDisposeReport>
+}
