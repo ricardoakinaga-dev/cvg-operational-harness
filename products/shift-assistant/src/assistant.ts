@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import {
   HELP_TEXT,
@@ -7,6 +7,7 @@ import {
   type Command
 } from './commands.ts'
 import type {
+  PreviewPart,
   InboundMessage,
   Member,
   Note,
@@ -27,12 +28,21 @@ import {
   unverifiedNumbers,
   type Organizer
 } from './organizer.ts'
+import {
+  noteCode,
+  noteRevision,
+  notEligibleReply,
+  previewContentSha256,
+  previewEligibility,
+  previewToken
+} from './preview-receipt.ts'
 import type { ShiftStore } from './store.ts'
 import type { Transcriber } from './transcriber.ts'
 import {
   DEFAULT_TIMEOUTS,
   DispatchError,
   splitForChannel,
+  splitForChannelChecked,
   TransportError,
   untilAborted
 } from './transport-limits.ts'
@@ -92,6 +102,14 @@ interface Failure {
   permanent: boolean
 }
 
+/** What a processed message commits, and what is sent once it is durable. */
+interface Outcome {
+  events: ShiftEvent[]
+  reply?: string
+  /** Note whose preview is presented, with a receipt, after the commit. */
+  presents?: string
+}
+
 /**
  * Phase 1 of the Assistente de Plantão (SPEC 0177), with the reliability
  * contracts of SPEC 0179 that AUD-0621 required: every stored message stays
@@ -117,6 +135,7 @@ export class ShiftAssistant {
   #queue: Promise<void> = Promise.resolve()
   readonly #queued = new Set<string>()
   readonly #effects = new Set<Promise<unknown>>()
+  readonly #presenting = new Set<string>()
   #job: Job | undefined
   #ticking = false
   #stopping = false
@@ -283,6 +302,7 @@ export class ShiftAssistant {
     try {
       if (this.#store.paused) return 0
       this.#enqueueDueRetries()
+      await this.#representDrafts()
       let sent = 0
       for (const candidate of this.#store.openTasks()) {
         if (this.#stopping || this.#store.paused) break
@@ -513,7 +533,7 @@ export class ShiftAssistant {
     try {
       const command =
         message.kind === 'text' ? parseCommand(message.text) : undefined
-      let outcome: { events: ShiftEvent[]; reply?: string }
+      let outcome: Outcome
       try {
         outcome =
           command && command.type !== 'correct'
@@ -547,9 +567,22 @@ export class ShiftAssistant {
       if (!this.#commit(events)) return
       this.#job = undefined
       this.#lastProgressAt = this.#clock().getTime()
-      if (outcome.reply) await this.#reply(member, outcome.reply)
+      if (outcome.presents) await this.#present(member, outcome.presents)
+      else if (outcome.reply) await this.#reply(member, outcome.reply)
     } finally {
       this.#job = undefined
+    }
+  }
+
+  /** Presents again the drafts whose preview never arrived complete. */
+  async #representDrafts(): Promise<void> {
+    for (const note of this.#store.notesAwaitingPreview(
+      this.#clock().getTime()
+    )) {
+      if (this.#stopping || this.#store.paused) return
+      if (!this.#store.storageHealthy) return
+      const member = this.member(note.authorPhone)
+      if (member) await this.#present(member, note.id)
     }
   }
 
@@ -560,7 +593,7 @@ export class ShiftAssistant {
     stage: ProcessingStage,
     error: unknown,
     why: AbortCause | undefined
-  ): { events: ShiftEvent[]; reply?: string } {
+  ): Outcome {
     const failure = classify(error, why === 'deadline')
     const previous = this.#store.retryState(message.messageId)
     // One budget per message, whatever stage failed: a failure that moves
@@ -626,11 +659,7 @@ export class ShiftAssistant {
     return command?.type === 'correct' ? command.text : message.text.trim()
   }
 
-  #runCommand(
-    command: Command,
-    member: Member,
-    messageId: string
-  ): { events: ShiftEvent[]; reply?: string } {
+  #runCommand(command: Command, member: Member, messageId: string): Outcome {
     const at = this.#now()
     switch (command.type) {
       case 'help':
@@ -693,9 +722,10 @@ export class ShiftAssistant {
     member: Member,
     code: string | undefined,
     messageId: string
-  ): { events: ShiftEvent[]; reply: string } {
+  ): Outcome & { reply: string } {
     const drafts = this.#store.unconfirmedNotes(member.phone)
     let target: Note | undefined
+    let echoed = false
     // A bare "ok" never lands on an older draft while another note of the
     // same author is still being processed or waiting for a retry.
     const notePending = this.#store
@@ -716,14 +746,17 @@ export class ShiftAssistant {
       }
     }
     if (code) {
-      const matches = drafts.filter((note) => noteCode(note) === code)
+      // The token names note, revision and content hash; the bare 8-hex code
+      // no longer selects a draft (SPEC 0283 section 4).
+      const matches = drafts.filter((note) => this.#tokenOf(note) === code)
       if (matches.length !== 1) {
         return {
           events: [],
-          reply: `Não encontrei um rascunho seu aguardando confirmação com o código ${code}.`
+          reply: `Não encontrei um rascunho seu aguardando confirmação com o token ${code}. Use o token completo do preview. (CONFIRMATION_NOT_ELIGIBLE: token_unknown)`
         }
       }
       target = matches[0]
+      echoed = true
     } else if (drafts.length === 0) {
       return {
         events: [],
@@ -737,7 +770,8 @@ export class ShiftAssistant {
         reply: [
           `Você tem ${drafts.length} rascunhos aguardando confirmação. Responda com o comando do rascunho certo:`,
           ...drafts.map(
-            (note) => `• ok nota ${noteCode(note)} — ${preview(note.rawText)}`
+            (note) =>
+              `• ok nota ${this.#tokenOf(note)} — ${preview(note.rawText)}`
           )
         ].join('\n')
       }
@@ -754,6 +788,12 @@ export class ShiftAssistant {
           'Mande "corrigir <texto>" com o paciente e o ID certos.'
         ].join('\n')
       }
+    }
+    // No receipt, no confirmation (SPEC 0283 I1/I2). The full token typed
+    // back proves the preview was seen only when its last part was uncertain.
+    const eligibility = previewEligibility(this.#store.previewState(target.id))
+    if (!eligibility.ok && !(echoed && eligibility.echoable)) {
+      return { events: [], reply: notEligibleReply(eligibility.cause) }
     }
     const activated = this.#store
       .tasksOfNote(target.id)
@@ -786,7 +826,7 @@ export class ShiftAssistant {
     signal: AbortSignal,
     stage: { current: ProcessingStage },
     command: Command | undefined
-  ): Promise<{ events: ShiftEvent[]; reply?: string }> {
+  ): Promise<Outcome> {
     let rawText =
       command?.type === 'correct' ? command.text : message.text.trim()
     let mediaFile: string | undefined
@@ -818,11 +858,12 @@ export class ShiftAssistant {
           {
             type: 'note_created',
             at: this.#now(),
-            note: this.#note(noteId, message, member, '', mediaFile)
+            note: this.#note(noteId, message, member, '', mediaFile, {
+              revision: this.#revisionFor(command, member)
+            })
           }
         ],
-        reply:
-          '📎 Guardei o arquivo na sua nota. Mande um áudio ou texto dizendo do que se trata.'
+        presents: noteId
       }
     }
 
@@ -870,6 +911,12 @@ export class ShiftAssistant {
       member,
       rawText,
       mediaFile,
+      {
+        revision: this.#revisionFor(command, member),
+        ...(resolved.completed.length > 0
+          ? { completedIds: resolved.completed }
+          : {})
+      },
       resolved.organized,
       unverified,
       issues
@@ -880,18 +927,126 @@ export class ShiftAssistant {
       ...tasks.map((task) => ({ type: 'task_created' as const, at, task })),
       ...this.#replacementEvents(command, member, noteId)
     ]
-    const reply = formatNoteReply(
-      note,
-      resolved.organized,
-      tasks,
-      resolved.completed
-    )
-    return {
-      events,
-      reply:
-        command?.type === 'correct'
-          ? `✏️ Nota anterior substituída.\n\n${reply}`
-          : reply
+    return { events, presents: noteId }
+  }
+
+  #tokenOf(note: Note): string {
+    return previewToken(note, this.#store.tasksOfNote(note.id))
+  }
+
+  /**
+   * The text the author sees for a note, rebuilt only from what the journal
+   * holds, so a re-presentation is the same draft as the first one.
+   */
+  #renderPreview(note: Note): string {
+    const tasks = this.#store.tasksOfNote(note.id)
+    const token = previewToken(note, tasks)
+    let text: string
+    if (note.organized) {
+      text = formatNoteReply(
+        note,
+        note.organized,
+        tasks,
+        note.completedIds ?? []
+      )
+    } else if (note.rawText === '') {
+      text =
+        '📎 Guardei o arquivo na sua nota. Mande um áudio ou texto dizendo do que se trata.'
+    } else {
+      const intro =
+        note.rawIntro === 'policy_denied'
+          ? '📝 Guardei sua nota como documento, sem organização automática: anotações clínicas não são enviadas a modelo de IA.'
+          : '📝 Guardei sua nota, mas não consegui organizá-la.'
+      text = `${intro} Texto recebido:\n\n${note.rawText}\n\nResponda "ok" para confirmar o registro (ou "ok nota ${token}") ou "corrigir <texto>" para refazer.`
+    }
+    return noteRevision(note) > 1
+      ? `✏️ Nota anterior substituída.\n\n${text}`
+      : text
+  }
+
+  /**
+   * Sends the preview of a draft in bounded parts and records a receipt with
+   * the outcome of every part (SPEC 0283 section 3). Nothing is recorded when
+   * a pause, shutdown or revocation stopped the send before any part left.
+   */
+  async #present(member: Member, noteId: string): Promise<void> {
+    if (this.#presenting.has(noteId)) return
+    const note = this.#store.note(noteId)
+    if (!note) return
+    this.#presenting.add(noteId)
+    try {
+      const { parts, truncated } = splitForChannelChecked(
+        this.#renderPreview(note)
+      )
+      const signals = [this.#pause.signal, this.#stop.signal]
+      const recorded: PreviewPart[] = []
+      let failed = false
+      for (const [index, part] of parts.entries()) {
+        const base = {
+          index,
+          bytes: Buffer.byteLength(part, 'utf8'),
+          partSha256: createHash('sha256').update(part, 'utf8').digest('hex')
+        }
+        if (failed) {
+          recorded.push({ ...base, outcome: 'not_sent' })
+          continue
+        }
+        if (
+          signals.some((signal) => signal.aborted) ||
+          !this.member(member.phone)
+        ) {
+          if (recorded.length === 0) {
+            this.#logger.info('shift.reply.suppressed', {})
+            return
+          }
+          failed = true
+          recorded.push({ ...base, outcome: 'not_sent' })
+          continue
+        }
+        try {
+          await this.#whatsapp.sendText(
+            member.phone,
+            part,
+            AbortSignal.any(signals)
+          )
+          recorded.push({ ...base, outcome: 'accepted' })
+        } catch (error) {
+          const outcome =
+            error instanceof DispatchError ? error.outcome : 'uncertain'
+          this.#logger.error('shift.reply.failed', {
+            outcome,
+            code: errorCode(error)
+          })
+          failed = true
+          recorded.push({ ...base, outcome })
+        }
+      }
+      if (
+        !this.#commit([
+          {
+            type: 'preview_presented',
+            at: this.#now(),
+            noteId,
+            revision: noteRevision(note),
+            contentSha256: previewContentSha256(
+              note,
+              this.#store.tasksOfNote(noteId)
+            ),
+            parts: recorded,
+            truncated
+          }
+        ])
+      ) {
+        return
+      }
+      if (truncated) {
+        await this.#reply(
+          member,
+          'Esta nota é grande demais para eu mostrar inteira, então não consigo pedir a sua confirmação. Divida-a em notas menores ou mande "corrigir <texto>".'
+        )
+      }
+    } finally {
+      this.#presenting.delete(noteId)
     }
   }
 
@@ -901,27 +1056,29 @@ export class ShiftAssistant {
     rawText: string,
     code: string,
     mediaFile?: string
-  ): { events: ShiftEvent[]; reply: string } {
+  ): Outcome {
     const command =
       message.kind === 'text' ? parseCommand(message.text) : undefined
     const noteId = randomUUID()
-    const note = this.#note(noteId, message, member, rawText, mediaFile)
+    const note = this.#note(noteId, message, member, rawText, mediaFile, {
+      revision: this.#revisionFor(command, member),
+      rawIntro: code === 'policy_denied' ? 'policy_denied' : 'organize_failed'
+    })
     const at = this.#now()
-    const intro =
-      code === 'policy_denied'
-        ? '📝 Guardei sua nota como documento, sem organização automática: anotações clínicas não são enviadas a modelo de IA.'
-        : '📝 Guardei sua nota, mas não consegui organizá-la.'
-    const reply = `${intro} Texto recebido:\n\n${rawText}\n\nResponda "ok" para confirmar o registro (código ${noteCode(note)}) ou "corrigir <texto>" para refazer.`
     return {
       events: [
         { type: 'note_created', at, note },
         ...this.#replacementEvents(command, member, noteId)
       ],
-      reply:
-        command?.type === 'correct'
-          ? `✏️ Nota anterior substituída.\n\n${reply}`
-          : reply
+      presents: noteId
     }
+  }
+
+  /** Position of a new note in its correction chain (SPEC 0283 section 4). */
+  #revisionFor(command: Command | undefined, member: Member): number {
+    if (command?.type !== 'correct') return 1
+    const previous = this.#store.lastActiveNote(member.phone)
+    return previous ? noteRevision(previous) + 1 : 1
   }
 
   /**
@@ -957,11 +1114,13 @@ export class ShiftAssistant {
     member: Member,
     rawText: string,
     mediaFile?: string,
+    extra: Pick<Note, 'revision' | 'completedIds' | 'rawIntro'> = {},
     organized?: Organized,
     unverified: string[] = [],
     blockingIssues: string[] = []
   ): Note {
     return {
+      ...extra,
       id,
       messageId: message.messageId,
       authorPhone: member.phone,
@@ -1202,11 +1361,7 @@ function bindPatient(
   return id ? { id: id.trim() } : {}
 }
 
-/** Short code shown in the preview and used by "ok nota <código>". */
-/** Short code the author types in "ok nota <código>". */
-export function noteCode(note: Note): string {
-  return note.id.replace(/-/g, '').slice(0, 8)
-}
+export { noteCode }
 
 function preview(text: string): string {
   const flat = text.replace(/\s+/g, ' ').trim()
@@ -1277,7 +1432,7 @@ export function formatNoteReply(
     )
   } else {
     blocks.push(
-      `Responda "ok" para confirmar e ativar as pendências (código ${noteCode(note)}) ou "corrigir <texto>" para refazer.`
+      `Responda "ok" para confirmar e ativar as pendências (ou "ok nota ${previewToken(note, tasks)}") ou "corrigir <texto>" para refazer.`
     )
   }
   if (organized.pacientes.length === 0 && tasks.length === 0) {

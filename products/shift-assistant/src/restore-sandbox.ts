@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
-import { ShiftAssistant, noteCode } from './assistant.ts'
+import { ShiftAssistant } from './assistant.ts'
+import { previewToken } from './preview-receipt.ts'
 import {
   copyVolume,
   insideOrEqual,
@@ -318,7 +319,10 @@ export async function sandboxCheck(
       .filter((task) => task.status === 'draft')
       .map((task) => task.number)
     const before = sent.length
-    await say(author, `ok nota ${noteCode(note)}`)
+    await say(
+      author,
+      `ok nota ${previewToken(note, store.tasksOfNote(note.id))}`
+    )
     const activated = drafts.filter(
       (number) => store.task(number)?.status === 'open'
     )

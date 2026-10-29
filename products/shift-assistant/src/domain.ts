@@ -73,6 +73,15 @@ export interface Note {
   blockingIssues?: string[]
   confirmed: boolean
   supersededBy?: string
+  /**
+   * Position of this note in its correction chain (SPEC 0283 section 4);
+   * absent in journals written before it, which read as revision 1.
+   */
+  revision?: number
+  /** IDs completed from earlier confirmed notes, shown in the preview. */
+  completedIds?: string[]
+  /** Why a note without organized fields is only a raw document. */
+  rawIntro?: 'policy_denied' | 'organize_failed'
 }
 
 export interface Task {
@@ -128,6 +137,31 @@ export const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1
 /** Processing stages that call a dependency and can be retried. */
 export type ProcessingStage = 'download' | 'transcribe' | 'organize' | 'reply'
 
+/**
+ * Receipt of one presentation of a note preview (SPEC 0283 section 3): the
+ * outcome of every part the channel was asked to carry. `parts` after the
+ * first failed one are `not_sent`. A note is confirmable by a bare "ok" only
+ * after a receipt with every part `accepted` and `truncated` false.
+ */
+export interface PreviewPart {
+  index: number
+  bytes: number
+  partSha256: string
+  outcome: 'accepted' | 'not_sent' | 'uncertain'
+}
+
+export interface PreviewPresentedEvent {
+  type: 'preview_presented'
+  at: string
+  noteId: string
+  revision: number
+  /** Hash of the canonical content of the revision (the token's hash). */
+  contentSha256: string
+  parts: PreviewPart[]
+  /** The preview exceeded the part limit and was cut with a notice. */
+  truncated: boolean
+}
+
 /** Append-only events: the event log is the document of record (D4). */
 export type ShiftEvent =
   | { type: 'message_received'; at: string; message: InboundMessage }
@@ -143,6 +177,7 @@ export type ShiftEvent =
       activated?: number[]
     }
   | { type: 'note_superseded'; at: string; noteId: string; by: string }
+  | PreviewPresentedEvent
   | { type: 'task_created'; at: string; task: Task }
   | { type: 'task_done'; at: string; number: number }
   | { type: 'task_cancelled'; at: string; number: number }
@@ -204,6 +239,7 @@ export const SHIFT_EVENT_TYPES: ReadonlySet<ShiftEvent['type']> = new Set<
   'note_created',
   'note_confirmed',
   'note_superseded',
+  'preview_presented',
   'task_created',
   'task_done',
   'task_cancelled',

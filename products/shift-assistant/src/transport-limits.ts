@@ -278,7 +278,16 @@ export function splitForChannel(
   maxBytes: number = LIMITS.sendTextBytes,
   maxParts = 4
 ): string[] {
-  if (utf8Bytes(text) <= maxBytes) return [text]
+  return splitForChannelChecked(text, maxBytes, maxParts).parts
+}
+
+/** Same split, also telling whether the text was cut with the notice. */
+export function splitForChannelChecked(
+  text: string,
+  maxBytes: number = LIMITS.sendTextBytes,
+  maxParts = 4
+): { parts: string[]; truncated: boolean } {
+  if (utf8Bytes(text) <= maxBytes) return { parts: [text], truncated: false }
   const notice = '\n… (texto longo; a nota completa ficou guardada)'
   const parts: string[] = []
   let rest = text
@@ -303,5 +312,5 @@ export function splitForChannel(
     parts.push(last ? `${rest.slice(0, end)}${notice}` : rest.slice(0, end))
     rest = rest.slice(end)
   }
-  return parts
+  return { parts, truncated: rest.length > 0 }
 }

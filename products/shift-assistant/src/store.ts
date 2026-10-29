@@ -14,6 +14,7 @@ import {
   MAX_ATTEMPTS,
   normalizePatientId,
   normalizePatientName,
+  RETRY_DELAYS_MS,
   SHIFT_EVENT_TYPES,
   type InboundMessage,
   type KnownPatient,
@@ -23,6 +24,7 @@ import {
   type ShiftEvent,
   type Task
 } from './domain.ts'
+import { isCompletePresentation, type PreviewState } from './preview-receipt.ts'
 
 export type ShiftJournalErrorCode =
   | 'JOURNAL_CORRUPT'
@@ -218,6 +220,7 @@ export class ShiftStore {
   readonly #review = new Map<string, string>()
   readonly #retry = new Map<string, RetryState>()
   readonly #notes = new Map<string, Note>()
+  readonly #previews = new Map<string, PreviewState>()
   readonly #tasks = new Map<number, Task>()
   #paused = false
 
@@ -370,6 +373,29 @@ export class ShiftStore {
     return [...this.#notes.values()]
       .filter((note) => note.authorPhone === authorPhone && !note.supersededBy)
       .at(-1)
+  }
+
+  /** Presentation state of a note's preview (SPEC 0283 section 3). */
+  previewState(noteId: string): PreviewState | undefined {
+    const state = this.#previews.get(noteId)
+    return state ? { ...state } : undefined
+  }
+
+  /**
+   * Drafts whose preview has no complete presentation yet and may still be
+   * re-presented: not cut by the part limit, within the attempt budget and
+   * past the delay after the last attempt.
+   */
+  notesAwaitingPreview(nowMs: number): Note[] {
+    return [...this.#notes.values()].filter((note) => {
+      if (note.supersededBy || note.confirmed) return false
+      const state = this.#previews.get(note.id)
+      if (!state) return true
+      if (state.complete || state.last?.truncated) return false
+      if (state.attempts >= MAX_ATTEMPTS) return false
+      const delay = RETRY_DELAYS_MS[state.attempts - 1] ?? 0
+      return Date.parse(state.lastAt ?? '') + delay <= nowMs
+    })
   }
 
   /** The author's active notes still waiting for "ok", oldest first. */
@@ -806,6 +832,17 @@ export class ShiftStore {
       case 'note_superseded': {
         const note = this.#notes.get(event.noteId)
         if (note) note.supersededBy = event.by
+        return
+      }
+      case 'preview_presented': {
+        const previous = this.#previews.get(event.noteId)
+        this.#previews.set(event.noteId, {
+          attempts: (previous?.attempts ?? 0) + 1,
+          complete:
+            previous?.complete === true || isCompletePresentation(event),
+          lastAt: event.at,
+          last: event
+        })
         return
       }
       case 'task_created': {

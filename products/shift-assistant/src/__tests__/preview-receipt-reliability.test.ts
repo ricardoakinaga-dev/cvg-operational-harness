@@ -14,10 +14,10 @@ import {
 // of the draft must belong to the patient, field and unit of the source.
 // Synthetic data only; no provider, channel or model is contacted.
 //
-// `red` marks a defect reproduced on the current code: `it.fails` passes while
-// the defect is present and turns red when it is fixed, so the fix must drop
-// the marker. With F13_RAW=1 the same bodies run as plain tests, which prints
-// the assertion that fails and shows the reason of each RED.
+// Slice 1 (receipt and token) is in force. `red` still marks the association
+// fidelity defects of slice 2: `it.fails` passes while the defect is present
+// and turns red when it is fixed, so the fix must drop the marker. With
+// F13_RAW=1 the same bodies run as plain tests and print the failing assertion.
 const red = process.env.F13_RAW === '1' ? it : it.fails
 
 const PARTS_LIMIT = 32 * 1024
@@ -105,7 +105,7 @@ describe('F13 controls: what already holds on the current code', () => {
 })
 
 describe('F13 preview receipt: no confirmation without a presented preview', () => {
-  red('refuses "ok" when the channel refused the preview', async () => {
+  it('refuses "ok" when the channel refused the preview', async () => {
     const { env, draft, after } = await draftThenOk(
       { onSend: () => new Response('unavailable', { status: 503 }) },
       'Thor leito 3'
@@ -116,7 +116,7 @@ describe('F13 preview receipt: no confirmation without a presented preview', () 
     expect(env.store.openTasks(ANA)).toHaveLength(0)
   })
 
-  red('refuses "ok" when the preview send outcome is uncertain', async () => {
+  it('refuses "ok" when the preview send outcome is uncertain', async () => {
     const { env, after } = await draftThenOk(
       {
         onSend: () => {
@@ -130,27 +130,24 @@ describe('F13 preview receipt: no confirmation without a presented preview', () 
     expect(env.store.openTasks(ANA)).toHaveLength(0)
   })
 
-  red(
-    'refuses "ok" when only the first part of a long preview arrived',
-    async () => {
-      let calls = 0
-      const { env, after } = await draftThenOk(
-        {
-          organize: async () => longOrganized(10, 'a'),
-          onSend: () => {
-            calls += 1
-            if (calls === 2) return new Response('unavailable', { status: 503 })
-          }
-        },
-        'Dez pacientes sintéticos'
-      )
-      expect(env.waha.sent[0]!.text.length).toBeGreaterThan(0)
-      expect(env.waha.sent.length).toBeGreaterThan(2) // part 1, part 2 (refused), ...
-      expect(after?.confirmed).toBe(false)
-    }
-  )
+  it('refuses "ok" when only the first part of a long preview arrived', async () => {
+    let calls = 0
+    const { env, after } = await draftThenOk(
+      {
+        organize: async () => longOrganized(10, 'a'),
+        onSend: () => {
+          calls += 1
+          if (calls === 2) return new Response('unavailable', { status: 503 })
+        }
+      },
+      'Dez pacientes sintéticos'
+    )
+    expect(env.waha.sent[0]!.text.length).toBeGreaterThan(0)
+    expect(env.waha.sent.length).toBeGreaterThan(2) // part 1, part 2 (refused), ...
+    expect(after?.confirmed).toBe(false)
+  })
 
-  red('refuses "ok" when the preview was cut by the part limit', async () => {
+  it('refuses "ok" when the preview was cut by the part limit', async () => {
     const { env, after } = await draftThenOk(
       { organize: async () => longOrganized(20, 'b') },
       'Vinte pacientes sintéticos'
@@ -161,7 +158,7 @@ describe('F13 preview receipt: no confirmation without a presented preview', () 
     expect(after?.confirmed).toBe(false)
   })
 
-  red('shows the revision token (note, revision, content hash)', async () => {
+  it('shows the revision token (note, revision, content hash)', async () => {
     const env = setup()
     await env.deliver(wahaPayload('m1', ANA, 'Thor leito 3'))
     const preview = env.waha.textsTo(ANA).at(-1) ?? ''

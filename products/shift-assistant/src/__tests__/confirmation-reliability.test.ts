@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { Organized } from '../domain.ts'
+import { previewToken } from '../preview-receipt.ts'
 import { ShiftStore } from '../store.ts'
 import {
   ANA,
@@ -83,7 +84,7 @@ describe('F08: draft tasks stay inactive until the author confirms', () => {
     expect(env.store.openTasks()).toHaveLength(0)
     const reply = env.waha.textsTo(ANA).at(-1) ?? ''
     expect(reply).toContain('ok nota')
-    const code = /ok nota ([0-9a-f]{8})/.exec(reply)?.[1]
+    const code = /ok nota ([0-9a-f]{8}-r1-[0-9a-f]{8})/.exec(reply)?.[1]
     expect(code).toBeDefined()
     await env.deliver(wahaPayload('ok2', ANA, `ok nota ${code}`))
     expect(env.store.openTasks(ANA)).toHaveLength(1)
@@ -271,5 +272,6 @@ describe('F09: homonyms never bind a task to the first patient', () => {
 })
 
 function noteCode(env: ReturnType<typeof setup>): string {
-  return env.store.lastActiveNote(ANA)!.id.slice(0, 8)
+  const note = env.store.lastActiveNote(ANA)!
+  return previewToken(note, env.store.tasksOfNote(note.id))
 }
