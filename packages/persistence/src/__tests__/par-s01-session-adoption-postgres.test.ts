@@ -594,6 +594,130 @@ describe.skipIf(!url)('PAR-S01 slice 7: adoption and compatibility', () => {
         await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
       }
     })
+
+    it('adopts in stable tenant/session order whatever order the manifest arrives in', async () => {
+      const name = `pars01t_${suffix}`
+      const entries = await smallSchema(name, 2)
+      try {
+        const other = entries.map((e) => ({ ...e, tenantId: tenants[1]! }))
+        const store = new PostgresSessionEventStore(pool, {
+          tenantId: tenants[1]!,
+          schemaName: name
+        })
+        // Same ids under a second tenant, appended after the expansion by the guarded legacy path.
+        for (const e of other) {
+          await store.openSession({
+            tenantId: tenants[1]!,
+            sessionId: e.sessionId,
+            formatVersion: 1
+          })
+          await store.append(input(tenants[1]!, e.sessionId, 1))
+        }
+        await admin
+          .query(
+            `UPDATE ${name}.session_streams SET header_json=NULL, inherited_event_count=NULL WHERE tenant_id=$1`,
+            [tenants[1]]
+          )
+          .catch(() => undefined)
+        const mixed = [other[1]!, entries[1]!, other[0]!, entries[0]!]
+        const order: string[] = []
+        const spy = {
+          query: async (sql: string, v?: unknown[]) => {
+            if (sql.startsWith('UPDATE') && v) order.push(`${v[0]}/${v[1]}`)
+            return admin.query(sql, v as never)
+          }
+        }
+        await adoptSessionStreams(
+          spy as never,
+          { schemaName: name, batchSize: 1 },
+          mixed
+        ).catch(() => undefined)
+        expect(order.slice(0, 2)).toEqual([
+          `${tenants[0]}/s-0`,
+          `${tenants[0]}/s-1`
+        ])
+      } finally {
+        await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
+      }
+    })
+
+    it('treats a different cut on an adopted stream as a conflict', async () => {
+      const name = `pars01c_${suffix}`
+      const [e] = await smallSchema(name, 1)
+      try {
+        const seeded = {
+          ...e!,
+          header: { ...header('s-0'), isSeeded: true },
+          inheritedEventCount: 1
+        }
+        await adoptSessionStreams(admin, { schemaName: name }, [seeded])
+        const again = await adoptSessionStreams(admin, { schemaName: name }, [
+          seeded
+        ])
+        expect(again.alreadyAdopted).toBe(1)
+        const e2 = await failure(
+          adoptSessionStreams(admin, { schemaName: name }, [
+            { ...seeded, inheritedEventCount: 0 }
+          ])
+        )
+        expect(e2.failure).toBe('conflict')
+      } finally {
+        await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
+      }
+    })
+
+    it('verification names each kind of mismatch', async () => {
+      const name = `pars01v_${suffix}`
+      const [e] = await smallSchema(name, 1)
+      try {
+        await adoptSessionStreams(admin, { schemaName: name }, [e!])
+        const check = (patch: Partial<SessionAdoptionEntry>) =>
+          verifySessionAdoption(admin, { schemaName: name }, [
+            { ...e!, ...patch }
+          ])
+        expect(await check({})).toEqual([])
+        expect(
+          await check({ header: { ...header('s-0'), createdAt: 7 } })
+        ).toEqual([`${e!.tenantId}/s-0: metadata differs`])
+        expect(await check({ expectedNextSequence: 9 })).toEqual([
+          `${e!.tenantId}/s-0: cursor differs`
+        ])
+        expect(await check({ expectedDigest: 'b'.repeat(64) })).toEqual([
+          `${e!.tenantId}/s-0: digest differs`
+        ])
+        expect(
+          await check({ sessionId: 'nope', header: header('nope') })
+        ).toEqual([`${e!.tenantId}/nope: missing`])
+      } finally {
+        await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
+      }
+    })
+
+    it('waits at most the lock budget on a row held elsewhere, then rolls back', async () => {
+      const name = `pars01l_${suffix}`
+      const entries = await smallSchema(name, 2)
+      const holder = new Client({ connectionString: url })
+      await holder.connect()
+      try {
+        await holder.query('BEGIN')
+        await holder.query(
+          `SELECT 1 FROM ${name}.session_streams WHERE tenant_id=$1 AND session_id='s-1' FOR UPDATE`,
+          [tenants[0]]
+        )
+        const started = Date.now()
+        const e = await failure(
+          adoptSessionStreams(admin, { schemaName: name }, entries)
+        )
+        expect(e.failure).toBe('storage')
+        expect(Date.now() - started).toBeLessThan(9000)
+        await holder.query('ROLLBACK')
+        for (const m of entries)
+          expect(await headerOf(m.tenantId, m.sessionId, name)).toBeNull()
+      } finally {
+        await holder.end()
+        await admin.query(`DROP SCHEMA IF EXISTS ${name} CASCADE`)
+      }
+    }, 30_000)
   })
 
   describe('after adoption: new facts, rollback of the app, restore', () => {
