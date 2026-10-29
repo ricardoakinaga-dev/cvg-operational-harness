@@ -24,7 +24,7 @@ Branch `claude/aud0625-par-s01-07`. SP19 da SPEC 0221 §9.
 
 ## Mutação (`mutate-s7.py`, `mutations-s7.json`)
 
-27 mutantes: 23 mortos, 4 equivalentes justificados (`cursor-cas`, `update-null-guard`, `update-rowcount`, `lock-timeout`: cada um é redundante com a defesa seguinte sob o mesmo `FOR UPDATE`/`statement_timeout`). Cinco sobreviveram na 1ª rodada e viraram testes (ordem estável, cut divergente, os três tipos de divergência da verificação, orçamento de lock).
+27 mutantes: 24 mortos, 3 equivalentes justificados (`cursor-cas`, `update-null-guard`, `update-rowcount`: cada um é redundante com o CAS do UPDATE sob o mesmo `FOR UPDATE`). Nove sobreviveram na 1ª rodada; seis viraram testes (ordem estável, cut divergente, os três tipos de divergência da verificação, orçamento de lock).
 
 ## Barra local (o que foi rodado aqui)
 
