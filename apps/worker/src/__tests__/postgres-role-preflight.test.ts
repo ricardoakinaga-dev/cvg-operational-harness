@@ -550,6 +550,46 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
     }
   })
 
+  it('SPEC 0225: a same-named TEMP table cannot make an activated journal look legacy', async () => {
+    const activated = `${schema}_act`
+    const role = await createRole(
+      'p0225t',
+      'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION'
+    )
+    await runPostgresMigrations(admin, { schemaName: activated })
+    try {
+      await admin.query(`GRANT USAGE ON SCHEMA ${activated} TO ${role}`)
+      for (const table of TENANT_SCHEMA_TABLES) {
+        await admin.query(
+          `GRANT ${tenantRuntimeGrantPrivileges(table)} ON ${activated}."${table}" TO ${role}`
+        )
+      }
+      // Only the operator-side activation text; the runtime never executes it.
+      const { renderJournalResultActivation } =
+        await import('../../../../packages/persistence/src/operational-effect-result-guard.ts')
+      await admin.query(
+        renderJournalResultActivation(activated, 'some_serving_principal').sql
+      )
+      const pool = poolFor(role, activated, 1)
+      try {
+        await expect(
+          assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+        ).rejects.toThrow(/not qualified for journal result storage/)
+        // A homonymous legacy-looking temp table, created before the preflight.
+        await pool.query(
+          `CREATE TEMP TABLE operational_effect_journal (tenant_id text)`
+        )
+        await expect(
+          assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+        ).rejects.toThrow(/not qualified for journal result storage/)
+      } finally {
+        await pool.end()
+      }
+    } finally {
+      await admin.query(`DROP SCHEMA IF EXISTS ${activated} CASCADE`)
+    }
+  })
+
   it('clears the tenant context of the same pool connection after a rejected preflight', async () => {
     const role = await createRole(
       'cleanup',

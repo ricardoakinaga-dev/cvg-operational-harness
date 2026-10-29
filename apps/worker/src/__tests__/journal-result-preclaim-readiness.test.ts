@@ -1,0 +1,553 @@
+// @vitest-environment node
+// UNIT contract only: instrumented admission is not a native worker/J07 proof.
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+import {
+  readPostgresMigrationSql,
+  TENANT_SCHEMA_INVENTORY,
+  type PostgresPoolLike
+} from '@cvg/persistence'
+import { TenantIdSchema } from '@cvg/platform'
+import {
+  assertPostgresWorkerPreflight,
+  WORKER_CRITICAL_TABLES
+} from '../postgres-role-preflight.ts'
+
+const tenant = TenantIdSchema.parse(
+  'tenant_00000000-0000-4000-8000-000000000825'
+)
+const notQualified =
+  'Worker composition is not qualified for journal result storage'
+let inactiveDefinition: string
+
+beforeAll(async () => {
+  // Read the actual migration, never stub its loader or duplicate its body.
+  const sql = await readPostgresMigrationSql(
+    '0033_complete_tool_result_journal'
+  )
+  const start = sql.indexOf(
+    'CREATE FUNCTION cvg_journal_result_storage_guard()'
+  )
+  const end = sql.indexOf('$cvg0033$;', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  inactiveDefinition = sql.slice(start, end + '$cvg0033$;'.length)
+  expect(inactiveDefinition).toContain('SECURITY INVOKER')
+  expect(inactiveDefinition).toContain('SET search_path = pg_catalog, pg_temp')
+  expect(inactiveDefinition).toContain(
+    'IF NEW.result_storage_version <> 0 THEN'
+  )
+})
+
+interface Column {
+  attname: string
+  type: string
+  attnotnull: boolean
+  default_expression: string | null
+}
+interface Guard {
+  definition: string
+  function_name: string
+  local_function: boolean
+  owner: string
+  security_definer: boolean
+  trigger_type: number
+  enabled: string
+  unconditional: boolean
+  function_config: string[] | null
+}
+function expandedColumns(): Column[] {
+  return [
+    {
+      attname: 'result_storage_payload',
+      type: 'jsonb',
+      attnotnull: false,
+      default_expression: null
+    },
+    {
+      attname: 'result_storage_version',
+      type: 'smallint',
+      attnotnull: true,
+      default_expression: '0'
+    }
+  ]
+}
+function inactiveGuard(): Guard {
+  return {
+    definition: inactiveDefinition,
+    function_name: 'cvg_journal_result_storage_guard',
+    local_function: true,
+    owner: 'synthetic_migration_owner',
+    security_definer: false,
+    trigger_type: 31,
+    enabled: 'O',
+    unconditional: true,
+    function_config: ['search_path=pg_catalog, pg_temp']
+  }
+}
+function activeGuard(): Guard {
+  const guard = inactiveGuard()
+  guard.definition = guard.definition.replace(
+    'IF NEW.result_storage_version <> 0 THEN',
+    "IF current_user <> 'synthetic_activated_runtime' THEN"
+  )
+  return guard
+}
+interface FixtureOptions {
+  columns?: Column[]
+  guards?: Guard[]
+  catalogError?: unknown
+  resetError?: Error
+  cleanupRows?: { tenant_id: string | null }[]
+  releaseError?: Error
+}
+function fixture(options: FixtureOptions = {}) {
+  const events: string[] = []
+  const observed = { tenant: null as string | null }
+  const columns = options.columns ?? expandedColumns()
+  const guards = options.guards ?? [inactiveGuard()]
+  const query = vi.fn(async (sql: string, parameters?: unknown[]) => {
+    if (sql.includes('set_config')) {
+      expect(parameters?.[0]).toBe('cvg.tenant_id')
+      const next = parameters?.[1]
+      events.push(next === '' ? 'reset' : 'set-tenant')
+      if (next === '' && options.resetError) throw options.resetError
+      expect(next === tenant || next === '').toBe(true)
+      observed.tenant = next === '' ? null : String(next)
+      return { rows: [] }
+    }
+    if (sql.includes('AS tenant_id')) {
+      events.push('verify-cleanup')
+      expect(parameters).toEqual(['cvg.tenant_id'])
+      return { rows: options.cleanupRows ?? [{ tenant_id: observed.tenant }] }
+    }
+    expect(observed.tenant).toBe(tenant)
+    if (sql.includes('FROM pg_roles')) {
+      events.push('role')
+      return {
+        rows: [
+          {
+            rolname: 'synthetic_runtime',
+            rolsuper: false,
+            rolbypassrls: false,
+            rolcreatedb: false,
+            rolcreaterole: false,
+            rolreplication: false
+          }
+        ]
+      }
+    }
+    if (sql.includes('pg_auth_members')) {
+      events.push('memberships')
+      return { rows: [{ count: 0 }] }
+    }
+    if (sql.includes('pg_database')) {
+      events.push('database-owner')
+      return { rows: [{ owner: 'synthetic_migration_owner' }] }
+    }
+    if (sql.includes('has_schema_privilege')) {
+      events.push('schema-privilege')
+      return { rows: [{ can_create: false }] }
+    }
+    if (sql.includes('FROM pg_class')) {
+      events.push('tables')
+      expect(parameters).toEqual([WORKER_CRITICAL_TABLES])
+      return {
+        rows: WORKER_CRITICAL_TABLES.map((relname) => ({
+          relname,
+          owner: 'synthetic_migration_owner',
+          relrowsecurity: true,
+          relforcerowsecurity: true
+        }))
+      }
+    }
+    if (sql.includes('FROM pg_policies')) {
+      events.push('policies')
+      expect(parameters).toEqual([WORKER_CRITICAL_TABLES])
+      return {
+        rows: WORKER_CRITICAL_TABLES.map((tablename) => {
+          const entry = TENANT_SCHEMA_INVENTORY.find(
+            (item) => item.table === tablename
+          )!
+          const tenantExpression =
+            "tenant_id = NULLIF(current_setting('cvg.tenant_id', true), '')"
+          const expression =
+            entry.expression === 'tenant-only'
+              ? tenantExpression
+              : `tenant_isolation_quarantined = false AND ${tenantExpression}`
+          return {
+            tablename,
+            policyname: entry.policy,
+            permissive: 'PERMISSIVE',
+            roles: '{public}',
+            cmd: 'ALL',
+            qual: expression,
+            with_check: expression
+          }
+        })
+      }
+    }
+    if (sql.includes('has_table_privilege')) {
+      events.push('table-privileges')
+      expect(parameters).toEqual([WORKER_CRITICAL_TABLES])
+      return {
+        rows: WORKER_CRITICAL_TABLES.map((table_name) => ({
+          table_name,
+          can_select: true,
+          can_insert: true,
+          can_update: true,
+          can_delete: false,
+          can_truncate: false,
+          can_trigger: false,
+          can_references: false
+        }))
+      }
+    }
+    if (sql.includes('FROM pg_attribute')) {
+      events.push('journal-columns')
+      expect(sql).toContain(
+        "to_regclass(format('%I.%I', current_schema(), 'operational_effect_journal'))"
+      )
+      expect(sql).toContain('NOT a.attisdropped')
+      expect(parameters).toEqual([
+        ['result_storage_payload', 'result_storage_version']
+      ])
+      if (Object.hasOwn(options, 'catalogError')) throw options.catalogError
+      return { rows: columns }
+    }
+    if (sql.includes('FROM pg_trigger t')) {
+      events.push('journal-guard')
+      expect(sql).toContain(
+        "to_regclass(format('%I.%I', current_schema(), 'operational_effect_journal'))"
+      )
+      expect(sql).toContain("t.tgname='journal_result_storage_guard'")
+      expect(sql).toContain('NOT t.tgisinternal')
+      expect(sql).toContain('p.pronamespace=c.relnamespace')
+      return { rows: guards }
+    }
+    throw new Error(`Unexpected UNIT fixture query: ${sql}`)
+  })
+  const release = vi.fn((failure?: Error) => {
+    events.push(failure ? 'destroy-connection' : 'release-connection')
+    if (options.releaseError) throw options.releaseError
+  })
+  const connect = vi.fn(async () => {
+    events.push('connect')
+    return { query, release }
+  })
+  const pool = { connect } as unknown as PostgresPoolLike
+  const claim = vi.fn(async () => {
+    events.push('claim')
+  })
+  const model = vi.fn(async () => {
+    events.push('model')
+  })
+  const body = vi.fn(async () => {
+    events.push('body')
+  })
+  // Only a UNIT admission wrapper: no worker, model, tool or actual claim runs.
+  const admit = async () => {
+    await assertPostgresWorkerPreflight(pool, { tenantId: tenant })
+    await claim()
+    await model()
+    await body()
+  }
+  return {
+    events,
+    observed,
+    query,
+    connect,
+    release,
+    claim,
+    model,
+    body,
+    admit
+  }
+}
+type Fixture = ReturnType<typeof fixture>
+function downstream(f: Fixture, count: number): void {
+  for (const hook of [f.claim, f.model, f.body])
+    expect(hook).toHaveBeenCalledTimes(count)
+}
+function reachedJournal(f: Fixture): void {
+  expect(f.events.slice(0, 11)).toEqual([
+    'connect',
+    'set-tenant',
+    'role',
+    'memberships',
+    'database-owner',
+    'schema-privilege',
+    'tables',
+    'policies',
+    'table-privileges',
+    'journal-columns',
+    'journal-guard'
+  ])
+}
+async function rejectsAtJournal(f: Fixture): Promise<void> {
+  await expect(f.admit()).rejects.toThrow(notQualified)
+  reachedJournal(f)
+  downstream(f, 0)
+  expect(f.events.slice(-3)).toEqual([
+    'reset',
+    'verify-cleanup',
+    'release-connection'
+  ])
+  expect(f.observed.tenant).toBeNull()
+  expect(f.release).toHaveBeenCalledExactlyOnceWith()
+}
+
+describe('journal result preclaim readiness — instrumented UNIT only', () => {
+  it.each(['legacy without expansion', 'expanded inactive'])(
+    'admits %s after verified cleanup',
+    async (mode) => {
+      const f = fixture(
+        mode === 'legacy without expansion' ? { columns: [], guards: [] } : {}
+      )
+      await expect(f.admit()).resolves.toBeUndefined()
+      reachedJournal(f)
+      downstream(f, 1)
+      expect(f.events.slice(-6)).toEqual([
+        'reset',
+        'verify-cleanup',
+        'release-connection',
+        'claim',
+        'model',
+        'body'
+      ])
+      expect(f.release).toHaveBeenCalledExactlyOnceWith()
+      expect(f.observed.tenant).toBeNull()
+    }
+  )
+  it('accepts the real inactive migration body under PostgreSQL-style dollar quoting', async () => {
+    const guard = inactiveGuard()
+    guard.definition = guard.definition
+      .replaceAll('$cvg0033$', '$function$')
+      .replaceAll('\n', '\r\n')
+    const f = fixture({ guards: [guard] })
+    await f.admit()
+    reachedJournal(f)
+    downstream(f, 1)
+  })
+  it('refuses default admission when only the inactive body becomes activated', async () => {
+    expect(activeGuard().definition).not.toBe(inactiveDefinition)
+    await rejectsAtJournal(fixture({ guards: [activeGuard()] }))
+  })
+  it('refuses an unknown body despite matching trigger name, schema and flags', async () => {
+    await rejectsAtJournal(
+      fixture({
+        guards: [
+          {
+            ...inactiveGuard(),
+            definition:
+              'CREATE FUNCTION cvg_journal_result_storage_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;'
+          }
+        ]
+      })
+    )
+  })
+  it('refuses a one-token body change instead of accepting a recognizable marker', async () => {
+    const guard = inactiveGuard()
+    guard.definition = guard.definition.replace(
+      'NEW.result_storage_version <> 0',
+      'NEW.result_storage_version <> 1'
+    )
+    await rejectsAtJournal(fixture({ guards: [guard] }))
+  })
+  it('fails closed for a guard definition without a readable function body', async () => {
+    const f = fixture({
+      guards: [
+        { ...inactiveGuard(), definition: 'synthetic unavailable definition' }
+      ]
+    })
+    await expect(f.admit()).rejects.toThrow(
+      'Published writer function body is unavailable'
+    )
+    reachedJournal(f)
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith()
+  })
+
+  const guardCases: [string, Partial<Guard>][] = [
+    ['wrong function name', { function_name: 'synthetic_wrong_guard' }],
+    ['function in another schema', { local_function: false }],
+    ['runtime owns guard', { owner: 'synthetic_runtime' }],
+    ['SECURITY DEFINER', { security_definer: true }],
+    ['wrong trigger event set', { trigger_type: 23 }],
+    ['statement-level trigger', { trigger_type: 30 }],
+    ['disabled trigger', { enabled: 'D' }],
+    ['replica-only trigger', { enabled: 'R' }],
+    ['conditional or argument-bound trigger', { unconditional: false }],
+    ['missing function config', { function_config: null }],
+    ['empty function config', { function_config: [] }],
+    ['wrong search_path', { function_config: ['search_path=public'] }],
+    [
+      'extra function config',
+      {
+        function_config: ['search_path=pg_catalog, pg_temp', 'row_security=off']
+      }
+    ]
+  ]
+  it.each(guardCases)(
+    'isolates trigger/schema guard: %s',
+    async (_label, mutation) => {
+      await rejectsAtJournal(
+        fixture({ guards: [{ ...inactiveGuard(), ...mutation }] })
+      )
+    }
+  )
+  it.each(['missing', 'duplicated'])(
+    'rejects %s journal trigger with otherwise valid expansion',
+    async (mode) => {
+      await rejectsAtJournal(
+        fixture({
+          guards: mode === 'missing' ? [] : [inactiveGuard(), inactiveGuard()]
+        })
+      )
+    }
+  )
+  const columnCases: [string, number, Partial<Column>][] = [
+    ['payload name', 0, { attname: 'synthetic_payload' }],
+    ['payload type', 0, { type: 'json' }],
+    ['payload nullability', 0, { attnotnull: true }],
+    ['payload default', 0, { default_expression: "'{}'::jsonb" }],
+    ['version name', 1, { attname: 'synthetic_version' }],
+    ['version type', 1, { type: 'integer' }],
+    ['version nullability', 1, { attnotnull: false }],
+    ['version default missing', 1, { default_expression: null }],
+    ['version default armed', 1, { default_expression: '1' }]
+  ]
+  it.each(columnCases)(
+    'isolates expanded schema guard: %s',
+    async (_label, index, mutation) => {
+      const columns = expandedColumns()
+      columns[index] = { ...columns[index]!, ...mutation }
+      await rejectsAtJournal(fixture({ columns }))
+    }
+  )
+  it.each([
+    'payload only',
+    'version only',
+    'no columns but guard',
+    'extra column'
+  ])('fails closed for %s', async (mode) => {
+    const columns = expandedColumns()
+    const selected =
+      mode === 'payload only'
+        ? columns.slice(0, 1)
+        : mode === 'version only'
+          ? columns.slice(1)
+          : mode === 'no columns but guard'
+            ? []
+            : [...columns, { ...columns[0]!, attname: 'extra' }]
+    await rejectsAtJournal(fixture({ columns: selected }))
+  })
+
+  it('preserves activated-mode rejection when tenant reset also throws; destroys the connection', async () => {
+    const cleanup = new Error('synthetic context reset failure')
+    const f = fixture({ guards: [activeGuard()], resetError: cleanup })
+    await expect(f.admit()).rejects.toThrow(notQualified)
+    reachedJournal(f)
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith(cleanup)
+    expect(f.events.slice(-2)).toEqual(['reset', 'destroy-connection'])
+  })
+  it.each([
+    [{ tenant_id: tenant }],
+    [],
+    [{ tenant_id: null }, { tenant_id: null }]
+  ])(
+    'preserves primary mode rejection if cleanup verification returns %j',
+    async (...rows) => {
+      const f = fixture({ guards: [activeGuard()], cleanupRows: rows })
+      let caught: unknown
+      try {
+        await f.admit()
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(Error)
+      expect((caught as Error).message).toBe(notQualified)
+      reachedJournal(f)
+      downstream(f, 0)
+      expect(f.release).toHaveBeenCalledExactlyOnceWith(caught)
+      expect(f.events.slice(-3)).toEqual([
+        'reset',
+        'verify-cleanup',
+        'destroy-connection'
+      ])
+    }
+  )
+  it('refuses a healthy inactive schema when context reset fails, with no admission', async () => {
+    const cleanup = new Error('synthetic reset-only failure')
+    const f = fixture({ resetError: cleanup })
+    await expect(f.admit()).rejects.toBe(cleanup)
+    reachedJournal(f)
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith(cleanup)
+  })
+  it('refuses a healthy inactive schema when context cleanup is not verified', async () => {
+    const f = fixture({ cleanupRows: [{ tenant_id: tenant }] })
+    await expect(f.admit()).rejects.toThrow(
+      'PostgreSQL tenant context cleanup was not verified'
+    )
+    reachedJournal(f)
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith(expect.any(Error))
+  })
+  it('preserves the exact catalog error object over a secondary reset error', async () => {
+    const primary = new Error('synthetic catalog unavailable')
+    const cleanup = new Error('synthetic secondary reset failure')
+    const f = fixture({ catalogError: primary, resetError: cleanup })
+    await expect(f.admit()).rejects.toBe(primary)
+    downstream(f, 0)
+    expect(f.events).toContain('journal-columns')
+    expect(f.events).not.toContain('journal-guard')
+    expect(f.release).toHaveBeenCalledExactlyOnceWith(cleanup)
+  })
+  it('preserves the primary catalog failure if connection release throws', async () => {
+    const primary = new Error('synthetic primary catalog failure')
+    const cleanup = new Error('synthetic release failure')
+    const f = fixture({ catalogError: primary, releaseError: cleanup })
+    let caught: unknown
+    try {
+      await f.admit()
+    } catch (error) {
+      caught = error
+    }
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith()
+    expect(f.events.slice(-3)).toEqual([
+      'reset',
+      'verify-cleanup',
+      'release-connection'
+    ])
+    expect(caught).toBe(primary)
+  })
+  it('refuses admission when a healthy inactive connection cannot be released', async () => {
+    const release = new Error('synthetic release-only failure')
+    const f = fixture({ releaseError: release })
+    await expect(f.admit()).rejects.toBe(release)
+    reachedJournal(f)
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith()
+  })
+  it('preserves activated-mode rejection if destruction of the unreset connection throws', async () => {
+    const f = fixture({
+      guards: [activeGuard()],
+      resetError: new Error('synthetic reset failure'),
+      releaseError: new Error('synthetic destroy failure')
+    })
+    let caught: unknown
+    try {
+      await f.admit()
+    } catch (error) {
+      caught = error
+    }
+    reachedJournal(f)
+    downstream(f, 0)
+    expect(f.release).toHaveBeenCalledExactlyOnceWith(expect.any(Error))
+    expect(f.events.slice(-2)).toEqual(['reset', 'destroy-connection'])
+    expect(caught).toBeInstanceOf(Error)
+    expect((caught as Error).message).toBe(notQualified)
+  })
+})

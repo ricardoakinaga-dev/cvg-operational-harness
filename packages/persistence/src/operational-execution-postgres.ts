@@ -1,4 +1,14 @@
 import { randomUUID } from 'node:crypto'
+import {
+  decodeJournalResult,
+  encodeJournalResult,
+  JOURNAL_RESULT_STORAGE_MAX_BYTES
+} from './operational-effect-result-codec.ts'
+import {
+  verifyJournalResultStorage,
+  type JournalResultReadiness,
+  type JournalResultStorageMode
+} from './operational-effect-result-readiness.ts'
 import type {
   EffectJournal,
   EffectJournalRecord,
@@ -93,6 +103,10 @@ interface QueueRow extends QueryResultRow {
 }
 
 interface EffectRow extends QueryResultRow {
+  result_present?: boolean
+  result_storage_version?: number
+  result_storage_payload?: unknown
+  result_storage_overflow?: boolean
   tenant_id: string
   operation_key: string
   proposal_hash: string
@@ -117,6 +131,18 @@ const executionColumnsFromJoin = `
 const effectColumns = `
   tenant_id, operation_key, proposal_hash, state, attempt_id, result, error,
   created_at, updated_at`
+
+function effectColumnsFor(storage?: JournalResultReadiness): string {
+  if (!storage?.expanded) return effectColumns
+  // CASE prevents an oversized damaged JSONB payload reaching the driver's parser.
+  return `${effectColumns}, result IS NOT NULL AS result_present,
+    result_storage_version,
+    CASE WHEN octet_length(result_storage_payload::text) <= ${JOURNAL_RESULT_STORAGE_MAX_BYTES}
+      THEN result_storage_payload ELSE NULL END AS result_storage_payload,
+    (result_storage_payload IS NOT NULL AND
+      octet_length(result_storage_payload::text) > ${JOURNAL_RESULT_STORAGE_MAX_BYTES})
+      AS result_storage_overflow`
+}
 
 const eventTypes = new Set<ExecutionEvent['type']>([
   'RECEIVED',
@@ -1485,9 +1511,37 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
 
 /** PostgreSQL incarnation of the neutral effect journal. */
 export class PostgresOperationalEffectJournal implements EffectJournal {
+  private readonly resultStorageMode: JournalResultStorageMode
+
   public constructor(
-    private readonly connection: OperationalExecutionPostgresConnection
-  ) {}
+    private readonly connection: OperationalExecutionPostgresConnection,
+    options: { resultStorage?: { readonly version: 1 } } = {}
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(options, 'resultStorage')
+    if (descriptor && !('value' in descriptor)) {
+      throw new OperationalExecutionError(
+        'validation_failed',
+        'JOURNAL_STORAGE_MODE'
+      )
+    }
+    const storage = descriptor?.value as unknown
+    if (storage === undefined) this.resultStorageMode = 0
+    else {
+      if (
+        !storage ||
+        typeof storage !== 'object' ||
+        Array.isArray(storage) ||
+        Reflect.ownKeys(storage).length !== 1 ||
+        Object.getOwnPropertyDescriptor(storage, 'version')?.value !== 1
+      ) {
+        throw new OperationalExecutionError(
+          'validation_failed',
+          'JOURNAL_STORAGE_MODE'
+        )
+      }
+      this.resultStorageMode = 1
+    }
+  }
 
   public reserve(input: {
     tenantId: string
@@ -1500,18 +1554,26 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
     const proposalHash = text(input.proposalHash, 'proposalHash', 160)
     const attemptId = text(input.attemptId, 'attemptId', 240)
     const timestamp = new Date()
-    return this.run(tenant, (client) =>
+    return this.run(tenant, (client, storage) =>
       transaction(client, async () => {
+        const expanded = storage.expanded
         await client.query(
           `INSERT INTO operational_effect_journal
              (tenant_id, operation_key, proposal_hash, state, attempt_id,
-              result, error, created_at, updated_at)
-           VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5)
+              result, error, created_at, updated_at${expanded ? ', result_storage_version, result_storage_payload' : ''})
+           VALUES ($1, $2, $3, 'RESERVED', $4, NULL, NULL, $5, $5${expanded ? ', $6, NULL' : ''})
            ON CONFLICT (tenant_id, operation_key) DO NOTHING`,
-          [tenant, operationKey, proposalHash, attemptId, timestamp]
+          [
+            tenant,
+            operationKey,
+            proposalHash,
+            attemptId,
+            timestamp,
+            ...(expanded ? [storage.mode] : [])
+          ]
         )
         const selected = await client.query<EffectRow>(
-          `SELECT ${effectColumns}
+          `SELECT ${effectColumnsFor(storage)}
              FROM operational_effect_journal
             WHERE tenant_id = $1 AND operation_key = $2
             FOR UPDATE`,
@@ -1523,6 +1585,7 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
             'conflict',
             'Effect reservation could not be read'
           )
+        requireWritableJournalMode(row, storage)
         if (row.proposal_hash !== proposalHash) {
           throw new OperationalExecutionError(
             'conflict',
@@ -1533,14 +1596,14 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
           const retried = await client.query<EffectRow>(
             `UPDATE operational_effect_journal
                 SET state = 'RESERVED', attempt_id = $3,
-                    result = NULL, error = NULL, updated_at = $4
+                    result = NULL, error = NULL, updated_at = $4${expanded ? ', result_storage_payload = NULL' : ''}
               WHERE tenant_id = $1 AND operation_key = $2
-              RETURNING ${effectColumns}`,
+              RETURNING ${effectColumnsFor(storage)}`,
             [tenant, operationKey, attemptId, timestamp]
           )
-          if (retried.rows[0]) return mapEffect(retried.rows[0])
+          if (retried.rows[0]) return mapEffect(retried.rows[0], storage)
         }
-        return mapEffect(row)
+        return mapEffect(row, storage)
       })
     )
   }
@@ -1590,14 +1653,14 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
   ): Promise<EffectJournalRecord | null> {
     const tenant = TenantIdSchema.parse(tenantId)
     const operation = text(operationKey, 'operationKey', 240)
-    return this.run(tenant, async (client) => {
+    return this.run(tenant, async (client, storage) => {
       const result = await client.query<EffectRow>(
-        `SELECT ${effectColumns}
+        `SELECT ${effectColumnsFor(storage)}
            FROM operational_effect_journal
           WHERE tenant_id = $1 AND operation_key = $2`,
         [tenant, operation]
       )
-      return result.rows[0] ? mapEffect(result.rows[0]) : null
+      return result.rows[0] ? mapEffect(result.rows[0], storage) : null
     })
   }
 
@@ -1614,10 +1677,10 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
     const operation = text(input.operationKey, 'operationKey', 240)
     const attemptId = text(input.attemptId, 'attemptId', 240)
     const timestamp = new Date()
-    return this.run(tenant, (client) =>
+    return this.run(tenant, (client, storage) =>
       transaction(client, async () => {
         const selected = await client.query<EffectRow>(
-          `SELECT ${effectColumns}
+          `SELECT ${effectColumnsFor(storage)}
              FROM operational_effect_journal
             WHERE tenant_id = $1 AND operation_key = $2
             FOR UPDATE`,
@@ -1629,41 +1692,69 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
             'not_found',
             'Effect reservation is missing'
           )
+        requireWritableJournalMode(row, storage)
         if (row.attempt_id !== attemptId) {
           throw new OperationalExecutionError(
             'lease_lost',
             'Effect attempt is fenced'
           )
         }
+        const current = mapEffect(row, storage)
         if (state === 'EFFECT_STARTED' && row.state !== 'RESERVED') {
-          if (row.state === state) return mapEffect(row)
+          if (row.state === state) return current
           throw new OperationalExecutionError(
             'invalid_action',
             'Effect cannot start from its current state'
           )
         }
         if (state !== 'EFFECT_STARTED' && row.state !== 'EFFECT_STARTED') {
-          if (row.state === state) return mapEffect(row)
+          if (row.state === state) {
+            if (state === 'CONFIRMED' && storage.mode === 1) {
+              const next = encodeJournalResult(values.result)
+              // mapEffect has already validated the bounded stored envelope.
+              const previous = row.result_storage_payload as ReturnType<
+                typeof encodeJournalResult
+              >
+              if (
+                next.encoding !== previous.encoding ||
+                next.decodedBytes !== previous.decodedBytes ||
+                next.decodedSha256 !== previous.decodedSha256 ||
+                next.data !== previous.data
+              ) {
+                throw new OperationalExecutionError(
+                  'conflict',
+                  'JOURNAL_RESULT_CONFLICT'
+                )
+              }
+            }
+            return current
+          }
           throw new OperationalExecutionError(
             'invalid_action',
             'Effect outcome is not valid for its current state'
           )
         }
+        const encoded =
+          storage.mode === 1 && state === 'CONFIRMED'
+            ? encodeJournalResult(values.result)
+            : null
+        const expanded = storage.expanded
         const updated = await client.query<EffectRow>(
           `UPDATE operational_effect_journal
               SET state = $3, result = $4::jsonb, error = $5,
-                  updated_at = $6
+                  updated_at = $6${expanded ? ', result_storage_payload = $7::jsonb' : ''}
             WHERE tenant_id = $1 AND operation_key = $2
-            RETURNING ${effectColumns}`,
+            RETURNING ${effectColumnsFor(storage)}`,
           [
             tenant,
             operation,
             state,
-            values.result === undefined
+            storage.mode === 1 || values.result === undefined
               ? null
               : jsonText(values.result, 'effect result'),
             values.error ?? null,
-            timestamp
+            timestamp,
+            ...(expanded ? [encoded ? JSON.stringify(encoded) : null] : [])
           ]
         )
         if (!updated.rows[0])
@@ -1671,27 +1762,102 @@ export class PostgresOperationalEffectJournal implements EffectJournal {
             'conflict',
             'Effect transition lost'
           )
-        return mapEffect(updated.rows[0])
+        return mapEffect(updated.rows[0], storage)
       })
     )
   }
 
   private async run<T>(
     tenant: TenantId,
-    operation: (client: PostgresQueryable) => Promise<T>
+    operation: (
+      client: PostgresQueryable,
+      storage: JournalResultReadiness
+    ) => Promise<T>
   ): Promise<T> {
+    const checked = async (client: PostgresQueryable) => {
+      const storage = await verifyJournalResultStorage(
+        client,
+        this.resultStorageMode
+      )
+      return operation(client, storage)
+    }
     if (isPool(this.connection)) {
       return withTenantContext(
         this.connection,
         tenant,
-        (client: PostgresPoolClient) => operation(client)
+        (client: PostgresPoolClient) => checked(client)
       )
     }
-    return operation(this.connection)
+    return checked(this.connection)
   }
 }
 
-function mapEffect(row: EffectRow): EffectJournalRecord {
+function requireWritableJournalMode(
+  row: EffectRow,
+  storage: JournalResultReadiness
+): void {
+  if (storage.mode === 1 && row.result_storage_version !== 1) {
+    throw new OperationalExecutionError(
+      'invalid_action',
+      row.state === 'CONFIRMED' &&
+        row.result === null &&
+        row.result_present === false
+        ? 'LEGACY_RESULT_UNKNOWN'
+        : 'JOURNAL_STORAGE_MODE'
+    )
+  }
+}
+
+function mapEffect(
+  row: EffectRow,
+  storage?: JournalResultReadiness
+): EffectJournalRecord {
+  let result: { result?: unknown } =
+    row.result !== null ? { result: jsonValue(row.result) } : {}
+  if (storage?.expanded) {
+    const corrupt = (): never => {
+      throw new OperationalExecutionError(
+        'invalid_action',
+        'JOURNAL_RESULT_CORRUPT'
+      )
+    }
+    const version = row.result_storage_version
+    if (version !== 0 && version !== 1) {
+      throw new OperationalExecutionError(
+        'invalid_action',
+        'JOURNAL_STORAGE_MODE'
+      )
+    }
+    if (row.result_storage_overflow !== false) corrupt()
+    if (version === 0) {
+      if (row.result_storage_payload !== null) corrupt()
+    } else {
+      if (storage.mode !== 1) {
+        throw new OperationalExecutionError(
+          'invalid_action',
+          'JOURNAL_STORAGE_MODE'
+        )
+      }
+      if (
+        row.result !== null ||
+        ![
+          'RESERVED',
+          'EFFECT_STARTED',
+          'CONFIRMED',
+          'FAILED',
+          'UNCERTAIN'
+        ].includes(row.state)
+      )
+        corrupt()
+      if (row.state === 'CONFIRMED') {
+        if (row.error !== null || row.result_storage_payload === null) corrupt()
+        result = { result: decodeJournalResult(row.result_storage_payload) }
+      } else {
+        if (row.result_storage_payload !== null) corrupt()
+        result = {}
+      }
+    }
+  }
   return {
     tenantId: row.tenant_id,
     operationKey: row.operation_key,
@@ -1700,7 +1866,7 @@ function mapEffect(row: EffectRow): EffectJournalRecord {
     attemptId: row.attempt_id,
     createdAt: asIso(row.created_at) as string,
     updatedAt: asIso(row.updated_at) as string,
-    ...(row.result !== null ? { result: jsonValue(row.result) } : {}),
+    ...result,
     ...(row.error !== null ? { error: row.error } : {})
   }
 }
