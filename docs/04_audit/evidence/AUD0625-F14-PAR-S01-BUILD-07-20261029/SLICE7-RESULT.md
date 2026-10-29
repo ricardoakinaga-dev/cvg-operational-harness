@@ -24,7 +24,7 @@ Branch `claude/aud0625-par-s01-07`. SP19 da SPEC 0221 §9.
 
 ## Mutação (`mutate-s7.py`, `mutations-s7.json`)
 
-27 mutantes: 24 mortos, 3 equivalentes justificados (`cursor-cas`, `update-null-guard`, `update-rowcount`: cada um é redundante com o CAS do UPDATE sob o mesmo `FOR UPDATE`). Nove sobreviveram na 1ª rodada; seis viraram testes (ordem estável, cut divergente, os três tipos de divergência da verificação, orçamento de lock).
+32 mutantes: 29 mortos, 3 equivalentes justificados (`cursor-cas`, `update-null-guard`, `update-rowcount`: cada um é redundante com o CAS do UPDATE sob o mesmo `FOR UPDATE`). Nove sobreviveram na 1ª rodada; seis viraram testes (ordem estável, cut divergente, os três tipos de divergência da verificação, orçamento de lock).
 
 ## Barra local (o que foi rodado aqui)
 
@@ -40,3 +40,9 @@ Branch `claude/aud0625-par-s01-07`. SP19 da SPEC 0221 §9.
 - Os 5 checks do PR (REM21 CI bar ~2h45, codeql, secret-scan, supply-chain, image-scan) rodam no PR; localmente rodei a parte determinística acima. A barra completa e a cobertura global `test:core --coverage` ficam para o PR de integração.
 - A 0034 continua opt-in (fora de `POSTGRES_MIGRATIONS`); entra na main só depois da 0033 (K03 fase 1) e qualquer mudança nisso passa pelo DF.
 - Sem volumes ou janela de produção: tudo sintético e local.
+
+## Correções da revisão DF (af5b483b)
+
+- P2-1: as três funções validam `schemaName` com `^[a-z][a-z0-9_]{0,62}$` antes de qualquer query (`invalid_manifest` no adopt; rejeição nas outras duas). Teste: nome com aspas e `DROP SCHEMA` é recusado sem nenhuma query nas três. Mutantes `schema-adopt`, `schema-count`, `schema-verify` e `schema-regex` mortos.
+- P2-2: `scripts/skip-catalog.json` ganhou `SKIP-PG-S01-001..006` (ownership 29, adapter 47, writer 23, adoption 32, bridge 17, processes 10; sourceSha256 de cada fonte). O teste de crash do postmaster agora só é registrado quando `PAR_S01_PG_CONTAINER` está definido (antes aparecia como 1 teste pulado e `numPendingTests` divergia da lista de linhas). `skip:governance` com um relatório unit gerado só sobre os arquivos S01, sem PG: PASS (158 pulados = 158 esperados). `certification/` restaurado antes do commit. Observação: `pdsh-021-session-events-postgres.test.ts` (9 pulados sem PG) segue fora do catálogo, como na base; um unit completo sem PG o apontaria, não é desta branch.
+- P3: `verifySessionAdoption` usa SAVEPOINT por entrada; uma leitura que falha é reportada como `error <SQLSTATE>` e as entradas seguintes continuam verificadas. Teste com falha real (`SELECT 1/0`) que aborta a transação; mutante `verify-savepoint` morto.

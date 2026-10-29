@@ -30,6 +30,11 @@ M = [
  ('verify-cursor', "else if (Number(state.next_sequence) !== p.entry.expectedNextSequence)", "else if (false)"),
  ('verify-digest', "else if (state.digest !== p.entry.expectedDigest)", "else if (false)"),
  ('verify-metadata', "else if (!matches(state, p)) problems.push", "else if (false) problems.push"),
+ ('schema-adopt', "const schema = checkedSchema(options.schemaName)\n  const prepared", "const schema = options.schemaName\n  const prepared"),
+ ('schema-count', "const schema = checkedSchema(options.schemaName)\n  await client.query('BEGIN')", "const schema = options.schemaName\n  await client.query('BEGIN')"),
+ ('schema-verify', "const schema = checkedSchema(options.schemaName)\n  const prepared = prepare(manifest, 1)", "const schema = options.schemaName\n  const prepared = prepare(manifest, 1)"),
+ ('schema-regex', "/^[a-z][a-z0-9_]{0,62}$/", "/^.*$/"),
+ ('verify-savepoint', "await client.query('ROLLBACK TO SAVEPOINT verify_entry')\n        problems.push(", "problems.push("),
  ('lock-timeout', "SET LOCAL lock_timeout", "SET LOCAL application_name"),
 ]
 JUSTIFIED = {
