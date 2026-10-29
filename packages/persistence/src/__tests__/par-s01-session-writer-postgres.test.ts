@@ -259,8 +259,8 @@ describe.skipIf(!url)('PAR-S01 slice 4: append, flush, close, loss', () => {
         await expect(w.append(events as never)).rejects.toBeInstanceOf(
           SessionHeaderValidationError
         )
-      await expect(w.append('nope' as never)).rejects.toBeInstanceOf(
-        SessionHeaderValidationError
+      await expect(w.append('nope' as never)).rejects.toThrow(
+        /must be an array/
       )
       const big = Array.from({ length: 130 }, (_, i) =>
         ev('a4', i + 1, `big${i}`, 'x'.repeat(65_536))
@@ -548,7 +548,7 @@ describe.skipIf(!url)('PAR-S01 slice 4: append, flush, close, loss', () => {
             wrapped(
               (sql) =>
                 armed && sql.includes('SELECT next_sequence')
-                  ? Object.assign(new Error('x'), { code })
+                  ? Object.assign(new Error('x'), code ? { code } : {})
                   : undefined,
               log
             )
@@ -585,6 +585,42 @@ describe.skipIf(!url)('PAR-S01 slice 4: append, flush, close, loss', () => {
       })
       armed = false
       await w.append([ev('k2', 1)])
+      await w.close()
+    })
+    it('a ticket queued behind a lost one is refused without any IO', async () => {
+      let armed = false
+      const log: string[] = []
+      const svc = await service(
+        2,
+        wrapped(
+          (sql) =>
+            armed && sql === 'COMMIT' ? new Error('lost ack') : undefined,
+          log
+        )
+      )
+      const w = await svc.create(hdr('k3'))
+      armed = true
+      log.length = 0
+      const first = w.append([ev('k3', 1)])
+      const second = w.append([ev('k3', 2)])
+      await expect(first).rejects.toBeInstanceOf(SessionCommitUnknownError)
+      await expect(second).rejects.toBeInstanceOf(SessionOwnershipLostError)
+      expect(log.filter((q) => q === 'BEGIN')).toHaveLength(1)
+      await w.close().catch(() => undefined)
+    })
+    it('qualifies a writer connection inside a short transaction with a statement timeout', async () => {
+      const log: string[] = []
+      const w = await (
+        await service(
+          2,
+          wrapped(() => undefined, log)
+        )
+      ).create(hdr('k4'))
+      expect(log.slice(0, 3)).toEqual([
+        'BEGIN',
+        "SET LOCAL statement_timeout = '5s'",
+        expect.stringContaining('to_regclass')
+      ])
       await w.close()
     })
   })
