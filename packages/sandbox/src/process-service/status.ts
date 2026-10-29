@@ -77,10 +77,7 @@ export class StatusChannel {
       this.#invalid = true
       return
     }
-    if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) {
-      this.#invalid = true
-      return
-    }
+    // Framing starts at '{', so a successful parse is always an object.
     const record = doc as Record<string, unknown>
     const positive = (v: unknown): number | undefined =>
       typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : undefined

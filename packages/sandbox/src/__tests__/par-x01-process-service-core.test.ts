@@ -245,7 +245,7 @@ describe('PAR-X01 slice 1: mandatory finite limits (I7, I8)', () => {
       'invalid_limits'
     )
     refused(
-      () => validateProcessLimits({ ...good, cleanupMs: 99 }),
+      () => validateProcessLimits({ ...good, cleanupMs: 99, graceMs: 0 }),
       'invalid_limits'
     )
     expect(validateProcessLimits({ ...good, graceMs: 0 }).graceMs).toBe(0)
@@ -343,6 +343,12 @@ describe('PAR-X01 slice 1: private status channel (I6)', () => {
     expect(channel.snapshot().invalid).toBe(true)
     channel.feed(Buffer.from(first))
     expect(channel.snapshot().childPid).toBeUndefined()
+  })
+  it('stays invalid after a fault and ignores later valid documents', () => {
+    const channel = new StatusChannel()
+    channel.feed(Buffer.from('{ "exit-code": 256 }\n'))
+    channel.feed(Buffer.from(first))
+    expect(channel.snapshot()).toEqual({ invalid: true })
   })
   it('does not let payload-looking text become status', () => {
     // The parser only ever sees the private fd; stdout text is a different object entirely.
