@@ -29,3 +29,13 @@ Alvo: `claude/aud0625-0257-07` @ `e4fecb18`, que inclui o código `776a8f56`, o 
 
 - **O1:** o `task.status` client-owned ainda abre `BEGIN`/`COMMIT` próprio, e o autor já o declarou aberto para a fatia 2.
 - **O2:** a unidade só cobre a criação de task e de approval nesta fatia. As outras rotas de mutação de caso continuam com a checagem prévia, conforme o plano de 5 fatias.
+
+## Confirmação dos P3 e revisão da fatia 2a (`6cdf4fa6`, `6f700097`)
+
+**APPROVE**, sem achados novos.
+
+- **P3-a fechado.** As rotas de criação respondem 503 (`configuration_error`) com autoridade `PostgresCaseAuthority` e port de criação que não seja `PostgresApiCreation`. As rotas de status e decisão fazem o mesmo com `PostgresAuthorizedWrites`, antes de qualquer escrita.
+- **P3-b fechado.** O teste PG põe uma barreira dentro da política, e o mutante "política antes dos locks" morre (autor; PG 11/11).
+- **Fatia 2a.** `PATCH` de status da task e decisão de atendimento passam por `runAuthorizedCaseMutation`. No PG, `PostgresAuthorizedWrites` usa `runTenantMutationTransaction`, o mesmo dono de BEGIN/COMMIT da criação, com as primitivas `*InTransaction`. Os wrappers antigos continuam abrindo a própria transação. Na memória, o fallback roda dentro da fila da autoridade.
+- **Testes, com Node 22 e `--maxWorkers=2`:** `case-mutation-unit-memory`, `case-scope-tasks-approvals`, `task-status-atomicity`, `attendance-approval-atomic`, `approval-actions` e `task-lifecycle` dão 32/32. A passada PG é do autor.
+- **Falta, na fatia 2b do autor:** runtime approval, journey task, matriz de convergência e R06/R13/R15.
