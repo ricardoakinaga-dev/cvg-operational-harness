@@ -17,10 +17,10 @@ import {
   createExamUploadTool
 } from '../index.ts'
 
-// AUD0625 F03c / SPEC 0281 (phase 1): exam.upload must not send the content
-// of a file that has another name (nlink > 1), e.g. a hard link inside the
-// workspace to a file outside it. `it.fails` states the target and fails
-// today for the gap; controls pass before and after the BUILD. Synthetic
+// AUD0625 F03c / SPEC 0281: exam.upload must not send the content of a file
+// that has another name (nlink > 1), e.g. a hard link inside the workspace to
+// a file outside it. The three target cases were `it.fails` in phase 1 and are
+// plain tests after the BUILD; controls pass before and after it. Synthetic
 // owned directories only: every outside file is created by the test.
 
 const OUTSIDE_TEXT = 'SYNTHETIC-OUTSIDE-SECRET'
@@ -93,21 +93,18 @@ async function stillReservable(
 }
 
 describe('F03c: exam.upload and hard links (SPEC 0281)', () => {
-  it.fails(
-    'a hard link to a file outside the workspace is not uploaded',
-    async () => {
-      const { root, secret } = layout()
-      linkSync(secret, join(root, 'report.pdf'))
-      const sent: string[] = []
-      const { tool } = uploader(root, sent)
-      const result = await tool.execute(request('op-f03c-out'), context)
-      expect(result.status).not.toBe('SUCCEEDED')
-      expect(sent).toEqual([])
-      expect(JSON.stringify(result)).not.toContain(OUTSIDE_TEXT)
-    }
-  )
+  it('a hard link to a file outside the workspace is not uploaded', async () => {
+    const { root, secret } = layout()
+    linkSync(secret, join(root, 'report.pdf'))
+    const sent: string[] = []
+    const { tool } = uploader(root, sent)
+    const result = await tool.execute(request('op-f03c-out'), context)
+    expect(result.status).not.toBe('SUCCEEDED')
+    expect(sent).toEqual([])
+    expect(JSON.stringify(result)).not.toContain(OUTSIDE_TEXT)
+  })
 
-  it.fails('the refusal leaves the journal untouched', async () => {
+  it('the refusal leaves the journal untouched', async () => {
     const { root, secret } = layout()
     linkSync(secret, join(root, 'report.pdf'))
     const { tool, journal } = uploader(root, [])
@@ -115,19 +112,16 @@ describe('F03c: exam.upload and hard links (SPEC 0281)', () => {
     expect(await stillReservable(journal, 'op-f03c-journal')).toBe(true)
   })
 
-  it.fails(
-    'a file with two names inside the workspace is not uploaded (D1)',
-    async () => {
-      const { root } = layout()
-      writeFileSync(join(root, 'a.pdf'), 'two-names-inside')
-      linkSync(join(root, 'a.pdf'), join(root, 'report.pdf'))
-      const sent: string[] = []
-      const { tool } = uploader(root, sent)
-      const result = await tool.execute(request('op-f03c-two'), context)
-      expect(result.status).not.toBe('SUCCEEDED')
-      expect(sent).toEqual([])
-    }
-  )
+  it('a file with two names inside the workspace is not uploaded (D1)', async () => {
+    const { root } = layout()
+    writeFileSync(join(root, 'a.pdf'), 'two-names-inside')
+    linkSync(join(root, 'a.pdf'), join(root, 'report.pdf'))
+    const sent: string[] = []
+    const { tool } = uploader(root, sent)
+    const result = await tool.execute(request('op-f03c-two'), context)
+    expect(result.status).not.toBe('SUCCEEDED')
+    expect(sent).toEqual([])
+  })
 
   it('control: a file with one link is uploaded once with its own bytes', async () => {
     const { root } = layout()

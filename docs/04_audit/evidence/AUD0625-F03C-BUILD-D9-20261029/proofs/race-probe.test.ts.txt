@@ -1,0 +1,98 @@
+// @vitest-environment node
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { appendFileSync, unlinkSync } from 'node:fs'
+import { afterEach, describe, it, vi } from 'vitest'
+import type { ToolExecutionContext } from '@cvg/harness-contracts'
+
+// AUD0625 F03c / SPEC 0281 §2 invariants 2 and 3: the refusal is decided by the
+// `fstat` of the descriptor that was opened, and before any byte is read. The
+// real `node:fs` is wrapped only to count `readSync` calls and to run a hook
+// right after `openSync`, so a name swap between open and check is observable.
+const hooks = vi.hoisted(() => ({
+  reads: 0,
+  afterOpen: undefined as undefined | ((path: string) => void)
+}))
+vi.mock('node:fs', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...real,
+    readSync: ((...args: Parameters<typeof real.readSync>) => {
+      hooks.reads += 1
+      return real.readSync(...args)
+    }) as typeof real.readSync,
+    openSync: ((...args: Parameters<typeof real.openSync>) => {
+      const fd = real.openSync(...args)
+      hooks.afterOpen?.(String(args[0]))
+      return fd
+    }) as typeof real.openSync
+  }
+})
+
+import { InMemoryChannelEffectJournal, createExamUploadTool } from '../index.ts'
+
+const dirs: string[] = []
+afterEach(() => {
+  hooks.reads = 0
+  hooks.afterOpen = undefined
+  for (const dir of dirs.splice(0))
+    rmSync(dir, { recursive: true, force: true })
+})
+const context: ToolExecutionContext = {
+  tenantId: 'tenant-exam' as never,
+  agentId: 'agent-exam' as never,
+  correlationId: 'corr-exam' as never,
+  traceId: 'trace-exam' as never
+}
+function layout() {
+  const dir = mkdtempSync(join(tmpdir(), 'cvg-aud0625-f03c-order-'))
+  dirs.push(dir)
+  const root = join(dir, 'workspace')
+  mkdirSync(root)
+  const secret = join(dir, 'secret.txt')
+  writeFileSync(secret, 'SYNTHETIC-OUTSIDE-SECRET')
+  return { root, secret }
+}
+function uploader(root: string, sent: string[]) {
+  return createExamUploadTool({
+    effectJournal: new InMemoryChannelEffectJournal(),
+    workspaceRoot: root,
+    urlGuard: { allowedHosts: ['exams.example.com'] },
+    requireApproval: true,
+    dnsLookup: async () => ['93.184.216.34'],
+    fetchImpl: (async (_url: unknown, init: { body?: unknown }) => {
+      sent.push(Buffer.from(init.body as Uint8Array).toString())
+      return new Response('ok', { status: 200 })
+    }) as never
+  })
+}
+const request = (key: string) => ({
+  path: 'report.pdf',
+  url: 'https://exams.example.com/u',
+  intent: 'synthetic transfer',
+  operationKey: key
+})
+
+describe('known limit probe: the workspace name is removed between open and fstat', () => {
+  it('probe', async () => {
+    const { root, secret } = layout()
+    const target = join(root, 'report.pdf')
+    linkSync(secret, target)
+    hooks.afterOpen = (path) => {
+      if (path !== target) return
+      hooks.afterOpen = undefined
+      unlinkSync(target)
+    }
+    const sent: string[] = []
+    const result = await uploader(root, sent).execute(request('op-race'), context)
+    appendFileSync('/mnt/dados/tmp/ricardo/f03c/race-probe-out.txt', `workspace name removed after open => status=${result.status} sent=${JSON.stringify(sent)}\n`)
+  })
+})
