@@ -30,6 +30,7 @@ import {
   type JourneyCandidate,
   type JourneyRepositoryOptions,
   type JourneyRepositoryPort,
+  type JourneyTaskAuthorization,
   type JourneySlot,
   type LinkPatientInput,
   type OwnerDraftInput,
@@ -39,6 +40,7 @@ import {
 } from './memory-repository.ts'
 import { PostgresRuntimeRepository } from '@cvg/persistence'
 import {
+  runTenantMutationTransaction,
   withTenantTransaction,
   type PostgresPoolClient,
   type PostgresPoolLike
@@ -380,9 +382,29 @@ export class PostgresJourneyRepository implements JourneyRepositoryPort {
     })
   }
 
-  createJourneyTask(input: CreateJourneyTaskInput): Promise<TaskRecord> {
+  createJourneyTask(
+    input: CreateJourneyTaskInput,
+    options: JourneyTaskAuthorization = {}
+  ): Promise<TaskRecord> {
     const tenantId = TenantIdSchema.parse(input.tenantId)
-    return withTenantTransaction(this.pool, tenantId, (client) =>
+    // SPEC 0262: with an authorization hook the case policy runs in this very
+    // transaction (principal/grant locks held to COMMIT).
+    const inTransaction = options.authorize
+      ? (
+          operation: (client: PostgresPoolClient) => Promise<TaskRecord>
+        ): Promise<TaskRecord> =>
+          runTenantMutationTransaction(
+            this.pool,
+            tenantId,
+            operation,
+            {},
+            options.authorize
+          )
+      : (
+          operation: (client: PostgresPoolClient) => Promise<TaskRecord>
+        ): Promise<TaskRecord> =>
+          withTenantTransaction(this.pool, tenantId, operation)
+    return inTransaction((client) =>
       new PostgresRuntimeRepository(client, {
         tenantIsolation: true,
         clock: this.clock

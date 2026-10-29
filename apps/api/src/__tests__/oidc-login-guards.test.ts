@@ -187,13 +187,10 @@ describe('SPEC0254 O7 — composition refusals', () => {
           url,
           headers: { 'x-cvg-operator-token': token }
         })
-        // Fail closed for every role: 503 (no principal authority), except
-        // the registry, where Operator/Approver lack the permission (403)
-        // before any scope is resolved.
-        const expected =
-          url === '/v1/cases' && (role === 'Operator' || role === 'Approver')
-            ? 403
-            : 503
+        // Fail closed for every role: 503 (no principal authority). SPEC 0262
+        // §5: the principal guard answers before the role matrix, so even the
+        // registry's 403 for Operator/Approver is now the same 503.
+        const expected = 503
         expect(response.statusCode, `${role} ${url}`).toBe(expected)
       }
     }
@@ -226,13 +223,25 @@ async function guarded(): Promise<Guarded> {
     httpSecurity: { allowedOrigins: [CONSOLE, SIBLING] },
     webhookVerifier: () => true
   } as never)
+  // SPEC 0262 §3: the cookie binds the revision of a current principal.
+  const principal = await app.caseAuthority.applyVerifiedPrincipalState({
+    tenantId: SYNTHETIC_TENANT_A as never,
+    operatorId: 'oidc_guard_supervisor',
+    role: 'Supervisor',
+    active: true,
+    expectedRevision: 0,
+    authorityVersion: VERSION,
+    proofRef: 'synthetic-proof:oidc_guard_supervisor',
+    identitySource: 'synthetic_fixture'
+  })
   const record = await sessions.create({
     identity: {
       operatorId: 'oidc_guard_supervisor',
       role: 'Supervisor',
       tenantId: SYNTHETIC_TENANT_A
     },
-    expiresAt: Date.now() + 60_000
+    expiresAt: Date.now() + 60_000,
+    principalRevision: principal.revision
   })
   return { app, sessions, cookie: `cvg_operator_session=${record.sessionId}` }
 }

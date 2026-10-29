@@ -2,7 +2,11 @@ import { spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { buildServerFromEnv } from '../server.ts'
+import { buildServerFromEnv as buildFromEnv } from '../server.ts'
+import {
+  provisionPrincipal,
+  SYNTHETIC_AUTHORITY_VERSION
+} from './case-authorization-fixtures.ts'
 import {
   OPERATOR_IDENTITY_KEYRING_ENV,
   createConfiguredOperatorIdentityResolver,
@@ -24,6 +28,30 @@ const simulationHeaders = {
   'x-operator-id': 'attacker.simulation',
   'x-operator-role': 'Admin',
   'x-tenant-id': tenantId
+}
+
+/**
+ * SPEC 0262 §5: a trusted server serves an operator route only for a current
+ * principal; the principal authority is composed and the wiring identity is
+ * provisioned (the same port a verified adapter uses).
+ */
+async function buildTrustedFromEnv(
+  env: Parameters<typeof buildFromEnv>[0],
+  options: NonNullable<Parameters<typeof buildFromEnv>[1]>
+) {
+  const app = await buildFromEnv(env, {
+    ...options,
+    casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
+  })
+  await provisionPrincipal(
+    app as unknown as Parameters<typeof provisionPrincipal>[0],
+    {
+      tenantId: identity.tenantId as never,
+      operatorId: identity.operatorId,
+      role: identity.role
+    }
+  )
+  return app
 }
 
 function encode(value: unknown): string {
@@ -55,7 +83,7 @@ const PROBE = '/v1/observability/audit-evidence'
 describe('identity composition wiring', () => {
   it('passes the injected trusted resolver to the built server', async () => {
     const now = () => NOW_MS
-    const app = await buildServerFromEnv(
+    const app = await buildTrustedFromEnv(
       { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
       {
         identityMode: 'trusted',
@@ -88,7 +116,7 @@ describe('identity composition wiring', () => {
 
   it('rejects wrong-audience, expired and replayed tokens over HTTP', async () => {
     const now = () => NOW_MS
-    const app = await buildServerFromEnv(
+    const app = await buildTrustedFromEnv(
       { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
       {
         identityMode: 'trusted',
@@ -158,7 +186,7 @@ describe('identity composition wiring', () => {
     const claim = vi.fn(
       async (key: string, expiresAt: number) => key.length > 0 && expiresAt > 0
     )
-    const app = await buildServerFromEnv(
+    const app = await buildTrustedFromEnv(
       { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
       {
         identityMode: 'trusted',
@@ -202,7 +230,7 @@ describe('identity composition wiring', () => {
       claimedKeys.add(key)
       return true
     })
-    const appA = await buildServerFromEnv(
+    const appA = await buildTrustedFromEnv(
       { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
       {
         identityMode: 'trusted',
@@ -213,7 +241,7 @@ describe('identity composition wiring', () => {
         tokenReplayStore: { claim }
       }
     )
-    const appB = await buildServerFromEnv(
+    const appB = await buildTrustedFromEnv(
       { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
       {
         identityMode: 'trusted',
@@ -252,7 +280,7 @@ describe('identity composition wiring', () => {
       if (!key || expiresAt <= 0) throw new Error('invalid synthetic claim')
       throw new Error('synthetic replay store outage')
     })
-    const app = await buildServerFromEnv(
+    const app = await buildTrustedFromEnv(
       { NODE_ENV: 'test', API_PERSISTENCE_MODE: 'memory' },
       {
         identityMode: 'trusted',
@@ -277,7 +305,7 @@ describe('identity composition wiring', () => {
 
   it('rejects unknown identity modes and simulation mode in production startup', async () => {
     await expect(
-      buildServerFromEnv({
+      buildFromEnv({
         NODE_ENV: 'test',
         API_PERSISTENCE_MODE: 'memory',
         CVG_IDENTITY_MODE: 'trusted-resolver'
@@ -285,7 +313,7 @@ describe('identity composition wiring', () => {
     ).rejects.toThrow(/CVG_IDENTITY_MODE/)
 
     await expect(
-      buildServerFromEnv({
+      buildFromEnv({
         NODE_ENV: 'production',
         API_PERSISTENCE_MODE: 'memory',
         CVG_IDENTITY_MODE: 'simulation'
@@ -296,7 +324,7 @@ describe('identity composition wiring', () => {
   it('fails production startup without an injected trusted resolver', async () => {
     const fakeDatabaseUrl = 'postgres://fixture:fixture@127.0.0.1:1/fixture'
     await expect(
-      buildServerFromEnv(
+      buildFromEnv(
         {
           NODE_ENV: 'production',
           API_PERSISTENCE_MODE: 'postgres',

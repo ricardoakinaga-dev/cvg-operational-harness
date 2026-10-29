@@ -5,7 +5,11 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createCorrelationId, fail, ok } from '@cvg/shared'
-import type { CaseAuthorityPort } from '@cvg/persistence'
+import type { CaseAuthorityPort, CasePrincipalRecord } from '@cvg/persistence'
+import {
+  assertSessionBinding,
+  SessionBindingError
+} from './operator-session-binding.ts'
 import {
   PrincipalProducerError,
   produceVerifiedPrincipal
@@ -456,8 +460,9 @@ export function registerOperatorLoginRoutes(
         }
 
         // Step 7: the principal is current BEFORE the session exists (I2).
+        let principal: CasePrincipalRecord
         try {
-          await produceVerifiedPrincipal(deps.caseAuthority, {
+          principal = await produceVerifiedPrincipal(deps.caseAuthority, {
             tenantId: mapped.identity.tenantId,
             operatorId: mapped.identity.operatorId,
             role: mapped.identity.role,
@@ -480,7 +485,11 @@ export function registerOperatorLoginRoutes(
 
         // Step 8: every login starts a new family; a live previous session of
         // this browser is retired in the same unit (D7).
-        const next = { identity: mapped.identity, expiresAt: mapped.expiresAt }
+        const next = {
+          identity: mapped.identity,
+          expiresAt: mapped.expiresAt,
+          principalRevision: principal.revision
+        }
         let record: OperatorSessionRecord
         try {
           const previous = pending.previousSessionId
@@ -495,6 +504,31 @@ export function registerOperatorLoginRoutes(
           }
         } catch {
           return outage('session', 'session_unavailable')
+        }
+
+        // SPEC 0262 §6.2: re-read the principal before any Set-Cookie. If its
+        // revision, role, active or version moved meanwhile, the new family
+        // is retired and no cookie is emitted (never a knowingly stale one).
+        try {
+          await assertSessionBinding(
+            deps.caseAuthority,
+            {
+              identityMode: 'trusted',
+              authorityVersion: login.authorityVersion
+            },
+            record
+          )
+        } catch (error) {
+          try {
+            await deps.sessionStore.revoke(record.sessionId)
+          } catch {
+            // The unannounced family is retained without a token; no cookie.
+            return outage('session', 'session_unavailable')
+          }
+          if (error instanceof SessionBindingError && error.status === 401) {
+            return refuse('principal', 'principal_drift')
+          }
+          return outage('principal', 'principal_unavailable')
         }
 
         // Step 9.

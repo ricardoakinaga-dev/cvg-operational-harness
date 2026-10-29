@@ -8,6 +8,12 @@ import {
   type OperatorSessionStore
 } from './operator-session.ts'
 import { healthRoute, liveRoute, readyRoute } from './routes/health.ts'
+import type { CaseAuthorityPort } from '@cvg/persistence'
+import {
+  assertSessionBinding,
+  SessionBindingError
+} from './operator-session-binding.ts'
+import type { CasePrincipalPolicy } from './case-authorization/case-routes.ts'
 
 const sessionIndependentProbePaths = new Set([
   healthRoute,
@@ -24,6 +30,9 @@ export interface OperatorSessionHookOptions {
   /** SPEC0259 §4.3: names, reads and clears the operational cookie. */
   cookiePolicy: OperatorCookiePolicy
   operatorSessionStore: OperatorSessionStore
+  /** SPEC 0262 §3: where the bound principal revision is read (data plane). */
+  caseAuthority: Pick<CaseAuthorityPort, 'readSnapshot'>
+  principalPolicy: CasePrincipalPolicy
   sessionIdentityByHeaders: WeakMap<object, OperatorIdentity | null>
   sessionRecordByHeaders: WeakMap<object, OperatorSessionRecord>
   sessionStoreFailureByHeaders: WeakSet<object>
@@ -41,6 +50,8 @@ export function installOperatorSessionHook(
     app,
     cookiePolicy,
     operatorSessionStore,
+    caseAuthority,
+    principalPolicy,
     sessionIdentityByHeaders,
     sessionRecordByHeaders,
     sessionStoreFailureByHeaders
@@ -71,6 +82,32 @@ export function installOperatorSessionHook(
           createCorrelationId()
         )
       )
+    }
+
+    if (record && record.expiresAt > Date.now()) {
+      // SPEC 0262 §3: the cookie binds the principal revision it was issued
+      // under. A stale binding is a 401 that retires the cookie; an outage is
+      // a 503 that keeps it. Neither ever falls back to the session alone.
+      try {
+        await assertSessionBinding(caseAuthority, principalPolicy, record)
+      } catch (error) {
+        const status = error instanceof SessionBindingError ? error.status : 503
+        if (status === 503) {
+          sessionStoreFailureByHeaders.add(request.headers)
+          if (rawPath === '/v1/session' || rawPath === '/v1/session/logout') {
+            return
+          }
+          reply.code(503).header('cache-control', 'no-store')
+          return reply.send(
+            fail(
+              'configuration_error',
+              'Operator principal is unavailable',
+              createCorrelationId()
+            )
+          )
+        }
+        record = null
+      }
     }
 
     if (record && record.expiresAt > Date.now()) {

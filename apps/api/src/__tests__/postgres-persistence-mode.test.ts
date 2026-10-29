@@ -2152,9 +2152,11 @@ describe('api PostgreSQL persistence mode', () => {
         expect((scopedDecision.json() as Envelope<never>).error?.code).toBe(
           'configuration_error'
         )
-        expect(
-          (decision.json() as Envelope<{ status: string }>).data.status
-        ).toBe('approved')
+        // SPEC 0262: the shared-client profile refuses the decision for every role.
+        expect(decision.statusCode).toBe(503)
+        expect((decision.json() as Envelope<never>).error?.code).toBe(
+          'configuration_error'
+        )
         expect(taskBody.data.status).toBe('open')
         // SPEC0251 (§6 adjustment d): only the Operator changes task status,
         // and it cannot be scoped without 0029 (503 before any write); the
@@ -2174,7 +2176,7 @@ describe('api PostgreSQL persistence mode', () => {
               page: { items: Array<{ type: string }> }
             }>
           ).data.page.items.map((event) => event.type)
-        ).toContain('approval_decision')
+        ).not.toContain('approval_decision') // the decision was refused (503)
         expect(
           (
             evidence.json() as Envelope<{

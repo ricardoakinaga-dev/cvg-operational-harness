@@ -924,123 +924,157 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
     rawNow?: Date
   ): Promise<ExecutionRecord> {
     const tenant = TenantIdSchema.parse(input.tenantId)
+    const now = rawNow ?? this.clock()
+    return this.run(tenant, (client) =>
+      transaction(client, () =>
+        this.resolveApprovalInTransaction(client, input, now)
+      )
+    )
+  }
+
+  /** SPEC 0262: the execution row, locked `FOR UPDATE` in the caller's transaction. */
+  public lockExecutionInTransaction(
+    client: PostgresQueryable,
+    tenantId: string,
+    executionId: string
+  ): Promise<ExecutionRecord> {
+    return this.lockedRecord(
+      client,
+      TenantIdSchema.parse(tenantId),
+      text(executionId, 'executionId', 200)
+    )
+  }
+
+  /**
+   * SPEC 0262 §4.1 — the same resolution (state machine, queue pairing,
+   * event) as {@link resolveApproval}, inside a transaction the caller owns:
+   * no BEGIN / COMMIT / ROLLBACK here.
+   */
+  public async resolveApprovalInTransaction(
+    client: PostgresQueryable,
+    input: {
+      readonly tenantId: string
+      readonly executionId: string
+      readonly approvalId: string
+      readonly actorId: string
+      readonly decision: 'APPROVED' | 'REJECTED'
+      readonly reason?: string
+    },
+    now: Date
+  ): Promise<ExecutionRecord> {
+    const tenant = TenantIdSchema.parse(input.tenantId)
     const id = text(input.executionId, 'executionId', 200)
     const approvalId = text(input.approvalId, 'approvalId', 160)
     const actorId = text(input.actorId, 'actorId', 120)
-    const now = rawNow ?? this.clock()
-    return this.run(tenant, (client) =>
-      transaction(client, async () => {
-        const current = await this.lockedRecord(client, tenant, id)
-        if (
-          current.state !== 'WAITING_APPROVAL' &&
-          current.approvalId === approvalId &&
-          ((input.decision === 'APPROVED' &&
-            current.state !== 'FAILED_TERMINAL') ||
-            (input.decision === 'REJECTED' &&
-              current.state === 'FAILED_TERMINAL' &&
-              current.failure?.code === 'approval_rejected'))
-        ) {
-          return current
-        }
-        if (current.state !== 'WAITING_APPROVAL') {
-          throw new OperationalExecutionError(
-            'invalid_action',
-            'Execution is not waiting for approval'
-          )
-        }
-        if (current.approvalId !== approvalId) {
-          throw new OperationalExecutionError(
-            'conflict',
-            'Approval is not bound to this execution'
-          )
-        }
-        const rejected = input.decision === 'REJECTED'
-        const failure: ExecutionFailure | null = rejected
-          ? {
-              kind: 'POLICY_DENIED',
-              code: 'approval_rejected',
-              message: input.reason?.trim() || 'Approval was rejected.'
-            }
-          : null
-        const nextState: ExecutionState = rejected
-          ? 'FAILED_TERMINAL'
-          : 'QUEUED'
-        validateExecutionTransitionPayload({
-          to: nextState,
-          result: current.result,
-          failure
-        })
-        const resumeBinding = rejected
-          ? null
-          : { kind: 'approval', approvalId, boundAt: asIso(now) as string }
-        const updated = await client.query<ExecutionRow>(
-          `UPDATE operational_executions
-              SET state = $3, lease_owner = NULL, lease_until = NULL,
-                  failure = $4::jsonb, updated_at = $5, completed_at = $6,
-                  resume = $8::jsonb
-            WHERE tenant_id = $1 AND id = $2
-              AND state = 'WAITING_APPROVAL' AND approval_id = $7
-            RETURNING ${executionColumns}`,
-          [
-            tenant,
-            id,
-            nextState,
-            failure === null ? null : jsonText(failure, 'Approval failure'),
-            now,
-            rejected ? now : null,
-            approvalId,
-            resumeBinding === null
-              ? null
-              : jsonText(resumeBinding, 'Approval resume binding')
-          ]
+    {
+      const current = await this.lockedRecord(client, tenant, id)
+      if (
+        current.state !== 'WAITING_APPROVAL' &&
+        current.approvalId === approvalId &&
+        ((input.decision === 'APPROVED' &&
+          current.state !== 'FAILED_TERMINAL') ||
+          (input.decision === 'REJECTED' &&
+            current.state === 'FAILED_TERMINAL' &&
+            current.failure?.code === 'approval_rejected'))
+      ) {
+        return current
+      }
+      if (current.state !== 'WAITING_APPROVAL') {
+        throw new OperationalExecutionError(
+          'invalid_action',
+          'Execution is not waiting for approval'
         )
-        if (!updated.rows[0]) {
-          throw new OperationalExecutionError(
-            'conflict',
-            'Approval resolution lost its execution binding'
-          )
-        }
-        const record = mapRecord(updated.rows[0])
-        const queueState = this.queueUpdateForTransition(
-          nextState,
-          failure,
-          now,
-          current
+      }
+      if (current.approvalId !== approvalId) {
+        throw new OperationalExecutionError(
+          'conflict',
+          'Approval is not bound to this execution'
         )
-        const queueUpdated = await client.query(
-          `UPDATE operational_execution_outbox
-              SET status = $3, available_at = $4, lease_owner = $5,
-                  lease_until = $6, last_error = $7, processed_at = $8
-            WHERE tenant_id = $1 AND execution_id = $2`,
-          [
-            tenant,
-            id,
-            queueState.status,
-            queueState.availableAt,
-            queueState.leaseOwner,
-            queueState.leaseUntil,
-            queueState.lastError,
-            queueState.processedAt
-          ]
-        )
-        if (queueUpdated.rowCount !== 1) {
-          throw new OperationalExecutionError(
-            'conflict',
-            'Approval resolution queue pairing was lost'
-          )
-        }
-        await this.appendEvent(
-          client,
-          record,
-          eventType(nextState),
-          null,
-          `${rejected ? 'approval_rejected' : 'approval_resumed'}:${actorId}`,
-          undefined,
-          now
-        )
-        return record
+      }
+      const rejected = input.decision === 'REJECTED'
+      const failure: ExecutionFailure | null = rejected
+        ? {
+            kind: 'POLICY_DENIED',
+            code: 'approval_rejected',
+            message: input.reason?.trim() || 'Approval was rejected.'
+          }
+        : null
+      const nextState: ExecutionState = rejected ? 'FAILED_TERMINAL' : 'QUEUED'
+      validateExecutionTransitionPayload({
+        to: nextState,
+        result: current.result,
+        failure
       })
-    )
+      const resumeBinding = rejected
+        ? null
+        : { kind: 'approval', approvalId, boundAt: asIso(now) as string }
+      const updated = await client.query<ExecutionRow>(
+        `UPDATE operational_executions
+          SET state = $3, lease_owner = NULL, lease_until = NULL,
+              failure = $4::jsonb, updated_at = $5, completed_at = $6,
+              resume = $8::jsonb
+        WHERE tenant_id = $1 AND id = $2
+          AND state = 'WAITING_APPROVAL' AND approval_id = $7
+        RETURNING ${executionColumns}`,
+        [
+          tenant,
+          id,
+          nextState,
+          failure === null ? null : jsonText(failure, 'Approval failure'),
+          now,
+          rejected ? now : null,
+          approvalId,
+          resumeBinding === null
+            ? null
+            : jsonText(resumeBinding, 'Approval resume binding')
+        ]
+      )
+      if (!updated.rows[0]) {
+        throw new OperationalExecutionError(
+          'conflict',
+          'Approval resolution lost its execution binding'
+        )
+      }
+      const record = mapRecord(updated.rows[0])
+      const queueState = this.queueUpdateForTransition(
+        nextState,
+        failure,
+        now,
+        current
+      )
+      const queueUpdated = await client.query(
+        `UPDATE operational_execution_outbox
+          SET status = $3, available_at = $4, lease_owner = $5,
+              lease_until = $6, last_error = $7, processed_at = $8
+        WHERE tenant_id = $1 AND execution_id = $2`,
+        [
+          tenant,
+          id,
+          queueState.status,
+          queueState.availableAt,
+          queueState.leaseOwner,
+          queueState.leaseUntil,
+          queueState.lastError,
+          queueState.processedAt
+        ]
+      )
+      if (queueUpdated.rowCount !== 1) {
+        throw new OperationalExecutionError(
+          'conflict',
+          'Approval resolution queue pairing was lost'
+        )
+      }
+      await this.appendEvent(
+        client,
+        record,
+        eventType(nextState),
+        null,
+        `${rejected ? 'approval_rejected' : 'approval_resumed'}:${actorId}`,
+        undefined,
+        now
+      )
+      return record
+    }
   }
 
   public provideUserInput(

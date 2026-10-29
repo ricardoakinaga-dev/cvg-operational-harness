@@ -287,11 +287,102 @@ export interface CaseReadSnapshot {
   ): Promise<CasePage<CaseAssignmentRecord>>
 }
 
-export interface CaseAuthorityPort extends PrincipalProvisioningPort {
+/**
+ * SPEC 0262 §4/§7 — what the writer of an authorized mutation receives. On
+ * PostgreSQL `authorizeOnClient` is the hook the creation transaction runs
+ * AFTER its tenant context and BEFORE the operation lock: it locks the actor's
+ * principal and assignments (`FOR SHARE`, held until COMMIT) and evaluates the
+ * same policy on that client. On memory the whole unit already runs inside the
+ * authority queue, so no hook is needed.
+ */
+export interface AuthorizedMutationUnit {
+  readonly authorizeOnClient?: (client: PostgresQueryable) => Promise<void>
+}
+
+export interface AuthorizedMutationInput<T> {
+  readonly operatorId: string
+  /** Policy check evaluated on the snapshot of this unit (throws to deny). */
+  readonly authorize: (snapshot: CaseReadSnapshot) => Promise<void>
+  /** The write; runs with the authorization retained until it resolves. */
+  readonly write: (unit: AuthorizedMutationUnit) => Promise<T>
+}
+
+/**
+ * SPEC 0262 §6.1 — global invalidation of every session family of one
+ * operator by bumping ONLY `case_principals.revision`. It never edits role,
+ * active, source or authority version and never writes the Auth pool: a
+ * cookie bound to the previous revision is simply not current any more.
+ */
+export interface InvalidateOperatorSessionsInput {
+  readonly tenantId: TenantId
+  readonly operatorId: string
+  readonly expectedRevision: number
+  /** Opaque approval/handoff reference; only its digest is audited. */
+  readonly approvalRef: string
+  /** sha256 (hex) of the private proof file. */
+  readonly proofDigest: string
+  /** Bounded identifier of the local administrator who attests. */
+  readonly localOperator: string
+}
+
+export interface OperatorSessionInvalidationPort {
+  invalidateOperatorSessions(
+    input: InvalidateOperatorSessionsInput
+  ): Promise<CasePrincipalRecord>
+}
+
+export function assertInvalidateOperatorSessionsInput(
+  input: InvalidateOperatorSessionsInput
+): InvalidateOperatorSessionsInput {
+  const tenantId = TenantIdSchema.parse(input.tenantId)
+  if (
+    !isCaseOperatorId(input.operatorId) ||
+    !Number.isSafeInteger(input.expectedRevision) ||
+    input.expectedRevision < 1 ||
+    typeof input.approvalRef !== 'string' ||
+    input.approvalRef.length < 8 ||
+    input.approvalRef.length > 512 ||
+    !/^[0-9a-f]{64}$/.test(input.proofDigest) ||
+    !/^[A-Za-z0-9._:@-]{3,80}$/.test(input.localOperator)
+  ) {
+    throw new CaseAuthorityError(
+      'validation_failed',
+      'Operator session invalidation is invalid'
+    )
+  }
+  return { ...input, tenantId }
+}
+
+export function operatorSessionInvalidationAuditPayload(
+  input: InvalidateOperatorSessionsInput & { revision: number }
+): Record<string, unknown> {
+  return {
+    tenantId: input.tenantId,
+    event: 'operator_sessions_invalidated',
+    subjectOperatorId: input.operatorId,
+    previousRevision: input.expectedRevision,
+    revision: input.revision,
+    approvalRefDigest: caseProofDigest(input.approvalRef),
+    proofDigest: input.proofDigest,
+    localOperator: input.localOperator
+  }
+}
+
+export interface CaseAuthorityPort
+  extends PrincipalProvisioningPort, OperatorSessionInvalidationPort {
   readonly kind: 'memory' | 'postgres'
   readSnapshot<T>(
     tenantId: TenantId,
     operation: (snapshot: CaseReadSnapshot) => Promise<T>
+  ): Promise<T>
+  /**
+   * SPEC 0262: the authorization decision and the write share one unit of
+   * failure and one commit order. A revocation that wins the order denies the
+   * write; a write that commits first completes before the revocation applies.
+   */
+  runAuthorizedMutation<T>(
+    tenantId: TenantId,
+    input: AuthorizedMutationInput<T>
   ): Promise<T>
   putAssignment(
     input: CaseAssignmentWriteInput
@@ -611,12 +702,68 @@ export class InMemoryCaseAuthority implements CaseAuthorityPort {
     })
   }
 
+  invalidateOperatorSessions(
+    rawInput: InvalidateOperatorSessionsInput
+  ): Promise<CasePrincipalRecord> {
+    return this.queue.run(async () => {
+      const input = assertInvalidateOperatorSessionsInput(rawInput)
+      const principalKey = key(input.tenantId, input.operatorId)
+      const current = this.state.principals.get(principalKey)
+      if (!current || current.revision !== input.expectedRevision) {
+        throw new CaseAuthorityError(
+          'principal_conflict',
+          'Principal revision is stale or the principal is absent'
+        )
+      }
+      // Only the revision moves: identity attributes are left untouched.
+      const next: CasePrincipalRecord = {
+        ...current,
+        revision: current.revision + 1,
+        updatedAt: this.clock().toISOString()
+      }
+      new AuditRepository(this.db).append(
+        {
+          type: 'policy_decision',
+          actorType: 'System',
+          actorId: 'operator-session-invalidation',
+          correlationId: `corr_${randomUUID()}`,
+          policyVersion: CASE_AUTHORITY_POLICY_VERSION,
+          payload: operatorSessionInvalidationAuditPayload({
+            ...input,
+            revision: next.revision
+          })
+        },
+        input.tenantId
+      )
+      this.state.principals.set(principalKey, next)
+      return { ...next }
+    })
+  }
+
   readSnapshot<T>(
     rawTenantId: TenantId,
     operation: (snapshot: CaseReadSnapshot) => Promise<T>
   ): Promise<T> {
     const tenantId = TenantIdSchema.parse(rawTenantId)
     return this.queue.run(() => operation(this.snapshot(tenantId)))
+  }
+
+  /**
+   * SPEC 0262 §7: the decision and the writer run inside the SAME queue as
+   * `readSnapshot`, `putAssignment` and `applyVerifiedPrincipalState`, so a
+   * revocation waits for the write to resolve and never interleaves with it.
+   * The callback must not call back into this authority (the queue is not
+   * reentrant): it receives a snapshot, not the authority.
+   */
+  runAuthorizedMutation<T>(
+    rawTenantId: TenantId,
+    input: AuthorizedMutationInput<T>
+  ): Promise<T> {
+    const tenantId = TenantIdSchema.parse(rawTenantId)
+    return this.queue.run(async () => {
+      await input.authorize(this.snapshot(tenantId))
+      return input.write({})
+    })
   }
 
   private conversation(tenantId: TenantId, conversationId: string) {

@@ -120,3 +120,31 @@ export async function grantCase(
   expect(granted.statusCode).toBe(200)
   return caseId
 }
+
+/**
+ * SPEC 0262 §5: a trusted server serves an operator route only for a current
+ * principal, so a server built with an ad-hoc resolver composes the principal
+ * authority and provisions the principals its resolver can return.
+ */
+export async function buildTrustedServer(
+  build: (options: Record<string, unknown>) => App,
+  options: Record<string, unknown>,
+  principals: ReadonlyArray<{
+    tenantId: string
+    operatorId: string
+    role: 'Operator' | 'Approver' | 'Supervisor' | 'Admin'
+  }>
+): Promise<App> {
+  const app = build({
+    ...options,
+    casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
+  })
+  for (const principal of principals) {
+    await provisionPrincipal(app, {
+      tenantId: principal.tenantId as TenantId,
+      operatorId: principal.operatorId,
+      role: principal.role
+    })
+  }
+  return app
+}

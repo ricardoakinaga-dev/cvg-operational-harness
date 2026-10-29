@@ -43,6 +43,23 @@ const headers = {
   'x-forwarded-proto': 'https'
 }
 
+const PRINCIPAL_AUTHORITY = 'synthetic-authority-v1'
+
+/** Live (unrevoked, unexpired) sessions in the Auth store, read by the owner. */
+async function liveSessions(admin: Client, auth: string): Promise<number> {
+  return Number(
+    (
+      await admin.query<{ count: string }>(
+        `SELECT count(*)::text AS count
+           FROM ${auth}.operator_sessions s
+           JOIN ${auth}.operator_session_families f USING (family_id)
+          WHERE s.revoked_at IS NULL AND f.revoked_at IS NULL
+            AND s.expires_at > clock_timestamp()`
+      )
+    ).rows[0]?.count
+  )
+}
+
 afterEach(() => vi.unstubAllEnvs())
 
 // Run only on the Lead's scheduled disposable database. This fixture creates
@@ -161,11 +178,58 @@ async function withDatabase(
       API_TRUSTED_PROXY_ADDRESSES: '127.0.0.1',
       API_TRUSTED_PROXY_HOPS: '0'
     }
+    // SPEC 0262 §3/§5: a cookie session binds a current principal, and a
+    // principal authority is composed only under NODE_ENV=test. The server is
+    // built under the controlled test profile (the composition rule) and the
+    // process goes back to production for everything it does afterwards; the
+    // principals are the verified-adapter kind a trusted deployment accepts.
     const open = async () => {
-      const app = await buildApiWithProductionSessions(env, {
-        operatorIdentityResolver: createConfiguredOperatorIdentityResolver(env)!
-      })
+      vi.stubEnv('NODE_ENV', 'test')
+      let app: Awaited<ReturnType<typeof buildApiWithProductionSessions>>
+      try {
+        app = await buildApiWithProductionSessions(env, {
+          operatorIdentityResolver:
+            createConfiguredOperatorIdentityResolver(env)!,
+          casePrincipalAuthority: { authorityVersion: PRINCIPAL_AUTHORITY }
+        })
+      } finally {
+        vi.stubEnv('NODE_ENV', 'production')
+      }
       apps.push(app)
+      const authority = (
+        app as unknown as {
+          caseAuthority: import('@cvg/persistence').CaseAuthorityPort
+        }
+      ).caseAuthority
+      // The deployment's identity adapter keeps the principal of whoever
+      // presents a bootstrap token current (role changes bump the revision).
+      const inject = app.inject.bind(app) as (...args: unknown[]) => unknown
+      app.inject = (async (options: { headers?: Record<string, string> }) => {
+        const token = options?.headers?.['x-cvg-operator-token']
+        if (token) {
+          const claims = JSON.parse(
+            Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8')
+          ) as { tenantId: string; operatorId: string; role: string }
+          const current = await authority.readSnapshot(
+            claims.tenantId as never,
+            (snapshot: import('@cvg/persistence').CaseReadSnapshot) =>
+              snapshot.principal(claims.operatorId)
+          )
+          if (!current?.active || current.role !== claims.role) {
+            await authority.applyVerifiedPrincipalState({
+              tenantId: claims.tenantId as never,
+              operatorId: claims.operatorId,
+              role: claims.role as never,
+              active: true,
+              expectedRevision: current?.revision ?? 0,
+              authorityVersion: PRINCIPAL_AUTHORITY,
+              proofRef: `synthetic-proof:${claims.operatorId}`,
+              identitySource: 'verified_adapter'
+            })
+          }
+        }
+        return inject(options)
+      }) as never
       return app
     }
     await callback({
@@ -548,10 +612,14 @@ describe.skipIf(!databaseUrl)(
           )
         }
         const url = '/v1/admin/agents'
+        // The failed switch changed nothing in the store (one live session).
+        // The cookie itself is already refused at the request: the principal
+        // moved to Supervisor, so its binding (SPEC 0262 §3) is stale.
+        expect(await activeSessions()).toBe(1)
         expect(
           (await app.inject({ url, headers: { ...headers, cookie: a } }))
             .statusCode
-        ).toBe(200)
+        ).toBe(401)
         const retried = await login(supervisor, a)
         expect(retried.statusCode).toBe(200)
         const b = String(retried.headers['set-cookie']).split(';')[0]!
@@ -592,7 +660,7 @@ describe.skipIf(!databaseUrl)(
             })
           const a = cookieOf(await login(identity))
           await admin.query(
-            `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_create(bytea,text,text,text,timestamptz) FROM ${sessionRole}`
+            `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_create_v2(bytea,text,text,text,bigint,timestamptz) FROM ${sessionRole}`
           )
           try {
             const failed = await login(supervisor, a)
@@ -600,14 +668,17 @@ describe.skipIf(!databaseUrl)(
             expect(failed.headers['set-cookie']).toBeUndefined()
           } finally {
             await admin.query(
-              `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_create(bytea,text,text,text,timestamptz) TO ${sessionRole}`
+              `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_create_v2(bytea,text,text,text,bigint,timestamptz) TO ${sessionRole}`
             )
           }
-          // The revocation was rolled back with the failed create.
+          // The revocation was rolled back with the failed create: the store
+          // still holds the live session (its binding is stale by now, since
+          // the principal moved to Supervisor, so the request answers 401).
+          expect(await liveSessions(admin, auth)).toBe(1)
           expect(
             (await app.inject({ url, headers: { ...headers, cookie: a } }))
               .statusCode
-          ).toBe(200)
+          ).toBe(401)
           const retried = await login(supervisor, a)
           expect(retried.statusCode).toBe(200)
           expect(
@@ -668,7 +739,7 @@ describe.skipIf(!databaseUrl)(
       }, 60_000)
 
       it('a connection lost mid-switch answers 503 and the API stays up (AUD-0604 F01)', async () => {
-        await withDatabase(async ({ open, auth, sessionRole }) => {
+        await withDatabase(async ({ open, admin, auth, sessionRole }) => {
           const app = await open()
           const login = (who: Who, cookie?: string) =>
             app.inject({
@@ -723,16 +794,19 @@ describe.skipIf(!databaseUrl)(
             await locker.end().catch(() => undefined)
             await killer.end().catch(() => undefined)
           }
-          // Same process: liveness, readiness and the old session survive.
+          // Same process: liveness, readiness and the old session survive
+          // (the store still holds it; its binding is stale because the
+          // principal moved to Supervisor, so the request itself is 401).
           for (const probe of ['/live', '/ready']) {
             expect((await app.inject({ url: probe, headers })).statusCode).toBe(
               200
             )
           }
+          expect(await liveSessions(admin, auth)).toBe(1)
           expect(
             (await app.inject({ url, headers: { ...headers, cookie: a } }))
               .statusCode
-          ).toBe(200)
+          ).toBe(401)
           // A new authentication completes the switch and retires the lineage.
           const retried = await login(supervisor, a)
           expect(retried.statusCode).toBe(200)
@@ -775,7 +849,7 @@ describe.skipIf(!databaseUrl)(
           ).rows[0].n
         const before = await count()
         await admin.query(
-          `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_get(bytea) FROM ${sessionRole}`
+          `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_get_v2(bytea) FROM ${sessionRole}`
         )
         const failed = await app.inject({ url: '/ready', headers })
         expect(failed.statusCode).toBe(503)
@@ -809,7 +883,7 @@ describe.skipIf(!databaseUrl)(
         ).toBe(503)
         expect(await count()).toBe(before)
         await admin.query(
-          `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_get(bytea) TO ${sessionRole}`
+          `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_get_v2(bytea) TO ${sessionRole}`
         )
         expect((await app.inject({ url: '/ready', headers })).statusCode).toBe(
           200
@@ -843,7 +917,7 @@ describe.skipIf(!databaseUrl)(
           expect(session.statusCode).toBe(200)
           const cookie = String(session.headers['set-cookie']).split(';')[0]!
           await admin.query(
-            `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_get(bytea) FROM ${sessionRole}`
+            `REVOKE EXECUTE ON FUNCTION ${auth}.operator_session_get_v2(bytea) FROM ${sessionRole}`
           )
           try {
             const eventId = `bootstrap_r3_${randomBytes(16).toString('hex')}`
@@ -979,7 +1053,7 @@ describe.skipIf(!databaseUrl)(
             }
           } finally {
             await admin.query(
-              `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_get(bytea) TO ${sessionRole}`
+              `GRANT EXECUTE ON FUNCTION ${auth}.operator_session_get_v2(bytea) TO ${sessionRole}`
             )
           }
           expect(
@@ -1017,11 +1091,11 @@ describe.skipIf(!databaseUrl)(
           `REVOKE SELECT ON ${auth}.operator_sessions FROM ${sessionRole}`
         )
         await admin.query(
-          `ALTER FUNCTION ${auth}.operator_session_get(bytea) SET search_path = public`
+          `ALTER FUNCTION ${auth}.operator_session_get_v2(bytea) SET search_path = public`
         )
         await reject()
         await admin.query(
-          `ALTER FUNCTION ${auth}.operator_session_get(bytea) SET search_path = pg_catalog, pg_temp`
+          `ALTER FUNCTION ${auth}.operator_session_get_v2(bytea) SET search_path = pg_catalog, pg_temp`
         )
         const good = await createProductionOperatorSessionBootstrap(env)
         await Promise.all([good!.close(), good!.close()])

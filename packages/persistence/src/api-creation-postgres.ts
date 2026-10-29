@@ -18,6 +18,7 @@ import {
   creationKeyDigest,
   taskCreationAudit,
   taskRequestDigest,
+  type ApiCreationOptions,
   type ApiCreationPort,
   type ApiCreationResult,
   type ApiCreationRoute,
@@ -51,6 +52,8 @@ function lockText(
 export interface CreationTransactionHooks {
   /** Test seam: runs after the tenant context was cleared, before COMMIT. */
   beforeCommit?: (client: PostgresPoolClient) => Promise<void>
+  /** Test seam: runs after the authorization hook, before the operation lock. */
+  afterAuthorize?: (client: PostgresPoolClient) => Promise<void>
 }
 
 /**
@@ -71,7 +74,38 @@ export async function runCreationTransaction<T>(
   route: ApiCreationRoute,
   keyDigest: string,
   operation: (client: PostgresPoolClient) => Promise<T>,
-  hooks: CreationTransactionHooks = {}
+  hooks: CreationTransactionHooks = {},
+  authorize?: (client: PostgresPoolClient) => Promise<void>
+): Promise<T> {
+  const tenantId = TenantIdSchema.parse(rawTenantId)
+  return runTenantMutationTransaction(
+    pool,
+    tenantId,
+    operation,
+    hooks,
+    authorize,
+    async (client) => {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [lockText(tenantId, route, keyDigest)]
+      )
+    }
+  )
+}
+
+/**
+ * SPEC 0262 §4: the single owner of BEGIN / COMMIT / ROLLBACK / release for
+ * every authorized mutation. Order: tenant context, `authorize` (principal and
+ * grant locks held to COMMIT), `afterAuthorize` seam, `beforeOperation` (the
+ * creation lock), then `operation`.
+ */
+export async function runTenantMutationTransaction<T>(
+  pool: PostgresPoolLike,
+  rawTenantId: TenantId,
+  operation: (client: PostgresPoolClient) => Promise<T>,
+  hooks: CreationTransactionHooks = {},
+  authorize?: (client: PostgresPoolClient) => Promise<void>,
+  beforeOperation?: (client: PostgresPoolClient) => Promise<void>
 ): Promise<T> {
   const tenantId = TenantIdSchema.parse(rawTenantId)
   const client = await pool.connect()
@@ -79,9 +113,20 @@ export async function runCreationTransaction<T>(
   const release = (error?: Error): void => {
     if (released) return
     released = true
+    emitter.off?.('error', onClientError)
     client.release(error)
   }
   let commitSent = false
+  // A backend that dies while the client is checked out is reported by the
+  // client itself, not by the pool (which only watches idle clients). Without a
+  // listener that event is an uncaught exception that would take the process
+  // down; the pending query already rejects, which drives the failure path.
+  const emitter = client as unknown as {
+    on?: (event: 'error', listener: (error: Error) => void) => unknown
+    off?: (event: 'error', listener: (error: Error) => void) => unknown
+  }
+  const onClientError = (): void => undefined
+  emitter.on?.('error', onClientError)
   const clearTenantContext = async (): Promise<void> => {
     await client.query('SELECT set_config($1, $2, false)', [
       CVG_TENANT_CONTEXT_SETTING,
@@ -101,10 +146,11 @@ export async function runCreationTransaction<T>(
       CVG_TENANT_CONTEXT_SETTING,
       tenantId
     ])
-    await client.query(
-      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-      [lockText(tenantId, route, keyDigest)]
-    )
+    // SPEC 0262 §4: principal/grant first (locks held until COMMIT), then the
+    // operation lock, then the resource and the receipt.
+    if (authorize) await authorize(client)
+    await hooks.afterAuthorize?.(client)
+    await beforeOperation?.(client)
     const result = await operation(client)
     await clearTenantContext()
     await hooks.beforeCommit?.(client)
@@ -211,7 +257,8 @@ export class PostgresApiCreation implements ApiCreationPort {
 
   async createTaskWithAudit(
     command: CreateTaskWithAuditCommand,
-    rawTenantId?: TenantId
+    rawTenantId?: TenantId,
+    options: ApiCreationOptions = {}
   ): Promise<ApiCreationResult<TaskRecord>> {
     const tenantId = this.requireTenant(rawTenantId)
     assertCreationKey(command.task.idempotencyKey, '/v1/tasks')
@@ -291,13 +338,15 @@ export class PostgresApiCreation implements ApiCreationPort {
         })
         return { outcome: 'created', resource: task } as const
       },
-      this.hooks
+      this.hooks,
+      options.authorize
     )
   }
 
   async createApprovalWithAudit(
     command: CreateApprovalWithAuditCommand,
-    rawTenantId?: TenantId
+    rawTenantId?: TenantId,
+    options: ApiCreationOptions = {}
   ): Promise<ApiCreationResult<ApprovalRequestRecord>> {
     const tenantId = this.requireTenant(rawTenantId)
     assertCreationKey(command.idempotencyKey)
@@ -366,7 +415,8 @@ export class PostgresApiCreation implements ApiCreationPort {
         })
         return { outcome: 'created', resource: approval } as const
       },
-      this.hooks
+      this.hooks,
+      options.authorize
     )
   }
 
@@ -525,5 +575,55 @@ export class PostgresApiCreation implements ApiCreationPort {
       approvalRequestId: receipt.approval_id
     })
     return mapApproval(row)
+  }
+}
+
+/**
+ * SPEC 0262 §4: task status transition and attendance approval decision in the
+ * same unit as the case authorization (client-owned primitives of
+ * {@link PostgresRuntimeRepository}; this class owns the transaction).
+ */
+export class PostgresAuthorizedWrites {
+  constructor(
+    private readonly pool: PostgresPoolLike,
+    private readonly hooks: CreationTransactionHooks = {}
+  ) {}
+
+  transitionTaskStatus(
+    command: Parameters<
+      PostgresRuntimeRepository['transitionTaskStatusWithAuditInTransaction']
+    >[0],
+    tenantId: TenantId,
+    options: ApiCreationOptions = {}
+  ): Promise<TaskRecord> {
+    return runTenantMutationTransaction(
+      this.pool,
+      tenantId,
+      (client) =>
+        new PostgresRuntimeRepository(client, {
+          tenantIsolation: true
+        }).transitionTaskStatusWithAuditInTransaction(command, tenantId),
+      this.hooks,
+      options.authorize
+    )
+  }
+
+  decideAttendanceApproval(
+    input: Parameters<
+      PostgresRuntimeRepository['decideApprovalWithAuditInTransaction']
+    >[0],
+    tenantId: TenantId,
+    options: ApiCreationOptions = {}
+  ): Promise<ApprovalRequestRecord> {
+    return runTenantMutationTransaction(
+      this.pool,
+      tenantId,
+      (client) =>
+        new PostgresRuntimeRepository(client, {
+          tenantIsolation: true
+        }).decideApprovalWithAuditInTransaction(input, tenantId),
+      this.hooks,
+      options.authorize
+    )
   }
 }

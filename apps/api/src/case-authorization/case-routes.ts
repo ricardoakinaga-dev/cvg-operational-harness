@@ -34,6 +34,8 @@ import {
   isCaseResourceId,
   type CaseAuthorityPort,
   type CaseKind,
+  type AuthorizedMutationUnit,
+  type CasePrincipalRecord,
   type CaseReadSnapshot,
   type CoreParentPlan
 } from '@cvg/persistence'
@@ -100,6 +102,27 @@ function notFound(): DomainError {
  * identifier; `case_principals` is the authority for active/role/version.
  * A role that differs from the session is refused, never merged or promoted.
  */
+/**
+ * SPEC 0262 §3: the one definition of "the principal is current" for a
+ * trusted identity. Shared by the case policy and the session binding.
+ */
+export function principalIsCurrent(
+  principal: CasePrincipalRecord | null,
+  identity: OperatorIdentity,
+  policy: CasePrincipalPolicy & { readonly authorityVersion: string }
+): principal is CasePrincipalRecord {
+  return !(
+    !principal ||
+    !principal.active ||
+    principal.role !== identity.role ||
+    principal.authorityVersion !== policy.authorityVersion ||
+    // §3.1: synthetic fixture principals exist only in the controlled test
+    // profile; a trusted deployment accepts only the verified adapter.
+    (process.env.NODE_ENV !== 'test' &&
+      principal.identitySource !== 'verified_adapter')
+  )
+}
+
 export async function resolveCaseReadScope(
   snapshot: CaseReadSnapshot,
   identity: OperatorIdentity,
@@ -114,14 +137,10 @@ export async function resolveCaseReadScope(
       )
     }
     if (
-      !principal ||
-      !principal.active ||
-      principal.role !== identity.role ||
-      principal.authorityVersion !== policy.authorityVersion ||
-      // §3.1: synthetic fixture principals exist only in the controlled test
-      // profile; a trusted deployment accepts only the verified adapter.
-      (process.env.NODE_ENV !== 'test' &&
-        principal.identitySource !== 'verified_adapter')
+      !principalIsCurrent(principal, identity, {
+        ...policy,
+        authorityVersion: policy.authorityVersion
+      })
     ) {
       throw new DomainError(
         'unauthorized',
@@ -418,21 +437,71 @@ export async function authorizeCaseMutation(
     await readExecutionForCaller(deps, identity, tenantId, target.executionId)
     return
   }
-  await deps.caseAuthority.readSnapshot(tenantId, async (snapshot) => {
-    const scope = await resolveCaseReadScope(
-      snapshot,
-      identity,
-      deps.principalPolicy
-    )
-    const located =
-      target.kind === 'task'
-        ? await snapshot.taskCase(target.taskId)
-        : target.kind === 'approval_request'
-          ? await snapshot.approvalRequestCase(target.approvalRequestId)
-          : await snapshot.coreSessionCase(target.sessionId)
-    if (!located || !(await canReadCase(snapshot, scope, located.caseId))) {
-      throw new CaseAuthorityError('case_not_found', CASE_NOT_FOUND_MESSAGE)
+  await deps.caseAuthority.readSnapshot(tenantId, (snapshot) =>
+    assertCaseMutationOnSnapshot(snapshot, deps, identity, target)
+  )
+}
+
+/**
+ * The case policy of a mutation, evaluated on a given snapshot. Shared by the
+ * pre-check above and by the authorization unit (SPEC 0262), so both apply the
+ * very same decision.
+ */
+export async function assertCaseMutationOnSnapshot(
+  snapshot: CaseReadSnapshot,
+  deps: CaseRouteDependencies,
+  identity: OperatorIdentity,
+  target: CaseMutationTarget,
+  tenantId?: TenantId
+): Promise<void> {
+  const scope = await resolveCaseReadScope(
+    snapshot,
+    identity,
+    deps.principalPolicy
+  )
+  if (target.kind === 'execution') {
+    // Same algorithm as the execution reader (SPEC 0262: on this snapshot).
+    if (!tenantId) throw notFound()
+    if (scope.kind === 'assigned') {
+      const link = await snapshot.executionCase(target.executionId)
+      if (!(await canReadCase(snapshot, scope, link?.caseId))) throw notFound()
     }
+    const record = await executionReader(deps, snapshot).get(
+      tenantId,
+      target.executionId
+    )
+    if (!record) throw notFound()
+    return
+  }
+  const located =
+    target.kind === 'task'
+      ? await snapshot.taskCase(target.taskId)
+      : target.kind === 'approval_request'
+        ? await snapshot.approvalRequestCase(target.approvalRequestId)
+        : await snapshot.coreSessionCase(target.sessionId)
+  if (!located || !(await canReadCase(snapshot, scope, located.caseId))) {
+    throw new CaseAuthorityError('case_not_found', CASE_NOT_FOUND_MESSAGE)
+  }
+}
+
+/**
+ * SPEC 0262 §4: the authorization decision and the write share one unit. The
+ * principal/grant are retained until the write resolves (PostgreSQL: locks to
+ * COMMIT; memory: the authority queue), so a revocation that wins the order
+ * denies the write and one that loses waits for it.
+ */
+export async function runAuthorizedCaseMutation<T>(
+  deps: CaseRouteDependencies,
+  identity: OperatorIdentity,
+  tenantId: TenantId,
+  target: CaseMutationTarget,
+  write: (unit: AuthorizedMutationUnit) => Promise<T>
+): Promise<T> {
+  return deps.caseAuthority.runAuthorizedMutation(tenantId, {
+    operatorId: identity.operatorId,
+    authorize: (snapshot) =>
+      assertCaseMutationOnSnapshot(snapshot, deps, identity, target, tenantId),
+    write
   })
 }
 

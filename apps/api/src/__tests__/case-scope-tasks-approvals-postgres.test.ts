@@ -1246,8 +1246,9 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
           h.supervisor,
           { decision: 'approved' }
         )
-        expect(decided.statusCode).toBe(200)
-        expect(decided.json().data.status).toBe('approved')
+        // SPEC 0262: the six mutations refuse the shared client for every role.
+        expect(decided.statusCode).toBe(503)
+        expect(decided.json().error.code).toBe('configuration_error')
       } finally {
         await server.close()
         await seedServer.close()
@@ -1408,14 +1409,16 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
           h.supervisor,
           { decision: 'rejected' }
         )
-        expect(decided.statusCode).toBe(200)
-        expect(decided.json().data.status).toBe('rejected')
+        // SPEC 0262: the six mutations refuse the shared client for every role.
+        expect(decided.statusCode).toBe(503)
+        expect(decided.json().error.code).toBe('configuration_error')
         const runtimeDecision = await decideRuntime(
           server,
           execution,
           h.supervisor
         )
-        expect(runtimeDecision.statusCode).toBe(202)
+        expect(runtimeDecision.statusCode).toBe(503)
+        expect(runtimeDecision.json().error.code).toBe('configuration_error')
         expect(runtimeDecision.headers['cache-control']).toBe('no-store')
       } finally {
         await server.close()
