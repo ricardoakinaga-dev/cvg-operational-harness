@@ -22,6 +22,9 @@ ALTER TABLE session_streams
 -- (oid(session_streams) - 2^31, writer_lock_id): never an OID of events, never a hash of
 -- tenant/session. It is separate from the bigint space used by the migration runner.
 
+-- Every guard pins search_path as pg_catalog, <schema>, pg_temp: with pg_temp absent PostgreSQL
+-- would search it first and a serving role (TEMP by default) could shadow the real tables.
+
 -- A stream created by the legacy path gets an honest header of its creation instant,
 -- unseeded and cut 0. Existing streams stay NULL (migration-required) until adopted.
 CREATE FUNCTION session_stream_default_header() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -45,7 +48,7 @@ DECLARE
   lock_id integer;
   expected bigint;
 BEGIN
-  SELECT writer_lock_id, next_sequence INTO lock_id, expected
+  SELECT writer_lock_id INTO lock_id
     FROM session_streams WHERE tenant_id = NEW.tenant_id AND session_id = NEW.session_id;
   IF lock_id IS NULL THEN
     RAISE EXCEPTION 'session stream is not open' USING ERRCODE = '23503';
@@ -53,6 +56,9 @@ BEGIN
   IF NOT pg_try_advisory_xact_lock((to_regclass('session_streams')::oid::bigint - 2147483648)::integer, lock_id) THEN
     RAISE EXCEPTION 'session is owned by another writer' USING ERRCODE = '55P03';
   END IF;
+  -- Read the cursor only after the lock is held.
+  SELECT next_sequence INTO expected
+    FROM session_streams WHERE tenant_id = NEW.tenant_id AND session_id = NEW.session_id;
   IF NEW.sequence IS DISTINCT FROM expected THEN
     RAISE EXCEPTION 'session event sequence differs from the stream cursor' USING ERRCODE = '23514';
   END IF;
@@ -131,7 +137,7 @@ BEGIN
   FOREACH fn IN ARRAY ARRAY[
     'session_stream_default_header', 'guard_session_event_insert', 'guard_session_stream_update',
     'reject_session_stream_removal', 'check_session_cursor_at_commit'] LOOP
-    EXECUTE format('ALTER FUNCTION %I() SET search_path = %I, pg_catalog', fn, current_schema());
+    EXECUTE format('ALTER FUNCTION %I() SET search_path = pg_catalog, %I, pg_temp', fn, current_schema());
     EXECUTE format('REVOKE ALL ON FUNCTION %I() FROM PUBLIC', fn);
   END LOOP;
 END $$;

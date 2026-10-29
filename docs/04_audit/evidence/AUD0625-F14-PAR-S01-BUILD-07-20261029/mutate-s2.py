@@ -30,7 +30,9 @@ M = [
  ('commit-check-body', "IF cursor_value IS DISTINCT FROM head + 1 THEN", "IF false THEN"),
  ('requires-0028', "IF to_regclass('session_streams') IS NULL OR to_regclass('session_events') IS NULL THEN", "IF false THEN"),
  ('revoke-public', "EXECUTE format('REVOKE ALL ON FUNCTION %I() FROM PUBLIC', fn);", "NULL;"),
- ('search-path', "EXECUTE format('ALTER FUNCTION %I() SET search_path = %I, pg_catalog', fn, current_schema());", "NULL;"),
+ ('search-path', "EXECUTE format('ALTER FUNCTION %I() SET search_path = pg_catalog, %I, pg_temp', fn, current_schema());", "NULL;"),
+ ('search-path-no-pg-temp', "SET search_path = pg_catalog, %I, pg_temp'", "SET search_path = %I, pg_catalog'"),
+ ('search-path-temp-first', "SET search_path = pg_catalog, %I, pg_temp'", "SET search_path = pg_temp, pg_catalog, %I'"),
 ]
 src = open(F).read()
 env = dict(os.environ)

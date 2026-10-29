@@ -788,7 +788,88 @@ describe.skipIf(!url)(
             [role, schema, fn]
           )
           expect(r.rows[0].can).toBe(false)
-          expect(String(r.rows[0].proconfig)).toContain(`search_path=${schema}`)
+          expect(r.rows[0].proconfig).toEqual([
+            `search_path=pg_catalog, ${schema}, pg_temp`
+          ])
+        }
+      })
+    })
+
+    describe('temporary-table shadowing (DF review P1)', () => {
+      const shadowStreams = `CREATE TEMP TABLE session_streams (tenant_id text, session_id text, writer_lock_id integer, next_sequence bigint)`
+      const shadowEvents = `CREATE TEMP TABLE session_events (tenant_id text, session_id text, sequence bigint)`
+      it('a temp session_streams cannot hide the real stream from the insert guard or the commit check', async () => {
+        await legacy().openSession({
+          tenantId: tenantA,
+          sessionId: 'shadow1',
+          formatVersion: 1
+        })
+        const [k1, k2] = await lockKey('shadow1')
+        const owner = await ownerConnection()
+        const attacker = await serving.connect()
+        try {
+          await owner.query('SELECT pg_advisory_lock($1,$2)', [k1, k2])
+          await attacker.query('BEGIN')
+          await attacker.query("SELECT set_config('cvg.tenant_id',$1,true)", [
+            tenantA
+          ])
+          await attacker.query(shadowStreams)
+          await attacker.query(
+            `INSERT INTO pg_temp.session_streams VALUES ($1,'shadow1',2000000000,1)`,
+            [tenantA]
+          )
+          await expect(
+            attacker.query(...insertEvent('shadow1', 1, 's1'))
+          ).rejects.toMatchObject({ code: '55P03' })
+          await attacker.query('ROLLBACK')
+          expect(await count('shadow1')).toBe(0)
+          expect(await cursor('shadow1')).toBe(1)
+        } finally {
+          await owner.query('SELECT pg_advisory_unlock_all()')
+          await owner.end()
+          attacker.release()
+        }
+      })
+      it('a temp session_events cannot fake the head for the cursor guard or the deferred check', async () => {
+        await legacy().openSession({
+          tenantId: tenantA,
+          sessionId: 'shadow2',
+          formatVersion: 1
+        })
+        const attacker = await serving.connect()
+        try {
+          await attacker.query('BEGIN')
+          await attacker.query("SELECT set_config('cvg.tenant_id',$1,true)", [
+            tenantA
+          ])
+          await attacker.query(shadowEvents)
+          await attacker.query(
+            `INSERT INTO pg_temp.session_events VALUES ($1,'shadow2',1)`,
+            [tenantA]
+          )
+          let failed: unknown
+          try {
+            await attacker.query(...advance('shadow2', 2))
+            await attacker.query('COMMIT')
+          } catch (error) {
+            failed = error
+            await attacker.query('ROLLBACK')
+          }
+          expect(failed).toMatchObject({ code: '23514' })
+          expect(await cursor('shadow2')).toBe(1)
+        } finally {
+          attacker.release()
+        }
+      })
+      it('the temp table of one session does not survive into the pool borrower that follows', async () => {
+        const c = await serving.connect()
+        try {
+          const r = await c.query(
+            `SELECT count(*) FROM pg_class WHERE relname='session_streams' AND relpersistence='t'`
+          )
+          expect(r.rows[0].count).toBe('0')
+        } finally {
+          c.release()
         }
       })
     })
