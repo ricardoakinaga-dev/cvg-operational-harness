@@ -345,3 +345,70 @@ describe('F13 token: binds every part of the proposed content', () => {
     expect(tokenOf(env)).toMatch(/-r3-[0-9a-f]{8}$/)
   })
 })
+
+describe('F13 receipt: what a failed presentation records', () => {
+  it('stops at the first failed part and marks the rest not sent', async () => {
+    let calls = 0
+    const env = setup({
+      organize: async () => ({
+        pacientes: Array.from({ length: 20 }, (_, index) => ({
+          nome: `Paciente${index + 1}`,
+          evolucao: 'c'.repeat(4000),
+          exames_pedidos: [],
+          condutas: []
+        })),
+        pendencias: [],
+        duvidas: []
+      }),
+      onSend: () => {
+        calls += 1
+        if (calls === 2) return unavailable()
+      }
+    })
+    await env.deliver(wahaPayload('m1', ANA, 'Vinte pacientes sintéticos longos'))
+    expect(calls).toBe(2) // nothing is sent after the failure
+    const id = env.store.lastActiveNote(ANA)!.id
+    const last = env.store.previewState(id)!.last!
+    expect(last.parts.length).toBeGreaterThanOrEqual(3)
+    expect(last.parts.map((part) => part.outcome)).toEqual([
+      'accepted',
+      'uncertain',
+      ...last.parts.slice(2).map(() => 'not_sent')
+    ])
+    expect(last.truncated).toBe(false)
+    expect(
+      last.parts.every((part) => /^[0-9a-f]{64}$/.test(part.partSha256))
+    ).toBe(true)
+  })
+
+  it('does not present a draft twice while its first presentation is in flight', async () => {
+    let calls = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const env = setup({
+      onSend: async () => {
+        calls += 1
+        await gate
+      }
+    })
+    const message = env.waha.client.parseWebhook(
+      wahaPayload('m1', ANA, 'Thor leito 3'),
+      env.now().toISOString()
+    )
+    env.assistant.receive(message!)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(calls).toBe(1)
+    await env.assistant.tick() // the draft has no receipt yet
+    expect(calls).toBe(1)
+    release()
+    await env.assistant.idle()
+    expect(calls).toBe(1)
+    const id = env.store.lastActiveNote(ANA)!.id
+    expect(env.store.previewState(id)).toMatchObject({
+      attempts: 1,
+      complete: true
+    })
+  })
+})
