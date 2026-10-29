@@ -1073,15 +1073,21 @@ export function App({
         sessionId: selectedSessionId,
         idempotencyKey: operation.key
       })
+      let registryWarning = false
       try {
         resolveLogicalOperation(operationScope, created.id)
       } catch {
-        // The request was accepted; a registry failure only affects a next one.
+        // The request was accepted. The operation stays pending with the same
+        // key, so the next click replays this approval (no duplicate) instead
+        // of starting a new one: tell the operator (SPEC 0257 follow-up O1).
+        registryWarning = true
       }
       await refreshApprovals(scope)
       if (!isCurrentViewScope(scope)) return
       setAuditEvidenceExportMessage(
-        'Solicitacao de export registrada para aprovacao humana.'
+        registryWarning
+          ? 'Solicitacao de export registrada para aprovacao humana. Aviso: o registro nao foi guardado neste navegador; um novo clique reenvia a mesma solicitacao, sem criar outra.'
+          : 'Solicitacao de export registrada para aprovacao humana.'
       )
     } catch {
       if (!isCurrentViewScope(scope)) return
