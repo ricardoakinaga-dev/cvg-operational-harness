@@ -1,3 +1,11 @@
+# Índice corrente do programa AUD0625 — 29/10/2026 (Claude Code, sessão 07)
+
+- `status`: ponto de entrada conciliado; nenhum item concede produção, que continua `NO_GO`. O detalhe, com os achados F01–F20, estado e SHA de cada um, está em [aud0625_current_index.md](08_runtime/aud0625_current_index.md). Os blocos abaixo continuam sendo o histórico e não foram reescritos.
+- Na `main`: #29 (`8429019b`), #31 (`bee31e75`) e #32 (`aa6afc49`).
+- Em PR: #33, a onda 2 (`claude/aud0625-wave2`, cabeça `c4a474c6`), com CI em curso, e o #30 do Codex (kernel), fora da onda. Sem PR ainda: a onda 3 (`claude/aud0625-wave3`), que abre depois do #33.
+- Revisado, aceito e pendente de integração: 0262 inteira (fatias 1–5 e o P2/P3 `c81d68a9f`), F13 (0283), 0282, 0281, 0271, O1/O2 do console, F18 fatia 1 e a decisão "não fazer" do F08c, todos na onda 3. Aguardam revisão: F18 fatia 2 (`3dc36726d`, Codex).
+- `next_action` por responsável: Claude DF, merge do #33; Claude D9, abrir a onda 3 e revisar a fatia 2 do F18; Codex, F18 fatia 2, F05 global/K08/X01, qualificação da imagem Debian 13 e F19; Ricardo e hospital, servidor (U10), IdP (U09) e piloto (U23).
+
 # Terceira onda AUD0625 — 29/10/2026 (Claude Code, sessão D9)
 
 - `status`: integrada localmente; nenhuma frente concede produção.
