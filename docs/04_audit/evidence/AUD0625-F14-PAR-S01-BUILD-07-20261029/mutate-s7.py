@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Mutation check for PAR-S01 slice 7 (session-adoption.ts). Commit first; each mutant is reverted by git checkout."""
-import json, os, re, subprocess
+import json, os, re, subprocess, sys
 F = 'packages/persistence/src/session-adoption.ts'
 TESTS = ['packages/persistence/src/__tests__/par-s01-session-adoption-postgres.test.ts']
 M = [
@@ -32,10 +32,17 @@ M = [
  ('verify-metadata', "else if (!matches(state, p)) problems.push", "else if (false) problems.push"),
  ('lock-timeout', "SET LOCAL lock_timeout", "SET LOCAL application_name"),
 ]
-JUSTIFIED = {}
+JUSTIFIED = {
+ 'cursor-cas': 'equivalent in outcome: the UPDATE repeats the cursor CAS (next_sequence=$5) under the same FOR UPDATE row lock, so a stale cursor still ends as the same conflict',
+ 'update-null-guard': 'equivalent: the row is locked FOR UPDATE and header_json was read as NULL in the same transaction, so the guard in the UPDATE cannot differ',
+ 'update-rowcount': 'equivalent: under the FOR UPDATE row lock with both CAS conditions already checked, the UPDATE always matches exactly one row',
+ 'lock-timeout': 'equivalent: statement_timeout is set to the same 5s bound right after and ends the wait identically (the lock-budget test proves the bound)',
+}
 norm = lambda x: re.sub(r'\s+', ' ', x)
 res = []
+ONLY = sys.argv[1:]
 for name, a, b in M:
+    if ONLY and name not in ONLY: continue
     src = open(F).read()
     if a in src:
         mutated = src.replace(a, b, 1)
