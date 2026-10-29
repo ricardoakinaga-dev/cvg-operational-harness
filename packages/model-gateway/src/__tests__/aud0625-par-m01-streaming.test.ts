@@ -493,211 +493,401 @@ describe('PAR-M01 §5 — bound transport in stream mode: terminal behavior', ()
 // Providers: OpenAI-compatible SSE and Ollama NDJSON.
 // ---------------------------------------------------------------------------
 describe('PAR-M01 §6 — OpenAI-compatible SSE reader', () => {
-  it.fails(
-    'asks for a stream with usage and assembles deltas, including a multibyte split',
-    async () => {
-      const first = Buffer.from(sseData(openAiChunk('Olá, mundo')), 'utf8')
-      const cut = first.indexOf(0xc3) + 1
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(first.subarray(0, cut))
-        setTimeout(() => {
-          response.write(first.subarray(cut))
-          response.write(sseData(openAiChunk('!', 'stop')))
-          response.write(
-            sseData({
-              choices: [],
-              usage: { prompt_tokens: 7, completion_tokens: 3 }
-            })
-          )
-          response.end('data: [DONE]\n\n')
-        }, 30)
-      })
-      const events = await collect(
-        streamOf(openAiProvider(server.url))(providerRequest())
-      )
-      expect(server.bodies[0]).toMatchObject({
-        stream: true,
-        stream_options: { include_usage: true }
-      })
-      expect(textOf(events)).toBe('Olá, mundo!')
-      expect(events.filter((e) => e.type === 'finish')).toEqual([
-        { type: 'finish', reason: 'stop' }
-      ])
-      expect(events.find((e) => e.type === 'usage')).toEqual({
-        type: 'usage',
-        usage: { inputTokens: 7, outputTokens: 3 }
-      })
-    }
-  )
-
-  it.fails(
-    'accepts CRLF, comment lines and multi-line data fields',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(': keep-alive\r\n\r\n')
+  it('asks for a stream with usage and assembles deltas, including a multibyte split', async () => {
+    const first = Buffer.from(sseData(openAiChunk('Olá, mundo')), 'utf8')
+    const cut = first.indexOf(0xc3) + 1
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(first.subarray(0, cut))
+      setTimeout(() => {
+        response.write(first.subarray(cut))
+        response.write(sseData(openAiChunk('!', 'stop')))
         response.write(
-          'data: {"choices":[{"delta":\r\ndata: {"content":"ok"},"finish_reason":null}]}\r\n\r\n'
+          sseData({
+            choices: [],
+            usage: { prompt_tokens: 7, completion_tokens: 3 }
+          })
         )
-        response.write(sseData(openAiChunk('', 'stop')))
         response.end('data: [DONE]\n\n')
-      })
-      const events = await collect(
-        streamOf(openAiProvider(server.url))(providerRequest())
-      )
-      expect(textOf(events)).toBe('ok')
-    }
-  )
+      }, 30)
+    })
+    const events = await collect(
+      streamOf(openAiProvider(server.url))(providerRequest())
+    )
+    expect(server.bodies[0]).toMatchObject({
+      stream: true,
+      stream_options: { include_usage: true }
+    })
+    expect(textOf(events)).toBe('Olá, mundo!')
+    expect(events.filter((e) => e.type === 'finish')).toEqual([
+      { type: 'finish', reason: 'stop' }
+    ])
+    expect(events.find((e) => e.type === 'usage')).toEqual({
+      type: 'usage',
+      usage: { inputTokens: 7, outputTokens: 3 }
+    })
+  })
 
-  it.fails(
-    'never emits a half frame as a delta when the connection is cut',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(sseData(openAiChunk('inteiro')))
-        response.write('data: {"choices":[{"delta":{"content":"meio')
-        setTimeout(() => response.destroy(), 20)
-      })
-      const seen: string[] = []
-      const run = (async () => {
-        for await (const event of streamOf(openAiProvider(server.url))(
+  it('accepts CRLF, comment lines and multi-line data fields', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(': keep-alive\r\n\r\n')
+      response.write(
+        'data: {"choices":[{"delta":\r\ndata: {"content":"ok"},"finish_reason":null}]}\r\n\r\n'
+      )
+      response.write(sseData(openAiChunk('', 'stop')))
+      response.end('data: [DONE]\n\n')
+    })
+    const events = await collect(
+      streamOf(openAiProvider(server.url))(providerRequest())
+    )
+    expect(textOf(events)).toBe('ok')
+  })
+
+  it('never emits a half frame as a delta when the connection is cut', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('inteiro')))
+      response.write('data: {"choices":[{"delta":{"content":"meio')
+      setTimeout(() => response.destroy(), 20)
+    })
+    const seen: string[] = []
+    const run = (async () => {
+      for await (const event of streamOf(openAiProvider(server.url))(
+        providerRequest()
+      )) {
+        if (event.type === 'delta') seen.push(event.text)
+      }
+    })()
+    await expect(run).rejects.toMatchObject({ kind: 'connection' })
+    expect(seen.join('')).not.toContain('meio')
+  })
+
+  it('ends without a finish event as a connection failure, not as a result', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end(sseData(openAiChunk('sem fim')))
+    })
+    await expect(
+      collect(streamOf(openAiProvider(server.url))(providerRequest()))
+    ).rejects.toMatchObject({ kind: 'connection' })
+  })
+
+  it('refuses an event that is not valid JSON as malformed_response', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end('data: {not json}\n\n')
+    })
+    await expect(
+      collect(streamOf(openAiProvider(server.url))(providerRequest()))
+    ).rejects.toMatchObject({ kind: 'malformed_response' })
+  })
+
+  it('refuses anything after the [DONE] marker as malformed_response', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('a', 'stop')))
+      response.write('data: [DONE]\n\n')
+      response.end(sseData({ choices: [] }))
+    })
+    await expect(
+      collect(streamOf(openAiProvider(server.url))(providerRequest()))
+    ).rejects.toMatchObject({ kind: 'malformed_response' })
+  })
+
+  it('stops at the event ceiling with response_too_large and closes the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      const timer = setInterval(() => {
+        if (response.destroyed) return clearInterval(timer)
+        response.write(sseData(openAiChunk('.')))
+      }, 1)
+      response.on('close', () => clearInterval(timer))
+    })
+    await expect(
+      collect(
+        streamOf(
+          openAiProvider(server.url, {
+            maxStreamEvents: 32,
+            maxResponseBytes: 64 * 1024 * 1024
+          })
+        )(providerRequest())
+      )
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('stops at the byte ceiling with response_too_large and closes the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      const timer = setInterval(() => {
+        if (response.destroyed) return clearInterval(timer)
+        response.write(sseData(openAiChunk('y'.repeat(512))))
+      }, 1)
+      response.on('close', () => clearInterval(timer))
+    })
+    await expect(
+      collect(
+        streamOf(openAiProvider(server.url, { maxResponseBytes: 4_096 }))(
           providerRequest()
-        )) {
-          if (event.type === 'delta') seen.push(event.text)
-        }
-      })()
-      await expect(run).rejects.toMatchObject({ kind: 'connection' })
-      expect(seen.join('')).not.toContain('meio')
-    }
-  )
-
-  it.fails(
-    'ends without a finish event as a connection failure, not as a result',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.end(sseData(openAiChunk('sem fim')))
-      })
-      await expect(
-        collect(streamOf(openAiProvider(server.url))(providerRequest()))
-      ).rejects.toMatchObject({ kind: 'connection' })
-    }
-  )
-
-  it.fails(
-    'refuses an event that is not valid JSON as malformed_response',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.end('data: {not json}\n\n')
-      })
-      await expect(
-        collect(streamOf(openAiProvider(server.url))(providerRequest()))
-      ).rejects.toMatchObject({ kind: 'malformed_response' })
-    }
-  )
-
-  it.fails(
-    'refuses anything after the [DONE] marker as malformed_response',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(sseData(openAiChunk('a', 'stop')))
-        response.write('data: [DONE]\n\n')
-        response.end(sseData(openAiChunk('tarde')))
-      })
-      await expect(
-        collect(streamOf(openAiProvider(server.url))(providerRequest()))
-      ).rejects.toMatchObject({ kind: 'malformed_response' })
-    }
-  )
-
-  it.fails(
-    'stops at the event ceiling with response_too_large and closes the socket',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        const timer = setInterval(() => {
-          if (response.destroyed) return clearInterval(timer)
-          response.write(sseData(openAiChunk('.')))
-        }, 1)
-        response.on('close', () => clearInterval(timer))
-      })
-      await expect(
-        collect(
-          streamOf(openAiProvider(server.url, { maxStreamEvents: 32 }))(
-            providerRequest()
-          )
-        )
-      ).rejects.toMatchObject({ kind: 'response_too_large' })
-      await sleep(100)
-      expect(server.closedEarly()).toBe(true)
-    }
-  )
-
-  it.fails(
-    'stops at the byte ceiling with response_too_large and closes the socket',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        const timer = setInterval(() => {
-          if (response.destroyed) return clearInterval(timer)
-          response.write(sseData(openAiChunk('y'.repeat(512))))
-        }, 1)
-        response.on('close', () => clearInterval(timer))
-      })
-      await expect(
-        collect(
-          streamOf(openAiProvider(server.url, { maxResponseBytes: 4_096 }))(
-            providerRequest()
-          )
-        )
-      ).rejects.toMatchObject({ kind: 'response_too_large' })
-      await sleep(100)
-      expect(server.closedEarly()).toBe(true)
-    }
-  )
-
-  it.fails(
-    'times out on idle well before the whole-call timeout',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(sseData(openAiChunk('parou')))
-      })
-      const started = Date.now()
-      await expect(
-        collect(
-          streamOf(openAiProvider(server.url, { streamIdleTimeoutMs: 150 }))(
-            providerRequest({ timeoutMs: 5_000 })
-          )
-        )
-      ).rejects.toMatchObject({ kind: 'timeout' })
-      expect(Date.now() - started).toBeLessThan(2_000)
-    },
-    10_000
-  )
-
-  it.fails(
-    'a caller abort mid-stream ends as cancelled and closes the socket',
-    async () => {
-      const server = await startServer((response) => {
-        response.writeHead(200, SSE_HEADERS)
-        response.write(sseData(openAiChunk('comecou')))
-      })
-      const controller = new AbortController()
-      const run = collect(
-        streamOf(openAiProvider(server.url))(
-          providerRequest({ signal: controller.signal })
         )
       )
-      setTimeout(() => controller.abort(), 60)
-      await expect(run).rejects.toMatchObject({ kind: 'cancelled' })
-      await sleep(100)
-      expect(server.closedEarly()).toBe(true)
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('times out on idle well before the whole-call timeout', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('parou')))
+    })
+    const started = Date.now()
+    await expect(
+      collect(
+        streamOf(openAiProvider(server.url, { streamIdleTimeoutMs: 150 }))(
+          providerRequest({ timeoutMs: 5_000 })
+        )
+      )
+    ).rejects.toMatchObject({ kind: 'timeout' })
+    expect(Date.now() - started).toBeLessThan(2_000)
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  }, 10_000)
+
+  it('a caller abort mid-stream ends as cancelled and closes the socket', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('comecou')))
+    })
+    const controller = new AbortController()
+    const run = collect(
+      streamOf(openAiProvider(server.url))(
+        providerRequest({ signal: controller.signal })
+      )
+    )
+    setTimeout(() => controller.abort(), 60)
+    await expect(run).rejects.toMatchObject({ kind: 'cancelled' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+})
+
+describe('PAR-M01 §6.1 — SSE reader edge cases', () => {
+  const run = (url: string, extra: Record<string, unknown> = {}) =>
+    collect(streamOf(openAiProvider(url, extra))(providerRequest()))
+
+  it('refuses an answer that is not an event stream', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end('{"choices":[]}')
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'malformed_response'
+    })
+  })
+
+  it('keeps the status classification before any event (429 is rate_limited)', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(429, { 'content-type': 'application/json' })
+      response.end('{}')
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'rate_limited'
+    })
+  })
+
+  it('rejects invalid ceilings at construction', () => {
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      for (const name of [
+        'maxStreamEvents',
+        'maxStreamEventBytes',
+        'streamIdleTimeoutMs'
+      ]) {
+        expect(() =>
+          openAiProvider('http://127.0.0.1:1', { [name]: bad })
+        ).toThrowError(expect.objectContaining({ kind: 'invalid_request' }))
+      }
     }
-  )
+  })
+
+  it('accepts a finish reason without [DONE] when the body ends cleanly', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('ok', 'length')))
+      response.end()
+    })
+    const events = await run(server.url)
+    expect(textOf(events)).toBe('ok')
+    expect(events.at(-1)).toEqual({ type: 'finish', reason: 'length' })
+    expect(events.some((e) => e.type === 'usage')).toBe(false)
+  })
+
+  it('refuses [DONE] without any finish reason', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end(`${sseData(openAiChunk('x'))}data: [DONE]\n\n`)
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'malformed_response'
+    })
+  })
+
+  it('refuses text after the finish reason', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('a', 'stop')))
+      response.end(sseData(openAiChunk('b')))
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'malformed_response'
+    })
+  })
+
+  it('refuses usage reported twice', async () => {
+    const usage = sseData({
+      choices: [],
+      usage: { prompt_tokens: 1, completion_tokens: 1 }
+    })
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end(`${sseData(openAiChunk('a', 'stop'))}${usage}${usage}`)
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'malformed_response'
+    })
+  })
+
+  it('reassembles CRLF split between two chunks and bare CR line ends', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      const frame = `data: ${JSON.stringify(openAiChunk('cr'))}`
+      response.write(`${frame}\r`)
+      setTimeout(() => {
+        response.write(`\n\r\n`)
+        response.write(`data: ${JSON.stringify(openAiChunk('', 'stop'))}\r\r`)
+        response.end('data: [DONE]\r\n\r\n')
+      }, 30)
+    })
+    expect(textOf(await run(server.url))).toBe('cr')
+  })
+
+  it('a frame without its blank line at a clean end is never interpreted', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('inteiro')))
+      response.end(`data: ${JSON.stringify(openAiChunk('meio', 'stop'))}`)
+    })
+    const seen: string[] = []
+    const run2 = (async () => {
+      for await (const event of streamOf(openAiProvider(server.url))(
+        providerRequest()
+      )) {
+        if (event.type === 'delta') seen.push(event.text)
+      }
+    })()
+    await expect(run2).rejects.toMatchObject({ kind: 'connection' })
+    expect(seen.join('')).not.toContain('meio')
+  })
+
+  it('joins data lines with a newline, so a value split across lines is not glued', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.end(
+        'data: {"choices":[],"usage":{"prompt_tokens":1\ndata: 2,"completion_tokens":3}}\n\n'
+      )
+    })
+    await expect(run(server.url)).rejects.toMatchObject({
+      kind: 'malformed_response'
+    })
+  })
+
+  it('does not split a JSON event at a CR whose LF arrives in the next chunk', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write('data: {"choices":[{"delta":\r')
+      setTimeout(() => {
+        response.write(
+          '\ndata: {"content":"zz"},"finish_reason":"stop"}]}\r\n\r\n'
+        )
+        response.end()
+      }, 30)
+    })
+    expect(textOf(await run(server.url))).toBe('zz')
+  })
+
+  it('a usage object with one counter is unknown usage, not zero', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write(sseData(openAiChunk('u', 'stop')))
+      response.end(sseData({ choices: [], usage: { prompt_tokens: 5 } }))
+    })
+    const events = await run(server.url)
+    expect(events.some((e) => e.type === 'usage')).toBe(false)
+  })
+
+  it('an abort ends the read even when the injected fetch ignores the signal', async () => {
+    let cancelled = false
+    const hung = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(sseData(openAiChunk('hang')))
+        )
+      },
+      cancel() {
+        cancelled = true
+      }
+    })
+    const provider = new OpenAICompatibleProvider({
+      id: 'stream-injected',
+      baseUrl: 'http://127.0.0.1:9',
+      model: 'm',
+      location: 'local',
+      allowHttp: true,
+      allowPrivateNetworks: true,
+      fetchImpl: async () =>
+        new Response(hung, { status: 200, headers: SSE_HEADERS })
+    })
+    const controller = new AbortController()
+    const running = collect(
+      streamOf(provider)(providerRequest({ signal: controller.signal }))
+    )
+    setTimeout(() => controller.abort(), 60)
+    await expect(running).rejects.toMatchObject({ kind: 'cancelled' })
+    expect(cancelled).toBe(true)
+  })
+
+  it('stops at the single-event size ceiling', async () => {
+    const server = await startServer((response) => {
+      response.writeHead(200, SSE_HEADERS)
+      response.write('data: ')
+      const timer = setInterval(() => {
+        if (response.destroyed) return clearInterval(timer)
+        response.write('z'.repeat(256))
+      }, 1)
+      response.on('close', () => clearInterval(timer))
+    })
+    await expect(
+      run(server.url, {
+        maxStreamEventBytes: 2_048,
+        maxResponseBytes: 64 * 1024 * 1024
+      })
+    ).rejects.toMatchObject({ kind: 'response_too_large' })
+    await sleep(100)
+    expect(server.closedEarly()).toBe(true)
+  })
+
+  it('sends the bearer key and stream request headers', async () => {
+    let auth: string | undefined
+    const server = await startServer((response, request) => {
+      auth = request.headers.authorization
+      response.writeHead(200, SSE_HEADERS)
+      response.end(sseData(openAiChunk('k', 'stop')))
+    })
+    await run(server.url, { apiKey: 'synthetic-key' })
+    expect(auth).toBe('Bearer synthetic-key')
+  })
 })
 
 describe('PAR-M01 §6 — Ollama NDJSON reader', () => {
