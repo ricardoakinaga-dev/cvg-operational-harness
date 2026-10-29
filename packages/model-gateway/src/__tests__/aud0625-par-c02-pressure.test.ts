@@ -6,7 +6,8 @@ import type {
   ProviderRequest,
   ProviderResult
 } from '../contracts.ts'
-import { ModelProviderError } from '../errors.ts'
+import { InMemoryCostBudgetStore } from '../budget.ts'
+import { ModelGatewayError, ModelProviderError } from '../errors.ts'
 import { ModelGateway } from '../gateway.ts'
 import { PromptRegistry } from '../prompt-registry.ts'
 import type { ProviderStreamEvent } from '../stream.ts'
@@ -187,75 +188,261 @@ describe('PAR-C02 controls (pass before and after the BUILD)', () => {
   })
 })
 
-describe('PAR-C02 targets (RED in phase 1)', () => {
-  it.fails(
-    'a retried attempt that failed after output has its own model.call.failed, before the retry is scheduled',
-    async () => {
-      const w = world([cutAfterOutput, ok], { maxRetries: 1 })
-      const result = await w.gateway.generate(request())
-      expect(result.attempts).toBe(2)
-      const failed = failedEvents(w.events)
-      expect(failed).toHaveLength(1)
-      expect(failed[0]).toMatchObject({
-        attempt: 1,
-        detail: 'usage_unreported'
-      })
-      expect(failed[0]?.inputTokens).toBeGreaterThan(0)
-      expect(w.order.indexOf('model.call.failed:1')).toBeLessThan(
-        w.order.indexOf('model.retry.scheduled:2')
-      )
-    }
-  )
+describe('PAR-C02 targets (RED in phase 1, GREEN after the BUILD)', () => {
+  it('a retried attempt that failed after output has its own model.call.failed, before the retry is scheduled', async () => {
+    const w = world([cutAfterOutput, ok], { maxRetries: 1 })
+    const result = await w.gateway.generate(request())
+    expect(result.attempts).toBe(2)
+    const failed = failedEvents(w.events)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({
+      attempt: 1,
+      detail: 'usage_unreported'
+    })
+    expect(failed[0]?.inputTokens).toBeGreaterThan(0)
+    expect(w.order.indexOf('model.call.failed:1')).toBeLessThan(
+      w.order.indexOf('model.retry.scheduled:2')
+    )
+  })
 
-  it.fails(
-    'the log alone reconstructs the meter, also when an attempt failed and was retried',
-    async () => {
-      const w = world([cutAfterOutput, ok], { maxRetries: 1 })
-      await w.gateway.generate(request())
+  it('the log alone reconstructs the meter, also when an attempt failed and was retried', async () => {
+    const w = world([cutAfterOutput, ok], { maxRetries: 1 })
+    await w.gateway.generate(request())
+    const log = reconstruct(w.events)
+    const snap = w.meter.snapshot()
+    expect(w.meter.unreportedRequests).toBe(1)
+    expect(log.unreportedRequests).toBe(w.meter.unreportedRequests)
+    expect(log.reportedRequests).toBe(snap.requests)
+    expect(log.inputTokens).toBe(snap.inputTokens)
+    expect(log.outputTokens).toBe(snap.outputTokens)
+  })
+
+  it('the request pressure is on model.call.started, before the provider is called', async () => {
+    const w = world([ok])
+    await w.gateway.generate(request())
+    const started = w.events.find((e) => e.type === 'model.call.started') as
+      | (ModelGatewayEvent & { projectedInputTokens?: number })
+      | undefined
+    expect(started?.projectedInputTokens).toBeGreaterThan(0)
+    expect(Number.isSafeInteger(started?.projectedInputTokens)).toBe(true)
+    expect(w.order.indexOf('model.call.started:1')).toBeLessThan(
+      w.order.indexOf('provider:1')
+    )
+  })
+
+  it('a request whose projection overflows the declared context window never reaches the provider and is not charged', async () => {
+    const w = world([ok], { contextWindow: 64 })
+    await expect(
+      w.gateway.generate(request('x'.repeat(4_000)))
+    ).rejects.toBeDefined()
+    expect(w.calls()).toBe(0)
+    expect(w.meter.snapshot().requests).toBe(0)
+    expect(w.meter.unreportedRequests).toBe(0)
+    expect(
+      w.events.some(
+        (e) =>
+          (e.type === 'model.call.completed' ||
+            e.type === 'model.call.failed') &&
+          e.inputTokens !== undefined
+      )
+    ).toBe(false)
+  })
+})
+
+const failBeforeOutput: Attempt = async function* () {
+  yield* []
+  throw new ModelProviderError('fake', 'connection', 'refused')
+}
+
+function projectedOf(events: ModelGatewayEvent[]): number[] {
+  return events
+    .filter((e) => e.type === 'model.call.started')
+    .map((e) => e.projectedInputTokens as number)
+}
+
+describe('PAR-C02 BUILD (SPEC 0285)', () => {
+  it('every started attempt ends in exactly one terminal event, for any mix of failures', async () => {
+    for (const plan of [
+      [failBeforeOutput, cutAfterOutput, ok],
+      [cutAfterOutput, cutAfterOutput, ok],
+      [failBeforeOutput, failBeforeOutput, failBeforeOutput],
+      [cutAfterOutput, failBeforeOutput, cutAfterOutput]
+    ]) {
+      const w = world(plan, { maxRetries: 2 })
+      await w.gateway.generate(request()).catch(() => undefined)
+      const started = w.events.filter((e) => e.type === 'model.call.started')
+      for (const s of started) {
+        const terminals = w.events.filter(
+          (e) =>
+            (e.type === 'model.call.completed' ||
+              e.type === 'model.call.failed') &&
+            e.attempt === s.attempt
+        )
+        expect(terminals).toHaveLength(1)
+      }
       const log = reconstruct(w.events)
       const snap = w.meter.snapshot()
-      expect(w.meter.unreportedRequests).toBe(1)
       expect(log.unreportedRequests).toBe(w.meter.unreportedRequests)
       expect(log.reportedRequests).toBe(snap.requests)
       expect(log.inputTokens).toBe(snap.inputTokens)
       expect(log.outputTokens).toBe(snap.outputTokens)
     }
-  )
+  })
 
-  it.fails(
-    'the request pressure is on model.call.started, before the provider is called',
-    async () => {
-      const w = world([ok])
-      await w.gateway.generate(request())
-      const started = w.events.find((e) => e.type === 'model.call.started') as
-        | (ModelGatewayEvent & { projectedInputTokens?: number })
-        | undefined
-      expect(started?.projectedInputTokens).toBeGreaterThan(0)
-      expect(Number.isSafeInteger(started?.projectedInputTokens)).toBe(true)
-      expect(w.order.indexOf('model.call.started:1')).toBeLessThan(
-        w.order.indexOf('provider:1')
-      )
-    }
-  )
+  it('a failure before output that is retried carries no tokens', async () => {
+    const w = world([failBeforeOutput, ok], { maxRetries: 1 })
+    await w.gateway.generate(request())
+    const failed = failedEvents(w.events)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]).toMatchObject({ attempt: 1 })
+    expect(failed[0]?.inputTokens).toBeUndefined()
+    expect(failed[0]?.detail).toBeUndefined()
+  })
 
-  it.fails(
-    'a request whose projection overflows the declared context window never reaches the provider and is not charged',
-    async () => {
-      const w = world([ok], { contextWindow: 64 })
-      await expect(
-        w.gateway.generate(request('x'.repeat(4_000)))
-      ).rejects.toBeDefined()
-      expect(w.calls()).toBe(0)
-      expect(w.meter.snapshot().requests).toBe(0)
-      expect(w.meter.unreportedRequests).toBe(0)
+  it('the projection is in every started event and counts 4 UTF-8 bytes per token', async () => {
+    const small = world([ok])
+    await small.gateway.generate(request('abcd'))
+    const large = world([ok])
+    await large.gateway.generate(request('abcd'.repeat(101)))
+    expect(projectedOf(large.events)[0]! - projectedOf(small.events)[0]!).toBe(
+      100
+    )
+    // 'é' is two UTF-8 bytes: two of them weigh as much as four ASCII bytes.
+    const multibyte = world([ok])
+    await multibyte.gateway.generate(request('éé'))
+    expect(projectedOf(multibyte.events)[0]).toBe(projectedOf(small.events)[0])
+    const retried = world([cutAfterOutput, ok], { maxRetries: 1 })
+    await retried.gateway.generate(request('abcd'))
+    expect(projectedOf(retried.events)).toEqual([
+      projectedOf(small.events)[0],
+      projectedOf(small.events)[0]
+    ])
+  })
+
+  it('each message adds 4 tokens of framing to the projection', async () => {
+    const one = world([ok])
+    await one.gateway.generate(request('abcd'))
+    const two = world([ok])
+    await two.gateway.generate({
+      ...request('abcd'),
+      input: {
+        system: INSTRUCTION,
+        messages: [
+          { role: 'user', content: 'abcd' },
+          { role: 'assistant', content: 'abcd' }
+        ]
+      }
+    })
+    expect(projectedOf(two.events)[0]! - projectedOf(one.events)[0]!).toBe(5)
+  })
+
+  it('the window boundary: projection plus the request output limit may equal the window, not exceed it', async () => {
+    const probe = world([ok])
+    await probe.gateway.generate(request())
+    const projected = projectedOf(probe.events)[0]!
+    const maxTokens = 16
+    const fits = world([ok], { contextWindow: projected + maxTokens })
+    await expect(
+      fits.gateway.generate({ ...request(), maxTokens })
+    ).resolves.toBeDefined()
+    const over = world([ok], { contextWindow: projected + maxTokens - 1 })
+    await expect(
+      over.gateway.generate({ ...request(), maxTokens })
+    ).rejects.toMatchObject({ code: 'invalid_request', retryable: false })
+    expect(over.calls()).toBe(0)
+    // Without the request limit, the profile limit (32) applies.
+    const profileLimit = world([ok], { contextWindow: projected + maxTokens })
+    await expect(
+      profileLimit.gateway.generate(request())
+    ).rejects.toMatchObject({ code: 'invalid_request' })
+  })
+
+  it('a window refusal reserves no budget and emits no call event', async () => {
+    const store = new InMemoryCostBudgetStore()
+    const events: ModelGatewayEvent[] = []
+    let calls = 0
+    const gateway = new ModelGateway({
+      providers: [
+        {
+          id: 'fake',
+          location: 'local',
+          models: ['fake-v1'],
+          execute: async () => {
+            calls += 1
+            throw new Error('unreachable')
+          },
+          executeStream: () => {
+            calls += 1
+            return ok({} as ProviderRequest, 1)
+          }
+        } as never
+      ],
+      profiles: { fast: profile({ contextWindow: 8, estimatedCostUsd: 1 }) },
+      prompts: registry(),
+      clock: () => NOW,
+      sleep: async () => undefined,
+      budget: { store, limits: { tenant: 100 } },
+      onEvent: (event) => events.push(event)
+    })
+    await expect(gateway.generate(request())).rejects.toBeInstanceOf(
+      ModelGatewayError
+    )
+    expect(calls).toBe(0)
+    expect(store.consumed(`tenant:${TENANT}`)).toBe(0)
+    expect(events.map((e) => e.type)).toEqual([])
+  })
+
+  it('a window refusal does not trigger the fallback profile', async () => {
+    const events: ModelGatewayEvent[] = []
+    let calls = 0
+    const gateway = new ModelGateway({
+      providers: [
+        {
+          id: 'fake',
+          location: 'local',
+          models: ['fake-v1'],
+          execute: async () => {
+            throw new Error('unreachable')
+          },
+          executeStream: () => {
+            calls += 1
+            return ok({} as ProviderRequest, 1)
+          }
+        } as never
+      ],
+      profiles: {
+        fast: profile({ contextWindow: 8, fallbackProfile: 'balanced' }),
+        balanced: profile({ name: 'balanced' })
+      },
+      routing: { allowFallback: true },
+      prompts: registry(),
+      clock: () => NOW,
+      sleep: async () => undefined,
+      onEvent: (event) => events.push(event)
+    })
+    await expect(gateway.generate(request())).rejects.toMatchObject({
+      code: 'invalid_request'
+    })
+    expect(calls).toBe(0)
+    expect(events.some((e) => e.type === 'model.routing.fallback')).toBe(false)
+  })
+
+  it('an invalid declared window fails the construction', () => {
+    for (const contextWindow of [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.MAX_SAFE_INTEGER + 1
+    ]) {
       expect(
-        w.events.some(
-          (e) =>
-            (e.type === 'model.call.completed' ||
-              e.type === 'model.call.failed') &&
-            e.inputTokens !== undefined
-        )
-      ).toBe(false)
+        () =>
+          new ModelGateway({
+            providers: [],
+            profiles: { fast: profile({ contextWindow }) },
+            prompts: registry()
+          })
+      ).toThrow(ModelGatewayError)
     }
-  )
+  })
 })
