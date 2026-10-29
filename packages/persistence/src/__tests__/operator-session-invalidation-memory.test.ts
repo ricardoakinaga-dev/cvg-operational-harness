@@ -64,7 +64,9 @@ describe('SPEC 0262 §6.1 operator session invalidation (memory)', () => {
     const { db, authority, input } = await seeded()
     await authority.invalidateOperatorSessions(input())
     const events = db.state.auditEvents.filter(
-      (event) => event.payload?.event === 'operator_sessions_invalidated'
+      (event) =>
+        (event.payload as Record<string, unknown> | undefined)?.event ===
+        'operator_sessions_invalidated'
     )
     expect(events).toHaveLength(1)
     expect(events[0]).toMatchObject({

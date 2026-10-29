@@ -32,6 +32,8 @@ const profile = {
   user: 'cvg_invalidator'
 }
 
+type InvalidateInput = Parameters<DatastoreSession['invalidate']>[0]
+
 interface Node {
   stat: Partial<FileStat> & { kind: 'file' | 'dir' | 'link' }
   content?: Buffer
@@ -118,7 +120,9 @@ function fixture(
       database: profile.database,
       user: profile.user
     })),
-    invalidate: vi.fn(async () => ({ revision: 5 })),
+    invalidate: vi.fn<
+      (input: InvalidateInput) => Promise<{ revision: number }>
+    >(async () => ({ revision: 5 })),
     close: vi.fn(async () => undefined)
   }
   const connect = vi.fn(async () => session as DatastoreSession)
