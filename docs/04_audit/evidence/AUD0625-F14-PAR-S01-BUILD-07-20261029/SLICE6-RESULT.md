@@ -33,7 +33,7 @@ Branch `claude/aud0625-par-s01-07`. Cobre SP03, SP04, SP08, SP09, SP15, SP16, SP
 
 ## Mutação (`mutate-s6.py`, `mutations-s6.json`)
 
-9 mutantes, 9 mortos; 6 pelos testemunhos de processo, 3 pelas fatias anteriores (sobreviveram aos de processo e foram religados às suítes das fatias 2–4):
+10 mutantes, 10 mortos; 6 pelos testemunhos de processo, 3 pelas fatias anteriores (sobreviveram aos de processo e foram religados às suítes das fatias 2–4):
 
 - Mortos aqui: lock fingido no create e no open, unlock fingido, guard desligado, guard com chave errada. 
 - Mortos por fatia anterior: `#lost` não registrado em `onLost` e em `#lose` (são caminhos redundantes entre si e a conexão morta já recusa; a fatia 4 testa cada um), flush sem UPDATE (a barreira de WAL é medida na fatia 4; o ACK de COMMIT já garante durabilidade), cursor do guard desligado (fatia 2, ao lado do gatilho diferido).
@@ -43,3 +43,9 @@ Branch `claude/aud0625-par-s01-07`. Cobre SP03, SP04, SP08, SP09, SP15, SP16, SP
 - "Durabilidade sob queda de energia/disco" não é afirmada: o teste mata o processo do PG, não o kernel.
 - Sem `stat/list`, flush agregado nem shutdown de dono (adiados pela SPEC); adoção em lote, restore e compatibilidade de rollback ficam para a fatia 7.
 - `skip-catalog` e `mutation-manifest` não foram tocados.
+
+## Correções da revisão do Codex (abbcba56)
+
+- P2-1: o testemunho do lote em voo agora tem barreira real. Um gatilho só de teste faz o INSERT da sequência 9 esperar um advisory lock do teste; o teste espera, em `pg_stat_activity`, o backend do dono parado nesse lock dentro da transação aberta (eventos 5..8 do lote já inseridos), só então SIGKILL. Resultado: o log fica exatamente em 1..4 com cursor 5, e o lote seguinte entra inteiro (204). O mutante `per-event-commit` (COMMIT/BEGIN depois de cada evento) deixa 1..8 e é reprovado.
+- P2-2: `import.meta` removido (caminho do filho por `process.cwd()`); `npm run typecheck` da raiz limpo.
+- P3: `header` → `header_json`, e os SQLSTATE são afirmados (42501 em DDL/UPDATE de coluna/DELETE/TRUNCATE; 428C9 em `writer_lock_id`, coluna GENERATED ALWAYS).

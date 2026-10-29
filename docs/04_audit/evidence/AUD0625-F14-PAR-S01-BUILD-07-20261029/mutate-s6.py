@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Mutation check for PAR-S01 slice 6 (witnesses in distinct processes). Commit first; each mutant is reverted by git checkout."""
-import json, os, re, subprocess
+import json, os, re, subprocess, sys
 SRC = 'packages/persistence/src/session-persistence.ts'
 SQL = 'packages/persistence/migrations/0034_session_writer_ownership.sql'
 TESTS = ['tests/par-s01-session-processes-postgres.test.ts']
@@ -16,12 +16,15 @@ M = [
  ('flush-noop', SRC, "UPDATE ${schema}.session_streams SET next_sequence=next_sequence WHERE tenant_id=$1 AND session_id=$2", "SELECT 1 WHERE $1::text IS NOT NULL AND $2::text IS NOT NULL", 'first'),
  ('guard-off', SQL, "IF NOT pg_try_advisory_xact_lock((to_regclass('session_streams')::oid::bigint - 2147483648)::integer, lock_id) THEN", "IF false THEN", 'first'),
  ('guard-wrong-key', SQL, "2147483648)::integer, lock_id) THEN", "2147483648)::integer, lock_id + 1) THEN", 'first'),
+ ('per-event-commit', SRC, "        next++\n      }\n      return next - 1", "        next++\n        await lease.query('COMMIT')\n        await lease.query('BEGIN')\n        await lease.query(\"SET LOCAL statement_timeout = '5s'\")\n        await lease.query(\"SET LOCAL lock_timeout = '5s'\")\n        await lease.query('SET LOCAL synchronous_commit = on')\n        await lease.query(\"SELECT set_config('cvg.tenant_id', $1, true)\", [tenant])\n      }\n      return next - 1", 'first'),
  ('guard-cursor-off', SQL, "IF NEW.sequence IS DISTINCT FROM expected THEN", "IF false THEN", 'first'),
 ]
 JUSTIFIED = {}
 norm = lambda x: re.sub(r'\s+', ' ', x)
 res = []
+ONLY = sys.argv[1:]
 for name, F, a, b, which in M:
+    if ONLY and name not in ONLY: continue
     src = open(F).read()
     if which == 'last' and a in src:
         i = src.rindex(a); mutated = src[:i] + b + src[i + len(a):]
