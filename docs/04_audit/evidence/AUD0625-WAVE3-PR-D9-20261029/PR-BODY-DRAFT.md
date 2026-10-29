@@ -78,7 +78,9 @@ Typecheck 0, `docs:check-links` (DOC_LINKS_OK e EVIDENCE_HYGIENE_OK), `prettier`
 
 - **0262 (U04/F16, revogação de sessão):** entra inteira nesta onda (fatias 1 a 5 da sessão 07, `claude/aud0625-0257-07` @ `e18bde6b`), todas revistas de forma independente (S3–S5: APPROVE, `AUD0625-REVIEW-0262-S345-D9-20261029`). Recibo `docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-12.json`: a SPEC se mantém e, no perfil HMAC de produção sem OIDC, toda rota de operador responde 503 (o ensaio é via OIDC). O script `revoke-operator-sessions.ts` tem 1 P2 aberto (ambiente `PG*` e query da URL) a corrigir antes do lançamento real (T4).
 - **Acompanhamentos:** F08c (opcional); a corrida remoção-entre-`open`-e-`fstat` das SPECs 0278 e 0281 (defesa no isolamento F02/X01); F05 global, K08 e X01.
-- **Com o Codex:** F13, F18 (fase 1, SPEC 0280) e F19.
+- **F13 (SPEC 0283, produto):** entra nesta onda (fatias 1 e 2 da sessão 07, revisadas pelo DF, APPROVE; `products/shift-assistant` mais docs). Recibo `docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-13.json`.
+- **F18 (SPEC 0280, recibo human-decisions-11):** a fatia 1 (fail-closed de aprovação sem grant, Codex) entra revisada pela D9 (APPROVE); o F18 segue aberto, com a fatia 2 em curso.
+- **Com o Codex:** F19 e o restante do F18.
 - **Com o Ricardo e o hospital:** servidor (U10), IdP (U09) e piloto (U23).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
