@@ -37,6 +37,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - Aceite: P07/P08/P09 fechados; troca de valores entre pacientes é sinalizada mesmo com os mesmos números; dois nomes iguais não escolhem automaticamente um ID; rascunho não contamina memória confirmada. Mudança de schema de tarefa/ID tem migração e revisão próprias.
 - Evidência: casos negativos/positivos com homônimos, números e memória sintéticos. Encaminha F06/F07.
 - Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): homônimos não recebem ID pela ordem da lista; ambiguidade bloqueia a confirmação; memória de pacientes só de notas confirmadas; leito divergente não completa ID só pelo nome (F09). Aberto: evidência por campo (SourceEvidence), que depende de D2.
+- Progresso 29/10/2026 (AUD0625 F13 fatia 2, SPEC 0283, [evidência](../../../docs/04_audit/evidence/AUD0625-F13-BUILD-07-20261029/SLICE2-RESULT.md)): valores com unidade ou rótulo de medida são conferidos por paciente, campo e unidade contra a fonte (`VALUE_PATIENT_MISMATCH`, `VALUE_FIELD_MISMATCH`, `VALUE_UNIT_MISMATCH`, `UNSOURCED_VALUE`, `SOURCE_ASSOCIATION_AMBIGUOUS` bloqueiam a confirmação). Continua aberto: numeral por extenso (C2) e `SourceEvidence` com `quote` (C3), que dependem de D2.
 
 ### PISO-003 — Recuperar processamento e envio com estado durável
 
@@ -45,6 +46,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - Aceite: P02/P03/P11 fechados; falha transitória de transcrição/envio permite recuperação sem perder entrada e sem duplicar ativação. Resultado externo incerto usa idempotency key quando suportada ou estado explícito de revisão; não prometer exactly-once do provedor.
 - Evidência: falhas injetadas, reinício, replay, fila recuperada e efeitos por ID. Encaminha F02/F08.
 - Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): falha transitória de download, Whisper ou organização deixa a mensagem pendente com tentativa e próximo horário persistidos (30 s, 2 min, 10 min, 30 min), sobrevive a restart e termina em nota bruta ou revisão humana; membro revogado vira revisão (F07, F10). Desvio deliberado da SPEC0179 §6, mais restrito: cinco tentativas por mensagem, somando os estágios, porque o contador por estágio permitia laço quando a falha alternava de estágio. Aberto: outbox durável de respostas e recibos, transcrição persistida antes da organização, envelope inline do Evolution.
+- Progresso 29/10/2026 (AUD0625 F13 fatia 1, SPEC 0283, [evidência](../../../docs/04_audit/evidence/AUD0625-F13-BUILD-07-20261029/SLICE1-RESULT.md)): recibo por parte do preview (`preview_presented`), confirmação só com preview inteiro aceito, token `<nota>-r<revisão>-<hash>`, reapresentação limitada e preview cortado não confirmável. Continua aberto: outbox durável das demais respostas.
 
 ### PISO-004 — Recuperar journal truncado sem perder histórico válido
 
