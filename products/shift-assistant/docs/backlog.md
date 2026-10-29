@@ -37,6 +37,7 @@ Data: 03/10/2026. Fonte canônica dos dez cartões PISO transferidos de [0370](.
 - Aceite: P07/P08/P09 fechados; troca de valores entre pacientes é sinalizada mesmo com os mesmos números; dois nomes iguais não escolhem automaticamente um ID; rascunho não contamina memória confirmada. Mudança de schema de tarefa/ID tem migração e revisão próprias.
 - Evidência: casos negativos/positivos com homônimos, números e memória sintéticos. Encaminha F06/F07.
 - Progresso 20/10/2026 (AUD0621, [evidência](../../../docs/04_audit/evidence/AUD0621-PRODUCT-BUILD-20261020/promotion.json)): homônimos não recebem ID pela ordem da lista; ambiguidade bloqueia a confirmação; memória de pacientes só de notas confirmadas; leito divergente não completa ID só pelo nome (F09). Aberto: evidência por campo (SourceEvidence), que depende de D2.
+- Progresso 29/10/2026 (AUD0625 F13 fatia 2, SPEC 0283, [evidência](../../../docs/04_audit/evidence/AUD0625-F13-BUILD-07-20261029/SLICE2-RESULT.md)): valores com unidade ou rótulo de medida são conferidos por paciente, campo e unidade contra a fonte (`VALUE_PATIENT_MISMATCH`, `VALUE_FIELD_MISMATCH`, `VALUE_UNIT_MISMATCH`, `UNSOURCED_VALUE`, `SOURCE_ASSOCIATION_AMBIGUOUS` bloqueiam a confirmação). Continua aberto: numeral por extenso (C2) e `SourceEvidence` com `quote` (C3), que dependem de D2.
 
 ### PISO-003 — Recuperar processamento e envio com estado durável
 

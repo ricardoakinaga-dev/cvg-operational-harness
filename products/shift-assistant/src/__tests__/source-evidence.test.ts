@@ -205,8 +205,8 @@ describe('F13 slice 2: grammar edges', () => {
 
   it('anchors on whole words only', () => {
     const organized = note([
-      patient('Al', { id: '1', condutas: ['dipirona 1 mg'] }),
-      patient('Alfa', { id: '2', condutas: ['dipirona 2 mg'] })
+      patient('Alfa', { id: '2', condutas: ['dipirona 2 mg'] }),
+      patient('Al', { id: '1', condutas: ['dipirona 1 mg'] })
     ])
     expect(
       codes('Alfa ID 2 dipirona 2 mg. Al ID 1 dipirona 1 mg.', organized)
