@@ -80,15 +80,24 @@ function id(value) {
 
 export function validatePlan(input) {
   const plan = snapshot(input)
-  closed(plan, [
-    'version',
-    'suiteId',
-    'caseId',
-    'scenario',
-    'maxRequests',
-    'chunkDelayMs'
-  ])
+  // SPEC 0232b (F06b): `governedSystem` is the only optional field. Absent, the
+  // plan and every digest derived from it are the frozen ones.
+  closed(
+    plan,
+    [
+      'version',
+      'suiteId',
+      'caseId',
+      'scenario',
+      'maxRequests',
+      'chunkDelayMs',
+      'governedSystem'
+    ],
+    ['version', 'suiteId', 'caseId', 'scenario', 'maxRequests', 'chunkDelayMs']
+  )
   if (plan.version !== 1 || !SCENARIOS.includes(plan.scenario)) fail('plan')
+  if (Object.hasOwn(plan, 'governedSystem') && plan.governedSystem !== true)
+    fail('plan')
   id(plan.suiteId)
   id(plan.caseId)
   integer(plan.maxRequests, 1, LIMITS.requests)
@@ -103,12 +112,20 @@ export function validatePlan(input) {
   return plan
 }
 
+/** SPEC 0232b: the approved instruction the governed gateway renders as `system`. */
+export function governedInstruction(caseId) {
+  return `CVG_SYNTHETIC_INSTRUCTION:${caseId}`
+}
+
 export function expectedSyntheticRequest(input) {
   const plan = validatePlan(input)
   // Native OpenAI adapter insertion order, deliberately distinct from canonical JSON.
   return snapshot({
     model: 'cvg-synthetic-model-v1',
     messages: [
+      ...(plan.governedSystem === true
+        ? [{ role: 'system', content: governedInstruction(plan.caseId) }]
+        : []),
       { role: 'user', content: `CVG_SYNTHETIC_REQUEST:${plan.caseId}` }
     ],
     temperature: 0,

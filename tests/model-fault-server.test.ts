@@ -5,12 +5,14 @@ import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
+import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   assertSyntheticEnvironment,
   CREDENTIAL_NAMES,
   createModelFaultServer,
   expectedSyntheticRequest,
+  governedInstruction,
   LIMITS,
   preservePrimaryError,
   SCENARIOS,
@@ -28,6 +30,8 @@ import type {
   ProviderRequest
 } from '../packages/model-gateway/src/contracts.ts'
 
+const sha256 = (text: string) =>
+  createHash('sha256').update(text, 'utf8').digest('hex')
 const childRoots: string[] = []
 const servers: ModelFaultServer[] = []
 const planFor = (
@@ -70,6 +74,11 @@ function provider(server: ModelFaultServer) {
     allowPrivateNetworks: true
   })
 }
+/** The dynamic user message of the plan, whatever the plan expects before it. */
+function userContent(plan: FaultPlan): string {
+  const messages = expectedSyntheticRequest(plan).messages
+  return messages[messages.length - 1]!.content
+}
 function providerRequest(plan: FaultPlan, timeoutMs = 300): ProviderRequest {
   return {
     requestId: 'mf_request_001',
@@ -77,12 +86,12 @@ function providerRequest(plan: FaultPlan, timeoutMs = 300): ProviderRequest {
     correlationId: 'mf_correlation_001',
     model: 'cvg-synthetic-model-v1',
     input: {
-      messages: [
-        {
-          role: 'user',
-          content: expectedSyntheticRequest(plan).messages[0].content
-        }
-      ]
+      // A governed plan expects the approved instruction as `system`: a direct
+      // provider call sends it the way the gateway renders it.
+      ...(plan.governedSystem === true
+        ? { system: governedInstruction(plan.caseId) }
+        : {}),
+      messages: [{ role: 'user', content: userContent(plan) }]
     },
     temperature: 0,
     maxTokens: 32,
@@ -92,40 +101,38 @@ function providerRequest(plan: FaultPlan, timeoutMs = 300): ProviderRequest {
   }
 }
 /**
- * SPEC 0267: the gateway now renders the approved instruction as `system`,
- * while this SPEC0232 oracle pins an exact single-user-message request body.
- * The gateway-path cases here assert error/usage mapping, so the real
- * provider is wrapped to forward only the dynamic messages; the governed
- * binding itself is covered in the model-gateway package tests.
+ * SPEC 0232b: the real provider behind a spy that records what the gateway
+ * hands it (the governed `promptBinding` never reaches the wire).
  */
-function withoutGovernedSystem(inner: ModelProvider): ModelProvider {
+function recordingProvider(inner: ModelProvider, seen: ProviderRequest[]) {
   return {
     id: inner.id,
     location: inner.location,
     models: inner.models,
-    execute: (request) => {
-      const { promptBinding, input, ...rest } = request
-      void promptBinding
-      return inner.execute({ ...rest, input: { messages: input.messages } })
+    execute: (request: ProviderRequest) => {
+      seen.push(request)
+      return inner.execute(request)
     }
-  }
+  } satisfies ModelProvider
 }
-
 function gateway(server: ModelFaultServer, plan: FaultPlan) {
+  if (plan.governedSystem !== true)
+    throw new Error('gateway needs a governed plan')
+  const seen: ProviderRequest[] = []
   const prompts = new PromptRegistry()
   const prompt = prompts.register({
     promptId: 'mf-synthetic',
     version: '1',
     owner: 'mf-test',
     approvedBy: 'mf-test',
-    content: expectedSyntheticRequest(plan).messages[0].content,
+    content: governedInstruction(plan.caseId),
     status: 'approved',
     effectiveFrom: '2020-01-01T00:00:00.000Z',
     classification: 'INTERNAL'
   })
   const events: ModelGatewayEvent[] = []
   const engine = new ModelGateway({
-    providers: [withoutGovernedSystem(provider(server))],
+    providers: [recordingProvider(provider(server), seen)],
     prompts,
     onEvent: (event) => events.push(event),
     profiles: {
@@ -148,6 +155,8 @@ function gateway(server: ModelFaultServer, plan: FaultPlan) {
   return {
     engine,
     events,
+    seen,
+    prompt,
     input: {
       requestId: 'mf_gateway_001',
       tenantId: 'tenant_00000000-0000-4000-8000-000000000001',
@@ -157,7 +166,7 @@ function gateway(server: ModelFaultServer, plan: FaultPlan) {
       promptId: prompt.promptId,
       promptVersion: prompt.version,
       promptSha256: prompt.sha256,
-      input: providerRequest(plan).input
+      input: { messages: providerRequest(plan).input.messages }
     }
   }
 }
@@ -215,7 +224,7 @@ describe('SPEC0232 private model fault server', () => {
   it.each(['ok-json', 'chunked-json'] as const)(
     'MF01 actual native provider and gateway: %s',
     async (scenario) => {
-      const plan = planFor(scenario, { maxRequests: 2 })
+      const plan = planFor(scenario, { maxRequests: 2, governedSystem: true })
       const server = await start(plan)
       expect(new URL(server.url).hostname).toBe('127.0.0.1')
       expect(Number(new URL(server.url).port)).toBeGreaterThan(0)
@@ -227,7 +236,7 @@ describe('SPEC0232 private model fault server', () => {
         finishReason: 'stop',
         externalCall: false
       })
-      const { engine, events, input } = gateway(server, plan)
+      const { engine, events, input, seen, prompt } = gateway(server, plan)
       expect(await engine.generate(input)).toMatchObject({
         output: { text: 'CVG_SYNTHETIC_OK_á' },
         usage: { inputTokens: 3, outputTokens: 2 },
@@ -238,6 +247,20 @@ describe('SPEC0232 private model fault server', () => {
         'model.call.completed'
       ])
       expect(events[1]).toMatchObject({ inputTokens: 3, outputTokens: 2 })
+      // The governed binding reaches the provider (never the wire) and matches
+      // the approved prompt and the instruction the oracle expects as `system`.
+      expect(seen).toHaveLength(1)
+      expect(seen[0]!.promptBinding).toMatchObject({
+        promptId: prompt.promptId,
+        promptVersion: prompt.version,
+        registrySha256: prompt.sha256,
+        rendererVersion: 'literal-v1',
+        instructionSha256: sha256(governedInstruction(plan.caseId))
+      })
+      expect(seen[0]!.promptBinding?.renderedInputSha256).toMatch(
+        /^[0-9a-f]{64}$/
+      )
+      expect(seen[0]!.input.system).toBe(governedInstruction(plan.caseId))
       await settle(server)
       expect(server.requestHistory()).toEqual(
         [0, 1].map((ordinal) => ({
@@ -267,13 +290,16 @@ describe('SPEC0232 private model fault server', () => {
   ] as const)(
     'MF02 actual public failure %s (preserve current gateway mapping)',
     async (scenario, kind, code) => {
-      const plan = planFor(scenario, { maxRequests: 2 })
+      const plan = planFor(scenario, { maxRequests: 2, governedSystem: true })
       const server = await start(plan)
       await expect(
         provider(server).execute(providerRequest(plan, 80))
       ).rejects.toMatchObject({ kind })
-      const { engine, events, input } = gateway(server, plan)
+      const { engine, events, input, seen } = gateway(server, plan)
       await expect(engine.generate(input)).rejects.toMatchObject({ code })
+      expect(seen[0]?.promptBinding?.instructionSha256).toBe(
+        sha256(governedInstruction(plan.caseId))
+      )
       expect(events.map((event) => event.type)).toEqual([
         'model.call.started',
         'model.call.failed'
@@ -686,5 +712,136 @@ describe('SPEC0232 private model fault server', () => {
       'chunked-json',
       'synthetic-sse'
     ])
+  })
+
+  describe('MF08 governed system oracle (SPEC 0232b, F06b)', () => {
+    const governed = () =>
+      planFor('ok-json', { maxRequests: 4, governedSystem: true })
+    const governedBody = (plan: FaultPlan) => wire(plan)
+    const bodyWith = (
+      plan: FaultPlan,
+      messages: Array<{ role: string; content: string }>
+    ) =>
+      JSON.stringify({
+        ...JSON.parse(wire(plan)),
+        messages
+      })
+    const instruction = governedInstruction('mf-case')
+    const user = 'CVG_SYNTHETIC_REQUEST:mf-case'
+
+    it('MF08 the frozen digests of a plan without the field do not move', () => {
+      const recipeDigests = {
+        planSha256:
+          '7ffc7543cdd31252c95f97c4a71a3d3b5373e727dfd7987124ee4c4b53dc22cd',
+        requestSha256:
+          '7690b85c3db5aab0b76c2e8db1be61b0b391099b4fa9d004453eadd44db0e8bf'
+      }
+      expect(jsonDigest(planFor())).toBe(recipeDigests.planSha256)
+      expect(jsonDigest(expectedSyntheticRequest(planFor()))).toBe(
+        recipeDigests.requestSha256
+      )
+      expect(expectedSyntheticRequest(planFor()).messages).toEqual([
+        { role: 'user', content: user }
+      ])
+    })
+
+    it('MF08 the governed plan expects exactly system then user', () => {
+      // The instruction text is part of the contract: pinned literally.
+      expect(instruction).toBe('CVG_SYNTHETIC_INSTRUCTION:mf-case')
+      expect(expectedSyntheticRequest(governed()).messages).toEqual([
+        { role: 'system', content: instruction },
+        { role: 'user', content: user }
+      ])
+      expect(jsonDigest(expectedSyntheticRequest(governed()))).not.toBe(
+        jsonDigest(expectedSyntheticRequest(planFor()))
+      )
+    })
+
+    it('MF08 the governed server accepts the governed body and records its digest', async () => {
+      const plan = governed()
+      const server = await start(plan)
+      const result = await raw(server, plan, { body: governedBody(plan) })
+      expect(result.status).toBe(200)
+      await settle(server)
+      expect(server.requestHistory()[0]?.requestSha256).toBe(
+        jsonDigest(expectedSyntheticRequest(plan))
+      )
+    })
+
+    it('MF08 the old single-user body is refused with the field and the governed body without it', async () => {
+      const plan = governed()
+      const server = await start(plan)
+      const old = await raw(server, plan, { body: wire(planFor()) })
+      expect(old.status).toBe(400)
+      const plain = planFor()
+      const server2 = await start(plain)
+      const governedBodyResult = await raw(server2, plain, {
+        body: governedBody(plan)
+      })
+      expect(governedBodyResult.status).toBe(400)
+      await settle(server)
+      await settle(server2)
+      expect(server.requestHistory()).toEqual([])
+      expect(server2.requestHistory()).toEqual([])
+    })
+
+    it.each([
+      [
+        'another instruction',
+        [
+          { role: 'system', content: 'HOSTILE_FAKE' },
+          { role: 'user', content: user }
+        ]
+      ],
+      ['no system', [{ role: 'user', content: user }]],
+      [
+        'two systems',
+        [
+          { role: 'system', content: instruction },
+          { role: 'system', content: instruction },
+          { role: 'user', content: user }
+        ]
+      ],
+      [
+        'user before system',
+        [
+          { role: 'user', content: user },
+          { role: 'system', content: instruction }
+        ]
+      ],
+      ['system only', [{ role: 'system', content: instruction }]],
+      [
+        'assistant instead of system',
+        [
+          { role: 'assistant', content: instruction },
+          { role: 'user', content: user }
+        ]
+      ]
+    ] as const)(
+      'MF08 refuses a governed body with %s',
+      async (_name, messages) => {
+        const plan = governed()
+        const server = await start(plan)
+        const result = await raw(server, plan, {
+          body: bodyWith(
+            plan,
+            messages.map((m) => ({ ...m }))
+          )
+        })
+        expect(result.status).toBe(400)
+        expect(result.body.toString()).not.toContain('HOSTILE_FAKE')
+        await settle(server)
+        expect(server.requestHistory()).toEqual([])
+      }
+    )
+
+    it.each([false, 1, 'true', null, {}, []])(
+      'MF08 a governedSystem value other than true fails before listen (%j)',
+      async (value) => {
+        const plan = { ...planFor(), governedSystem: value } as never
+        await expect(createModelFaultServer(plan)).rejects.toThrow()
+        expect(() => expectedSyntheticRequest(plan)).toThrow()
+      }
+    )
   })
 })
