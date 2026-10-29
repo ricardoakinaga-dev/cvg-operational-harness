@@ -545,5 +545,45 @@ describe.skipIf(!url)('PAR-S01 slice 5: sessionEventStoreForHandle', () => {
       await sdk.sendTurn('sdk2', 'one')
       await w.close()
     })
+    it('captures the input at the call: a later mutation cannot change what is stored', async () => {
+      const w = await (await service()).create(hdr('a7'))
+      const store = sessionEventStoreForHandle(w)
+      const blocker = store.append(input('a7', 'first'))
+      const mutable: any = input('a7', 'second', 'original')
+      const pending = store.append(mutable)
+      mutable.payload.text = 'mutated'
+      mutable.eventId = 'mutated'
+      await Promise.all([blocker, pending])
+      const stored = await store.read({ tenantId: tenant, sessionId: 'a7' })
+      expect(stored[1]).toMatchObject({
+        eventId: 'second',
+        payload: { text: 'original' }
+      })
+      await w.close()
+    })
+    it('a stream that is gone from the database is session_not_open, not a generic failure', async () => {
+      const inner = createPgPhysicalSessionPool({ connectionString: roleUrl })
+      const gone: PostgresPhysicalSessionPool = {
+        acquire: async (o) => {
+          const lease = await inner.acquire(o)
+          return {
+            backendPid: lease.backendPid,
+            query: (sql: string, v?: unknown[]) =>
+              sql.includes('next_sequence, format_version') &&
+              sql.includes('FROM')
+                ? Promise.resolve({ rows: [], rowCount: 0 } as never)
+                : lease.query(sql, v),
+            onLost: (l) => lease.onLost(l),
+            release: () => lease.release(),
+            destroy: () => lease.destroy()
+          }
+        }
+      }
+      const w = await (await service(gone)).create(hdr('a8'))
+      await expect(
+        sessionEventStoreForHandle(w).append(input('a8', 'x'))
+      ).rejects.toMatchObject({ code: 'session_not_open' })
+      await w.close()
+    })
   })
 })
