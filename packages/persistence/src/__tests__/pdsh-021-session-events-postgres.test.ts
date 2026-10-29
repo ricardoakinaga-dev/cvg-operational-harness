@@ -289,6 +289,8 @@ describe.skipIf(!url)(
         schemaFingerprint: 'b'.repeat(64)
       }
       // Migration authority can insert unknown content; reader must not bless it.
+      // Since 0034 a direct insert must also advance the cursor (no incoherent state at COMMIT).
+      await admin.query('BEGIN')
       await admin.query(
         `INSERT INTO ${schema}.session_events(tenant_id,session_id,sequence,event_id,format_version,event_type,schema_fingerprint,input_digest,record) VALUES($1,$2,2,'corrupt',1,$3,$4,$5,$6::jsonb)`,
         [
@@ -300,6 +302,11 @@ describe.skipIf(!url)(
           JSON.stringify(corrupt)
         ]
       )
+      await admin.query(
+        `UPDATE ${schema}.session_streams SET next_sequence=3 WHERE tenant_id=$1 AND session_id=$2`,
+        [tenant, 'unknown']
+      )
+      await admin.query('COMMIT')
       await expect(
         one.read({ tenantId: tenant, sessionId: 'unknown' })
       ).rejects.toMatchObject({ code: 'invalid_session_event' })
