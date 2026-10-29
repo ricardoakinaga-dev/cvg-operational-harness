@@ -439,7 +439,16 @@ async function runSyntheticWorkload(
       executionRef: 'rem21-010-execution-1',
       resultDigest: 'b'.repeat(64)
     })
+  })
 
+  return { eventIds, firstEventId: eventIds[0] as string }
+}
+
+// The channel journal (SPEC 0282) needs the newest migration's column, so its
+// part of the workload runs after the roll-forward, never on the pre-roll-forward
+// schema the rollback drill restores.
+async function runChannelJournalWorkload(appPool: Pool): Promise<void> {
+  await withTenantContext(appPool, tenantId, async (client) => {
     const channelJournal = new PostgresChannelEffectJournal(client, {
       clock: () => fixedJournalNow.getTime()
     })
@@ -470,8 +479,6 @@ async function runSyntheticWorkload(
     if (completed !== 'committed')
       throw new Error('channel_journal_not_committed')
   })
-
-  return { eventIds, firstEventId: eventIds[0] as string }
 }
 
 async function tableNames(client: Client): Promise<string[]> {
@@ -635,6 +642,8 @@ async function main(): Promise<void> {
     // tables added by the roll-forward are covered in the backup too.
     stage = 'grant-source-role-after-roll-forward'
     await grantSyntheticRole(sourceAdmin)
+    stage = 'run-channel-journal-workload'
+    await runChannelJournalWorkload(sourcePool)
     stage = 'dump-post-roll-forward'
     const postDump = dumpDatabase(source, database)
 
