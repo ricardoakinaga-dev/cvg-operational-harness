@@ -22,11 +22,13 @@ import {
   type AuthorizedMutationInput,
   assertActorPrincipalCurrent,
   assertAssignmentWriteInput,
+  assertInvalidateOperatorSessionsInput,
   assertRegistryQuery,
   assertVerifiedPrincipalInput,
   caseAssignmentAuditPayload,
   casePrincipalAuditPayload,
   caseProofDigest,
+  operatorSessionInvalidationAuditPayload,
   type AuditSessionRef,
   type CaseAssignmentRecord,
   type CaseAssignmentStatus,
@@ -42,6 +44,7 @@ import {
   type CaseRootRecord,
   type CoreParentClassification,
   type CoreParentPlan,
+  type InvalidateOperatorSessionsInput,
   type SessionCaseLookup,
   type VerifiedPrincipalStateInput
 } from './case-authority.ts'
@@ -776,6 +779,61 @@ export class PostgresCaseAuthority implements CaseAuthorityPort {
           active: principal.active,
           identitySource: principal.identitySource,
           authorityVersion: principal.authorityVersion
+        })
+      })
+      return principal
+    })
+  }
+
+  async invalidateOperatorSessions(
+    rawInput: InvalidateOperatorSessionsInput
+  ): Promise<CasePrincipalRecord> {
+    const input = assertInvalidateOperatorSessionsInput(rawInput)
+    const now = this.clock()
+    return this.write(input.tenantId, async (client) => {
+      await this.requireCaseTables(client)
+      // The principal is locked FOR UPDATE: a unit holding it FOR SHARE (the
+      // six authorized mutations) finishes first, and a unit that starts
+      // afterwards reads the new revision.
+      const current = await client.query<{ revision: string | number }>(
+        `SELECT revision FROM case_principals
+          WHERE tenant_id = $1 AND operator_id = $2
+          FOR UPDATE`,
+        [input.tenantId, input.operatorId]
+      )
+      const row = current.rows[0]
+      if (!row || Number(row.revision) !== input.expectedRevision) {
+        throw new CaseAuthorityError(
+          'principal_conflict',
+          'Principal revision is stale or the principal is absent'
+        )
+      }
+      const written = await client.query<PrincipalRow>(
+        `UPDATE case_principals
+            SET revision = revision + 1, updated_at = $3
+          WHERE tenant_id = $1 AND operator_id = $2 AND revision = $4
+          RETURNING tenant_id, operator_id, role, active, revision,
+                    identity_source, authority_version, updated_at`,
+        [input.tenantId, input.operatorId, now, input.expectedRevision]
+      )
+      const updated = written.rows[0]
+      if (!updated) {
+        throw new CaseAuthorityError(
+          'principal_conflict',
+          'Principal revision is stale or the principal is absent'
+        )
+      }
+      const principal = mapPrincipal(updated)
+      await this.repository(client).appendAudit({
+        tenantId: input.tenantId,
+        type: 'policy_decision',
+        actorType: 'System',
+        actorId: 'operator-session-invalidation',
+        correlationId: `corr_${randomUUID()}`,
+        policyVersion: CASE_AUTHORITY_POLICY_VERSION,
+        payload: operatorSessionInvalidationAuditPayload({
+          ...input,
+          revision: principal.revision
         })
       })
       return principal

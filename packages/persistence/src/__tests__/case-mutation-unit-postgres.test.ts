@@ -553,6 +553,92 @@ describeWithPostgres(
       expect(await statusOf()).toBe('approved')
     })
 
+    it('SPEC 0262 §6.1/R14: the global invalidation bumps only the revision, audits it, waits for a unit holding the principal and is seen by the next unit', async () => {
+      await writeAssignment('ACTIVE')
+      const before = await admin.query(
+        `SELECT role, active, revision, identity_source, authority_version
+           FROM ${schema}.case_principals WHERE tenant_id = $1 AND operator_id = $2`,
+        [tenant, operatorId]
+      )
+      const revision = Number(before.rows[0].revision)
+      const proofDigest = 'b'.repeat(64)
+      const invalidation = (expectedRevision: number) =>
+        authority.invalidateOperatorSessions({
+          tenantId: tenant,
+          operatorId,
+          expectedRevision,
+          approvalRef: 'approval-ref-synthetic-0002',
+          proofDigest,
+          localOperator: 'local.admin'
+        })
+      // A unit that already holds the principal (FOR SHARE) finishes first.
+      const key = `unit-key-${randomBytes(6).toString('hex')}`
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let reached!: () => void
+      const atCommit = new Promise<void>((resolve) => {
+        reached = resolve
+      })
+      const unit = create(key, {
+        beforeCommit: async () => {
+          reached()
+          await gate
+        }
+      })
+      await atCommit
+      let invalidated = false
+      const bump = invalidation(revision).then(() => {
+        invalidated = true
+      })
+      await sleep(300)
+      expect(invalidated).toBe(false)
+      release()
+      expect((await unit).outcome).toBe('created')
+      await bump
+      const after = await admin.query(
+        `SELECT role, active, revision, identity_source, authority_version
+           FROM ${schema}.case_principals WHERE tenant_id = $1 AND operator_id = $2`,
+        [tenant, operatorId]
+      )
+      expect(Number(after.rows[0].revision)).toBe(revision + 1)
+      expect({ ...after.rows[0], revision: 0 }).toEqual({
+        ...before.rows[0],
+        revision: 0
+      })
+      const audit = await admin.query(
+        `SELECT payload FROM ${schema}.audit_events
+          WHERE tenant_id = $1 AND payload->>'event' = 'operator_sessions_invalidated'
+            AND (payload->>'revision')::int = $2`,
+        [tenant, revision + 1]
+      )
+      expect(audit.rows).toHaveLength(1)
+      expect(audit.rows[0].payload).toMatchObject({
+        previousRevision: revision,
+        proofDigest,
+        localOperator: 'local.admin'
+      })
+      // The same decision cannot repeat; an absent principal is not created.
+      await expect(invalidation(revision)).rejects.toMatchObject({
+        code: 'principal_conflict'
+      })
+      await expect(
+        authority.invalidateOperatorSessions({
+          tenantId: tenant,
+          operatorId: 'operator.absent.synthetic',
+          expectedRevision: 1,
+          approvalRef: 'approval-ref-synthetic-0003',
+          proofDigest,
+          localOperator: 'local.admin'
+        })
+      ).rejects.toMatchObject({ code: 'principal_conflict' })
+      const absent = await admin.query(
+        `SELECT 1 FROM ${schema}.case_principals WHERE operator_id = 'operator.absent.synthetic'`
+      )
+      expect(absent.rows).toHaveLength(0)
+    })
+
     it('a principal deactivated before the unit is denied with zero writes', async () => {
       await writeAssignment('ACTIVE')
       const current = await admin.query(

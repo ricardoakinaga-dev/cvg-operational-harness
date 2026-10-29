@@ -248,4 +248,31 @@ describe('operator session store outage boundary', () => {
     expect(response.statusCode).toBe(503)
     await app.close()
   })
+
+  it('SPEC 0262 §6.1/R14: the global invalidation retires every cookie bound to the old revision, and a fresh binding works', async () => {
+    const authority = await principalAuthority()
+    const app = await boundApp(authority)
+    const ok = await app.inject({
+      method: 'GET',
+      url: '/protected',
+      headers: { cookie }
+    })
+    expect(ok.statusCode).toBe(200)
+    await authority.invalidateOperatorSessions({
+      tenantId: identity.tenantId as never,
+      operatorId: identity.operatorId,
+      expectedRevision: 1,
+      approvalRef: 'approval-ref-synthetic-0001',
+      proofDigest: 'a'.repeat(64),
+      localOperator: 'local.admin'
+    })
+    const retired = await app.inject({
+      method: 'GET',
+      url: '/protected',
+      headers: { cookie }
+    })
+    expect(retired.statusCode).toBe(401)
+    expect(String(retired.headers['set-cookie'])).toContain('Max-Age=0')
+    await app.close()
+  })
 })
