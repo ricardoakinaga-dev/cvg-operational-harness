@@ -15,7 +15,11 @@ afterEach(() => {
   for (const root of roots.splice(0))
     rmSync(root, { recursive: true, force: true })
 })
-async function callShell(preAborted = false) {
+async function callShell(
+  preAborted = false,
+  abortInRunner = false,
+  omitSignal = false
+) {
   const root = mkdtempSync(join(tmpdir(), 'aud0625-shell-'))
   roots.push(root)
   const controller = new AbortController()
@@ -25,6 +29,8 @@ async function callShell(preAborted = false) {
     workspaceRoot: root,
     run: async (request) => {
       captured.push(request)
+      if (abortInRunner)
+        controller.abort(new Error('owned synthetic late cancellation'))
       return {
         exitCode: 0,
         stdout: 'CVG-OWN-NO-SUBPROCESS',
@@ -39,7 +45,7 @@ async function callShell(preAborted = false) {
     agentId: input.agent.id,
     correlationId: input.correlationId,
     traceId: input.traceId,
-    signal: controller.signal,
+    ...(omitSignal ? {} : { signal: controller.signal }),
     sandboxHandle: {
       mode: 'PROCESS',
       workspaceRoot: root,
@@ -67,22 +73,33 @@ describe('AUD0625 F05 — caller cancellation reaches the shell runner seam', ()
     expect(actual.captured[0]?.handle.mode).toBe('PROCESS')
     expect(actual.captured[0]?.timeoutMs).toBe(1000)
   })
-  it.fails(
-    'F05 shell forwards the identical caller AbortSignal to its runner',
-    async () => {
-      const actual = await callShell()
-      expect(actual.captured).toHaveLength(1)
-      expect(
-        (actual.captured[0] as ShellRunRequest & { signal?: AbortSignal })
-          .signal
-      ).toBe(actual.controller.signal)
-    }
-  )
-  it.fails(
-    'F05 an already-cancelled caller never starts a runner',
-    async () => {
-      const actual = await callShell(true)
-      expect(actual.captured).toHaveLength(0)
-    }
-  )
+  it('F05 shell forwards the identical caller AbortSignal to its runner', async () => {
+    const actual = await callShell()
+    expect(actual.captured).toHaveLength(1)
+    expect(
+      (actual.captured[0] as ShellRunRequest & { signal?: AbortSignal }).signal
+    ).toBe(actual.controller.signal)
+  })
+  it('F05 an already-cancelled caller never starts a runner', async () => {
+    const actual = await callShell(true)
+    expect(actual.captured).toHaveLength(0)
+    expect(actual.result).toMatchObject({
+      status: 'REJECTED',
+      error: 'command_cancelled_before_launch'
+    })
+  })
+  it('a runner completion after cancellation is uncertain, never successful or retried', async () => {
+    const actual = await callShell(false, true)
+    expect(actual.captured).toHaveLength(1)
+    expect(actual.result).toMatchObject({
+      status: 'FAILED',
+      error: 'effect_uncertain: cleanup_incomplete after cancellation'
+    })
+  })
+  it('the legacy caller without a signal still invokes its runner once', async () => {
+    const actual = await callShell(false, false, true)
+    expect(actual.result.status).toBe('SUCCEEDED')
+    expect(actual.captured).toHaveLength(1)
+    expect(actual.captured[0]).not.toHaveProperty('signal')
+  })
 })

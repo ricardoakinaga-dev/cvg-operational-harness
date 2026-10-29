@@ -1,0 +1,8 @@
+from pathlib import Path
+import subprocess,json,hashlib
+r=Path('/mnt/dados/cvg-work/aud0625-sandbox-build-codex-20261029');c=r/'candidate';p=c/'packages/sandbox/src/shell-tool.ts';s=p.read_text();needle='if (signal?.aborted)';i=s.rfind(needle);assert i>=0
+mutant=s[:i]+'if (false)'+s[i+len(needle):]
+try:
+ p.write_text(mutant);report=r/'f05-mutant-allow-late-success-vitest.json';a=subprocess.run(['python3',str(r/'run.py'),'f05-mutant-allow-late-success','90','node','node_modules/vitest/vitest.mjs','run','tests/aud0625-shell-cancellation-red.test.ts','tests/aud0625-shell-default-signal.test.ts','--no-file-parallelism','--maxWorkers=2','--reporter=json','--outputFile='+str(report)]);d=json.loads(report.read_text());assert a.returncode==1 and d['numFailedTests']==2;fail=[t for f in d['testResults'] for t in f['assertionResults'] if t['status']=='failed'];assert all('SUCCEEDED' in ''.join(t['failureMessages']) for t in fail)
+finally:p.write_text(s);assert p.read_text()==s
+q=r/'f05-mutations.json';rows=json.loads(q.read_text());rows['mutations'].append({'name':'allow-late-success','exit':a.returncode,'failed':d['numFailedTests'],'passed':d['numPassedTests'],'assertions':[t['fullName'] for t in fail],'note':'semantic mutant disables final cancellation fence; original error-label mutant is retained separately'});q.write_text(json.dumps(rows,indent=2)+'\n');print('7/7 killed, semantic late-success mutant2FAIL, source restored')

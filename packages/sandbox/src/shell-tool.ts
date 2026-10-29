@@ -18,6 +18,8 @@ export interface ShellRunRequest {
   readonly timeoutMs: number
   readonly maxOutputBytes: number
   readonly stdin?: string
+  /** Caller cancellation authority, forwarded unchanged to the backend. */
+  readonly signal?: AbortSignal
 }
 
 export interface ShellRunResult {
@@ -161,6 +163,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         timeoutMs: request.timeoutMs,
         maxOutputBytes: request.maxOutputBytes,
         ...(request.stdin !== undefined ? { stdin: request.stdin } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
         handle: request.handle
       })
       return result
@@ -176,6 +179,8 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
     idempotent: false,
     sandbox: 'PROCESS',
     execute: async (input, context) => {
+      const signal = context?.signal
+      if (signal?.aborted) return rejected('command_cancelled_before_launch')
       const handle = context?.sandboxHandle
       if (
         !handle ||
@@ -292,6 +297,7 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
       )
 
       let result: ShellRunResult
+      if (signal?.aborted) return rejected('command_cancelled_before_launch')
       try {
         result = await runner({
           argv,
@@ -302,12 +308,25 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
           handle: Object.freeze({ ...handle, workspaceRoot: grantedRoot }),
           timeoutMs,
           maxOutputBytes: limits.maxOutputBytes,
+          ...(signal ? { signal } : {}),
           ...(stdinRaw !== undefined ? { stdin: stdinRaw } : {})
         })
       } catch (error) {
+        if (signal?.aborted) {
+          return failed(
+            'effect_uncertain: cleanup_incomplete after cancellation'
+          )
+        }
         return failed(
           `shell runner failed: ${error instanceof Error ? error.message : 'unknown error'}`
         )
+      }
+
+      // A cooperative signal is not proof of native process-tree quiescence.
+      // Until X01 supervision is qualified, never turn a late completion into
+      // success or a claim of clean cancellation (SPEC 0276 / AUD0625 F05).
+      if (signal?.aborted) {
+        return failed('effect_uncertain: cleanup_incomplete after cancellation')
       }
 
       if (result.exitCode === 'spawn_failed') {
