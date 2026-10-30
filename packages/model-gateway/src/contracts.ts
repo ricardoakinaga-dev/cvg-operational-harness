@@ -220,6 +220,19 @@ export interface ModelGatewayEvent {
    * never a measurement.
    */
   projectedInputTokens?: number
+  /**
+   * SPEC 0289: SHA-256 (hex) and UTF-8 size of the canonical frozen request
+   * (`frozen-request-v1`) the adapter receives, on `model.call.started`. Equal
+   * for every attempt of one candidate.
+   */
+  requestSha256?: string
+  requestBytes?: number
+  /**
+   * SPEC 0289 D1-A: the canonical request bytes themselves. Present only when
+   * the gateway runs with `recordFrozenRequests`; it holds the request content,
+   * so the event sink must be tenant-protected with a defined retention.
+   */
+  frozenRequest?: string
   circuitState?: string
   detail?: string
 }
