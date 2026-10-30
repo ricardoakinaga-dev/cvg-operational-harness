@@ -452,6 +452,41 @@ export class PostgresSpillSweeper {
     this.#schema = options.schemaName
   }
 
+  /**
+   * Startup check for the host: refuses (`SpillStorageUnavailable`) unless the connected login
+   * holds exactly the privileges of the provisioning script. A later `purgeExpired` does not
+   * repeat it once it has passed.
+   */
+  async verify(): Promise<void> {
+    let client: PostgresPoolClient
+    try {
+      client = await this.#pool.connect()
+    } catch {
+      throw new SpillStorageUnavailable('Spill database unavailable')
+    }
+    let releaseError: Error | undefined
+    try {
+      await client.query('BEGIN READ ONLY')
+      await client.query("SET LOCAL statement_timeout = '5s'")
+      await client.query(
+        `SET LOCAL search_path = pg_catalog, "${this.#schema}"`
+      )
+      await this.#verifyPrivileges(client)
+      await client.query('COMMIT')
+      this.#verified = true
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK')
+      } catch {
+        releaseError = new Error('Spill sweeper check cleanup failed')
+      }
+      if (error instanceof SpillError) throw error
+      throw new SpillStorageUnavailable('Spill sweeper check failed')
+    } finally {
+      client.release(releaseError)
+    }
+  }
+
   async purgeExpired(): Promise<number> {
     let client: PostgresPoolClient
     try {

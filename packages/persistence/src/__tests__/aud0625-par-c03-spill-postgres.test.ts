@@ -1058,6 +1058,42 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
       }
     })
 
+    it('verify() is the startup check: it passes for the provisioned login and refuses any other, deleting nothing', async () => {
+      await admin.query("SELECT set_config('cvg.tenant_id', 'verify-t', false)")
+      await admin.query(
+        `INSERT INTO ${schema}.spill_objects (tenant_id,session_id,locator_hash,execution_id,operation_key,source_id,classification,media_type,content_sha256,byte_length,content,created_at,expires_at)
+         VALUES ('verify-t','s','${'7'.repeat(64)}','e','o','x','C','text/plain','${'b'.repeat(64)}',2,'\\x6162','2020-01-01','2020-01-02')`
+      )
+      await new PostgresSpillSweeper(sweepPool, {
+        schemaName: schema
+      }).verify()
+      await expect(
+        new PostgresSpillSweeper(pool1, { schemaName: schema }).verify()
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('least privilege')
+      })
+      await expect(
+        new PostgresSpillSweeper(sweepPool, {
+          schemaName: 'no_such_schema'
+        }).verify()
+      ).rejects.toBeInstanceOf(SpillStorageUnavailable)
+      const dead = {
+        connect: async () => {
+          throw new Error('down')
+        }
+      } as unknown as PostgresPoolLike
+      await expect(
+        new PostgresSpillSweeper(dead, { schemaName: schema }).verify()
+      ).rejects.toBeInstanceOf(SpillStorageUnavailable)
+      const left = await admin.query(
+        `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE tenant_id='verify-t'`
+      )
+      expect(left.rows[0].n).toBe(1)
+      await admin.query(
+        `DELETE FROM ${schema}.spill_objects WHERE tenant_id='verify-t'`
+      )
+    })
+
     it('N01: the migration creates no role and grants nothing', () => {
       const sql = readFileSync(
         new URL('../../migrations/0037_tool_output_spill.sql', import.meta.url),
