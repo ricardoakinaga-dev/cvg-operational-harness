@@ -1,0 +1,68 @@
+{
+  "task": "AUD0625-SPEC-0291-0292-0293-T3-20261030",
+  "recorded_by": "Claude Code (Opus), sessão cvg-operational-harness-df",
+  "channel": "AskUserQuestion nesta sessão; resposta literal do Ricardo",
+  "recorded_at_utc": "2026-10-30T20:39:02.989015+00:00",
+  "previous_receipt": {
+    "path": "docs/04_audit/evidence/USER-DECISIONS-20261028/human-decisions-24.json",
+    "sha256": "a47984f442f2a44fc12c9407c926ec44b4694c87a7a9bc1e754431346e2ce8c0"
+  },
+  "decisions": [
+    {
+      "id": "AUD0625-SPEC-0291-AO-A-E",
+      "answer": "Aprovar recomendado",
+      "question": "SPEC 0291 (approval bound to the conversation): today an approval granted in one conversation can execute in another conversation of the same tenant, including on the production kernel worker path (harmless today because effects are synthetic; P1 before any real effect). Proposal: record the origin (conversation, plus session when present) with the approval and deny with origin_mismatch before reserving. Recommended: AO-A conversation always plus session when present; AO-B legacy approvals without origin execute with an audit event and a removal deadline; AO-C do not bind the operator yet (the worker's operator comes from the message body); AO-D PostgreSQL column now; AO-E new code origin_mismatch. Approve as recommended?",
+      "bound_to": {
+        "spec": "docs/02_spec/0291_approval_origin_binding.md",
+        "sha256": "87a6a44ea9a0bcc56ac6ffdd8318872f51cfef0185164527e3e7dc0ebdd63be2",
+        "source": "branch claude/aud0625-par-s04-07 @ 040b899445acf1c69e0c0148c245394a65393f56",
+        "review": "D9, claude/aud0625-review-0291-0292-d9 @ ea50c601a (P1 de evidência corrigido na R1)"
+      },
+      "grants": [
+        "BUILD T3 local e sintético da SPEC 0291 pela Claude 07, em 3 fatias, com revisão independente por sessão não autora",
+        "coluna anulável de origem no PostgreSQL (migração com número reservado depois de 0033/0034)",
+        "código de negação novo origin_mismatch, incluído em outboxOutcomeReasons"
+      ]
+    },
+    {
+      "id": "AUD0625-SPEC-0292-SP-A-G",
+      "answer": "Aprovar recomendado",
+      "question": "SPEC 0292 (PAR-S02, session projections with cache): today reading 1 event of a session validates the whole log (about 85 µs per event, 1.7 s at 20,000 events). Proposal: pure projections (state, stops, compaction) plus an opt-in checkpoint cache, so a read only checks the checkpoint and reads the tail. Recommended: SP-A only what log v1 supports (goals and todos later); SP-B stop = fact in the log, with no claim of resolution; SP-C only the writer saves the checkpoint, on the append that crosses K, plus flush/close; SP-D service only, no SDK yet; SP-E no message text in the cache; SP-F table in the same schema with the same RLS; SP-G project is not an integrity proof. Approve as recommended?",
+      "bound_to": {
+        "spec": "docs/02_spec/0292_par_s02_session_projections.md",
+        "sha256": "52f2f58b09a727facfe0a320e274b8d9c19fe04f09788dab50a4ef36b79f0465",
+        "source": "branch claude/aud0625-par-s04-07 @ 2bac19988a35749cb0888eab96daf5331fe44a1c",
+        "review": "D9, claude/aud0625-review-0291-0292-d9 @ e40ecc646 (P2-1 e P2-2 corrigidos na R1)"
+      },
+      "grants": [
+        "BUILD T3 local e sintético da SPEC 0292 pela Claude 07, em 4 fatias, depois da onda de integração S01/S04, com revisão independente",
+        "tabela de checkpoints opt-in no mesmo esquema e RLS da sessão (migração com número reservado depois de 0033/0034)"
+      ]
+    },
+    {
+      "id": "AUD0625-SPEC-0293-D1-D8",
+      "answer": "Aprovar recomendado",
+      "question": "SPEC 0293 (PAR-C03, spill of large tool outputs): today a 115 KB output reaches the model as 300 characters with no cut warning, and the full content is lost. Proposal: outputs above 8 KiB go to a dedicated store; the model gets a framed preview of 2 KiB + 1 KiB and a locator, and reads the rest with a governed spill.read tool. Recommended: D1 SpillStore port with PostgreSQL (nothing outside tests before it); D2 8 KiB / 3 KiB preview / 8 MiB / 32 KiB per read; D3 a failed write is never silent (stored=no); D4 24 h retention, 7-day ceiling, purge; D5 spill.read counted in the budget; D6 prune applied once, stable; D7 raw content bound to tenant and session under RLS; D8 quota of 256 objects per session and 256 MiB per tenant. Approve as recommended?",
+      "bound_to": {
+        "spec": "docs/02_spec/0293_tool_output_spill_and_prune.md",
+        "sha256": "21a8dbc1e3325e64c1ee76a337985e13e27a64c2a8ba9089346c1e83cfdda988",
+        "source": "branch claude/aud0625-par-c03-d9 @ 64ad7c190975130b9e5cf36596b5bd1e08b45437",
+        "review": "07, claude/aud0625-par-s04-07 @ 3126680ae (P1 e P2 corrigidos na R2)"
+      },
+      "grants": [
+        "BUILD T3 local e sintético da SPEC 0293 pela Claude D9, nas fatias da SPEC (Postgres antes de qualquer uso fora de teste), com revisão independente",
+        "campo opcional requiresCompleteResult em ToolDescriptor e capacidade reservada spill.read",
+        "tabela de spill com migração própria (número reservado depois de 0033/0034 e das migrações de 0291/0292)"
+      ]
+    }
+  ],
+  "grants": [
+    "BUILD T3 das SPECs 0291, 0292 e 0293 como recomendado, local e sintético"
+  ],
+  "does_not_grant": [
+    "exposição no SDK nesta onda",
+    "efeito real, release ou produção",
+    "dado real"
+  ],
+  "production": "NO_GO"
+}

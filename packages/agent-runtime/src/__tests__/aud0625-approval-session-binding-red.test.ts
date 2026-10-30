@@ -305,4 +305,65 @@ describe('SPEC 0291 phase 1: RED witnesses of the proposed rule', () => {
       expect(harness.toolExecutor).not.toHaveBeenCalled()
     }
   )
+  it.fails(
+    'AP03: the same conversation but another session is denied, and so is a turn without a session',
+    async () => {
+      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+      const approvalId = await askAndApprove(harness)
+      const otherSession = await harness.runtime.runTurn(
+        turnInput({ ...asked, sessionId: 'sess_other', approvalId })
+      )
+      expect(otherSession.reason).toBe('origin_mismatch')
+      const { sessionId: _omit, ...withoutSession } = {
+        ...asked,
+        approvalId
+      }
+      void _omit
+      const absent = await harness.runtime.runTurn(turnInput(withoutSession))
+      expect(absent.reason).toBe('origin_mismatch')
+      expect(harness.toolExecutor).not.toHaveBeenCalled()
+      expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+    }
+  )
+
+  it.fails(
+    'AP04: a record without origin (before the SPEC) still executes and leaves a runtime.origin_unbound audit event and a metric',
+    async () => {
+      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+      const approvalId = await askAndApprove(harness)
+      harness.store.update(TENANT, approvalId, 'APPROVED', (current) => {
+        const { origin: _origin, ...legacy } = current as unknown as Record<
+          string,
+          unknown
+        >
+        void _origin
+        return legacy as unknown as typeof current
+      })
+      const result = await harness.runtime.runTurn(
+        turnInput({ ...elsewhere, approvalId })
+      )
+      expect(result.outcome).toBe('executed')
+      expect(harness.audit.records().map((r) => r.type)).toContain(
+        'runtime.origin_unbound'
+      )
+      expect(harness.telemetry.metrics().map((m) => m.name)).toContain(
+        'approval_origin_unbound_total'
+      )
+    }
+  )
+})
+
+describe('SPEC 0291: what must hold before and after', () => {
+  it('asked without a session, only the conversation counts: another session of it executes', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const { sessionId: _omit, ...noSession } = asked
+    void _omit
+    const requested = await harness.runtime.runTurn(turnInput(noSession))
+    const approvalId = requested.approvalId ?? ''
+    approveApproval(harness, approvalId)
+    const result = await harness.runtime.runTurn(
+      turnInput({ ...noSession, sessionId: 'sess_any', approvalId })
+    )
+    expect(result.outcome).toBe('executed')
+  })
 })
