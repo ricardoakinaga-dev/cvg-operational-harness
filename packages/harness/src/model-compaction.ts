@@ -5,6 +5,8 @@ import type { ModelMessage, ModelResult } from '@cvg/harness-contracts'
 import {
   COMPACTION_SUMMARY_FRAME,
   MODEL_COMPACTION_STRATEGY_VERSION,
+  resolveLogThrough,
+  type LogSequenceOf,
   digestMessages,
   estimateContextTokens,
   type CompactableMessage,
@@ -79,6 +81,12 @@ export interface ModelCompactionOptions {
   readonly onCompacted?: (
     result: ContextCompactionResult
   ) => void | Promise<void>
+  /**
+   * SPEC 0290c: maps each request message to its session-log sequence. Required
+   * when `onCompacted` is set: the event must say how much of the log the
+   * summary covers, and that cannot be inferred from the messages.
+   */
+  readonly logSequenceOf?: LogSequenceOf
 }
 
 function validPins(items: readonly PinnedItem[]): boolean {
@@ -167,6 +175,23 @@ export function createModelCompactionControl(
           }
           if (!validPins(pins)) return refuse()
           if (call.turn.signal.aborted) return next()
+
+          // SPEC 0290c: what the event says it covers is decided before any
+          // summary is paid for; a mapping that cannot be trusted refuses.
+          let loggedThrough: number | null = null
+          if (options.onCompacted) {
+            loggedThrough =
+              options.logSequenceOf === undefined
+                ? null
+                : await resolveLogThrough(
+                    options.logSequenceOf,
+                    call.turn,
+                    messages.length,
+                    new Set(prefix.map((m) => m.sequence - 1))
+                  )
+            if (loggedThrough === null) return refuse()
+            if (call.turn.signal.aborted) return next()
+          }
 
           const budgetCap =
             call.request.budget.maxCostUsd * MODEL_COMPACTION_COST_SHARE
@@ -270,7 +295,7 @@ export function createModelCompactionControl(
                 inputTokens,
                 keptMessages: governed.length + kept.length,
                 droppedMessages: prefix.length,
-                throughSequence: last.sequence,
+                throughSequence: loggedThrough as number,
                 sourceDigest: digestMessages(prefix),
                 summary,
                 viewTokens,
