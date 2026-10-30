@@ -74,6 +74,11 @@ export async function requestApprovalTurn(
         Date.parse(proposal.expiresAt) - Date.parse(proposal.createdAt)
       ),
       reason: decision.reason,
+      // SPEC 0291: where the approval was asked; it is only executable from there.
+      origin: {
+        conversationId: input.conversationId,
+        ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {})
+      },
       proposalId: proposal.proposalId,
       proposalHash: proposal.proposalHash,
       capability: proposal.capability,

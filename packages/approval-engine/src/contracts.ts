@@ -36,6 +36,18 @@ export const ApprovalResourceSchema = z
 
 export type ApprovalResource = z.infer<typeof ApprovalResourceSchema>
 
+/**
+ * SPEC 0291: where an approval was asked. Metadata of the binding, never authority and never
+ * part of the proposal hash; immutable once recorded.
+ */
+export const ApprovalOriginSchema = z
+  .object({
+    conversationId: z.string().min(1).max(200),
+    sessionId: z.string().min(1).max(200).optional()
+  })
+  .strict()
+export type ApprovalOrigin = z.infer<typeof ApprovalOriginSchema>
+
 export const ApprovalRequestSchema = z
   .object({
     tenantId: z.string().min(1).max(120),
@@ -65,7 +77,8 @@ export const ApprovalRequestSchema = z
       .optional(),
     capability: z.string().min(1).max(120).optional(),
     dataClassification: z.string().min(1).max(120).optional(),
-    proposalPayload: z.unknown().optional()
+    proposalPayload: z.unknown().optional(),
+    origin: ApprovalOriginSchema.optional()
   })
   .strict()
 
@@ -215,6 +228,8 @@ export interface ApprovalRecord {
   dataClassification?: string
   proposalPayload?: unknown
   operationKey?: string
+  /** SPEC 0291: set at request time, immutable, absent on records older than the SPEC. */
+  origin?: ApprovalOrigin
 }
 
 export function computeApprovalPayloadHash(input: {

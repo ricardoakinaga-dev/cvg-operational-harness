@@ -174,7 +174,7 @@ const FAKE_CANCEL_SCOPE: Partial<Record<Capability, EffectScope>> = {
   'record.cancel': 'controlled_fake'
 }
 
-// SPEC 0291 phase 1 (PAR-S04 finding 3): the approval is bound to the proposal and, on the durable
+// SPEC 0291 (PAR-S04 finding 3): the approval is bound to the proposal and, on the durable
 // kernel path, to the execution; it is NOT bound to the session/conversation that asked for it.
 // Controls pin what the real runtime does today; `it.fails` witnesses state the proposed rule.
 const asked = {
@@ -191,170 +191,93 @@ async function askAndApprove(harness: Harness) {
   approveApproval(harness, approvalId)
   return approvalId
 }
+/** Re-inserts the record the way it was stored before the SPEC or by the durable adapter. */
+function storeWithoutOrigin(
+  harness: Harness,
+  approvalId: string,
+  patch: Record<string, unknown> = {}
+): void {
+  const { origin: _origin, ...rest } = harness.approvals.get(
+    TENANT,
+    approvalId
+  ) as unknown as Record<string, unknown>
+  void _origin
+  harness.store.insert({ ...rest, ...patch } as never)
+}
 
-describe('SPEC 0291 phase 1: controls on the real runtime and engine', () => {
-  it('the approval record has no session or conversation field at all', async () => {
+describe('SPEC 0291 slice 1: the approval is executable only where it was asked', () => {
+  it('AP02: the record carries the origin, and the approval executes in the conversation and session that asked', async () => {
     const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
     const approvalId = await askAndApprove(harness)
     const record = harness.approvals.get(
       TENANT,
       approvalId
     ) as unknown as Record<string, unknown>
-    expect(
-      Object.keys(record).filter((k) => /session|conversation/i.test(k))
-    ).toEqual([])
-  })
-
-  it('an approval asked in conversation A executes when presented from conversation B of the same tenant', async () => {
-    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-    const approvalId = await askAndApprove(harness)
-    const executed = await harness.runtime.runTurn(
-      turnInput({ ...elsewhere, approvalId })
+    expect(record.origin).toEqual({
+      conversationId: 'conv_A',
+      sessionId: 'sess_A'
+    })
+    const result = await harness.runtime.runTurn(
+      turnInput({ ...asked, approvalId })
     )
-    expect(executed.outcome).toBe('executed')
+    expect(result.outcome).toBe('executed')
     expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
   })
 
-  it('an approval asked by one operator executes when presented by another operator', async () => {
+  it('AP01: asked in conversation A, denied from conversation B before any reservation, and still APPROVED', async () => {
     const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
     const approvalId = await askAndApprove(harness)
-    const executed = await harness.runtime.runTurn(
-      turnInput({ ...asked, operatorId: 'op_9', approvalId })
+    const result = await harness.runtime.runTurn(
+      turnInput({ ...elsewhere, approvalId })
     )
-    expect(executed.outcome).toBe('executed')
+    expect(result.outcome).toBe('denied')
+    expect(result.reason).toBe('origin_mismatch')
+    expect(harness.toolExecutor).not.toHaveBeenCalled()
+    expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+    // The denial left the approval usable where it was asked.
+    const back = await harness.runtime.runTurn(
+      turnInput({ ...asked, approvalId })
+    )
+    expect(back.outcome).toBe('executed')
   })
 
-  it('the tenant, action, resource, agent and payload bindings do hold (what is already closed)', async () => {
+  it('AP01: the executed approval cannot be replayed from another conversation either', async () => {
     const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
     const approvalId = await askAndApprove(harness)
-    const other = await harness.runtime.runTurn(
-      turnInput({
-        ...elsewhere,
-        approvalId,
-        resource: { type: 'record', id: 'apt_other', tenantId: TENANT }
-      })
+    await harness.runtime.runTurn(turnInput({ ...asked, approvalId }))
+    const replay = await harness.runtime.runTurn(
+      turnInput({ ...elsewhere, approvalId })
     )
-    expect(other.reason).toBe('resource_mismatch')
+    expect(replay.reason).toBe('origin_mismatch')
+    expect(harness.toolExecutor).toHaveBeenCalledTimes(1)
+  })
+
+  it('AP03: the same conversation but another session is denied, and so is a turn without a session', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    const otherSession = await harness.runtime.runTurn(
+      turnInput({ ...asked, sessionId: 'sess_other', approvalId })
+    )
+    expect(otherSession.reason).toBe('origin_mismatch')
+    const { sessionId: _omit, ...withoutSession } = { ...asked, approvalId }
+    void _omit
+    const absent = await harness.runtime.runTurn(turnInput(withoutSession))
+    expect(absent.reason).toBe('origin_mismatch')
+    expect(harness.toolExecutor).not.toHaveBeenCalled()
+    expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+  })
+
+  it('AP01: the conversation is compared on its own: another conversation with the same session id is denied', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    const result = await harness.runtime.runTurn(
+      turnInput({ conversationId: 'conv_B', sessionId: 'sess_A', approvalId })
+    )
+    expect(result.reason).toBe('origin_mismatch')
     expect(harness.toolExecutor).not.toHaveBeenCalled()
   })
-})
 
-describe('SPEC 0291 phase 1: RED witnesses of the proposed rule', () => {
-  it.fails(
-    'an approval asked in conversation A is denied when presented from conversation B',
-    async () => {
-      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-      const approvalId = await askAndApprove(harness)
-      const result = await harness.runtime.runTurn(
-        turnInput({ ...elsewhere, approvalId })
-      )
-      expect(result.outcome).toBe('denied')
-      expect(result.reason).toBe('origin_mismatch')
-      expect(harness.toolExecutor).not.toHaveBeenCalled()
-      expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
-    }
-  )
-
-  it.fails(
-    'the same approval still executes in the conversation that asked for it',
-    async () => {
-      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-      const approvalId = await askAndApprove(harness)
-      const record = harness.approvals.get(
-        TENANT,
-        approvalId
-      ) as unknown as Record<string, unknown>
-      // The proposed record carries the origin of the request; today it has no such field.
-      expect(record.origin).toEqual({
-        conversationId: 'conv_A',
-        sessionId: 'sess_A'
-      })
-      const result = await harness.runtime.runTurn(
-        turnInput({ ...asked, approvalId })
-      )
-      expect(result.outcome).toBe('executed')
-    }
-  )
-
-  it.fails(
-    'an approval asked by one operator is denied when another operator presents it (decision D-C)',
-    async () => {
-      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-      const approvalId = await askAndApprove(harness)
-      const result = await harness.runtime.runTurn(
-        turnInput({ ...asked, operatorId: 'op_9', approvalId })
-      )
-      expect(result.outcome).toBe('denied')
-      expect(harness.toolExecutor).not.toHaveBeenCalled()
-    }
-  )
-  it.fails(
-    'an approval bound to a durable execution (executionRef) is not executable by a library turn, in any conversation (I2-c)',
-    async () => {
-      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-      const approvalId = await askAndApprove(harness)
-      harness.store.update(TENANT, approvalId, 'APPROVED', (current) => ({
-        ...current,
-        executionRef: 'exec_durable_1'
-      }))
-      const result = await harness.runtime.runTurn(
-        turnInput({ ...asked, approvalId })
-      )
-      expect(result.outcome).toBe('denied')
-      expect(result.reason).toBe('origin_mismatch')
-      expect(harness.toolExecutor).not.toHaveBeenCalled()
-    }
-  )
-  it.fails(
-    'AP03: the same conversation but another session is denied, and so is a turn without a session',
-    async () => {
-      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-      const approvalId = await askAndApprove(harness)
-      const otherSession = await harness.runtime.runTurn(
-        turnInput({ ...asked, sessionId: 'sess_other', approvalId })
-      )
-      expect(otherSession.reason).toBe('origin_mismatch')
-      const { sessionId: _omit, ...withoutSession } = {
-        ...asked,
-        approvalId
-      }
-      void _omit
-      const absent = await harness.runtime.runTurn(turnInput(withoutSession))
-      expect(absent.reason).toBe('origin_mismatch')
-      expect(harness.toolExecutor).not.toHaveBeenCalled()
-      expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
-    }
-  )
-
-  it.fails(
-    'AP04: a record without origin (before the SPEC) still executes and leaves a runtime.origin_unbound audit event and a metric',
-    async () => {
-      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
-      const approvalId = await askAndApprove(harness)
-      harness.store.update(TENANT, approvalId, 'APPROVED', (current) => {
-        const { origin: _origin, ...legacy } = current as unknown as Record<
-          string,
-          unknown
-        >
-        void _origin
-        return legacy as unknown as typeof current
-      })
-      const result = await harness.runtime.runTurn(
-        turnInput({ ...elsewhere, approvalId })
-      )
-      expect(result.outcome).toBe('executed')
-      expect(harness.audit.records().map((r) => r.type)).toContain(
-        'runtime.origin_unbound'
-      )
-      expect(harness.telemetry.metrics().map((m) => m.name)).toContain(
-        'approval_origin_unbound_total'
-      )
-    }
-  )
-})
-
-describe('SPEC 0291: what must hold before and after', () => {
-  it('asked without a session, only the conversation counts: another session of it executes', async () => {
+  it('AP03: asked without a session, only the conversation counts: another session of it executes', async () => {
     const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
     const { sessionId: _omit, ...noSession } = asked
     void _omit
@@ -365,5 +288,69 @@ describe('SPEC 0291: what must hold before and after', () => {
       turnInput({ ...noSession, sessionId: 'sess_any', approvalId })
     )
     expect(result.outcome).toBe('executed')
+  })
+
+  it('AP04: a record without origin (before the SPEC) still executes, with an audit event and a metric', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    storeWithoutOrigin(harness, approvalId)
+    const result = await harness.runtime.runTurn(
+      turnInput({ ...elsewhere, approvalId })
+    )
+    expect(result.outcome).toBe('executed')
+    expect(harness.audit.records().map((r) => r.type)).toContain(
+      'runtime.origin_unbound'
+    )
+    expect(harness.telemetry.metrics().map((m) => m.name)).toContain(
+      'approval_origin_unbound_total'
+    )
+  })
+
+  it('AP04: a record with origin leaves no origin_unbound trace', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    await harness.runtime.runTurn(turnInput({ ...asked, approvalId }))
+    expect(harness.audit.records().map((r) => r.type)).not.toContain(
+      'runtime.origin_unbound'
+    )
+    expect(harness.telemetry.metrics().map((m) => m.name)).not.toContain(
+      'approval_origin_unbound_total'
+    )
+  })
+
+  it('AP11: an approval made for a durable execution (executionRef, no origin) is not executable by a library turn', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    storeWithoutOrigin(harness, approvalId, { executionRef: 'exec_durable_1' })
+    const result = await harness.runtime.runTurn(
+      turnInput({ ...asked, approvalId })
+    )
+    expect(result.outcome).toBe('denied')
+    expect(result.reason).toBe('origin_mismatch')
+    expect(harness.toolExecutor).not.toHaveBeenCalled()
+    expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+  })
+
+  it('AO-C: the operator is not part of the binding: another operator executes in the same conversation', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    const executed = await harness.runtime.runTurn(
+      turnInput({ ...asked, operatorId: 'op_9', approvalId })
+    )
+    expect(executed.outcome).toBe('executed')
+  })
+
+  it('control: the tenant, action, resource, agent and payload bindings still hold, and keep their own code', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    const other = await harness.runtime.runTurn(
+      turnInput({
+        ...asked,
+        approvalId,
+        resource: { type: 'record', id: 'apt_other', tenantId: TENANT }
+      })
+    )
+    expect(other.reason).toBe('resource_mismatch')
+    expect(harness.toolExecutor).not.toHaveBeenCalled()
   })
 })
