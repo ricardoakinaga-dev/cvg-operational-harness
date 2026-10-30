@@ -6,6 +6,7 @@ import type {
 import { SpillCommitUnknown } from './errors.ts'
 import {
   newBlockMarker,
+  renderInlineBlock,
   renderPreviewBlock,
   serializeToolOutput,
   sha256Hex,
@@ -60,9 +61,20 @@ export async function prepareToolOutput(
   const { text } = serialized
   const bytes = utf8Bytes(text)
   const sha256 = sha256Hex(text)
+  const newMarker = input.marker ?? newBlockMarker
   if (bytes <= input.policy.thresholdBytes) {
     return {
-      rendering: { form: 'inline', text, bytes, sha256, stored: false },
+      rendering: {
+        form: 'inline',
+        text: renderInlineBlock({
+          toolId: input.toolId,
+          text,
+          marker: newMarker(text)
+        }),
+        bytes,
+        sha256,
+        stored: false
+      },
       wrote: false
     }
   }
@@ -93,7 +105,7 @@ export async function prepareToolOutput(
       }
     }
   }
-  const marker = (input.marker ?? newBlockMarker)(text)
+  const marker = newMarker(text)
   const block = renderPreviewBlock({
     toolId: input.toolId,
     text,

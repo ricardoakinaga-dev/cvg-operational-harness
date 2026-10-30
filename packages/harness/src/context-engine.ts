@@ -6,6 +6,7 @@ import type {
   Observation,
   StepContext
 } from '@cvg/harness-contracts'
+import { renderedObservationText } from '@cvg/harness-contracts'
 
 export interface DefaultContextEngineOptions {
   /** Approximate model context budget in tokens. */
@@ -62,12 +63,8 @@ function summarizeObservation(observation: Observation): string {
   const ref = observation.provenance.effectRef
     ? ` ref=${observation.provenance.effectRef}`
     : ''
-  // SPEC 0293 §3.3: the runtime-set rendering of a tool result (whole output or
-  // preview plus locator) replaces the cut summary the model used to read
-  const body =
-    observation.type === 'TOOL_RESULT' && observation.source === 'TOOL'
-      ? (observation.rendering?.text ?? observation.summary)
-      : observation.summary
+  // SPEC 0293 §3.3: the runtime-set rendering of a tool result replaces the cut summary
+  const body = renderedObservationText(observation)
   return `[${observation.source}/${observation.type}] ${body} (source=${provenance})${ref}`
 }
 

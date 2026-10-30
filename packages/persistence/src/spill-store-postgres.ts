@@ -16,6 +16,7 @@ import {
   SpillNotFound,
   SpillStorageUnavailable,
   SpillTooLarge,
+  alignUtf8Slice,
   resolveSpillPolicy,
   sha256Hex,
   utf8Bytes
@@ -64,6 +65,22 @@ export interface PostgresSpillStoreOptions {
   readonly clock?: () => Date
 }
 
+/**
+ * Each field is a 4-byte big-endian length followed by its UTF-8 bytes, so no
+ * choice of field contents can shift a boundary into another field (a NUL
+ * separator would not hold that for fields that contain NUL).
+ */
+export function lengthPrefixed(fields: readonly string[]): Buffer {
+  const parts: Buffer[] = []
+  for (const field of fields) {
+    const bytes = Buffer.from(field, 'utf8')
+    const prefix = Buffer.alloc(4)
+    prefix.writeUInt32BE(bytes.length)
+    parts.push(prefix, bytes)
+  }
+  return Buffer.concat(parts)
+}
+
 const locatorHash = (locator: string): string =>
   createHash('sha256').update(locator).digest('hex')
 
@@ -109,12 +126,12 @@ export class PostgresSpillStore implements SpillStore {
     }
     const mac = createHmac('sha256', key)
       .update(
-        [
+        lengthPrefixed([
           input.tenantId,
           input.sessionId,
           input.operationKey,
           input.sha256
-        ].join('\u0000')
+        ])
       )
       .digest('base64url')
     return `spill_${mac}`
@@ -136,6 +153,9 @@ export class PostgresSpillStore implements SpillStore {
       await client.query(readOnly ? 'BEGIN READ ONLY' : 'BEGIN')
       await client.query("SET LOCAL statement_timeout = '5s'")
       await client.query("SET LOCAL lock_timeout = '5s'")
+      await client.query(
+        `SET LOCAL search_path = pg_catalog, "${this.#schema}"`
+      )
       await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
         this.#tenantId
       ])
@@ -164,6 +184,20 @@ export class PostgresSpillStore implements SpillStore {
     if (input.signal?.aborted) throw new SpillCancelled('Spill write cancelled')
     if (input.tenantId !== this.#tenantId) {
       throw new SpillError('Tenant differs from the bound spill store')
+    }
+    for (const field of [
+      input.sessionId,
+      input.executionId,
+      input.operationKey,
+      input.sourceId,
+      input.classification
+    ]) {
+      // PostgreSQL text cannot hold NUL, and an identity with one is never valid
+      if (field.length < 1 || field.includes('\u0000')) {
+        throw new SpillError(
+          'Spill identity fields must be non-empty and free of NUL'
+        )
+      }
     }
     const bytes = utf8Bytes(input.content)
     if (bytes < 1) throw new SpillError('Spill content is empty')
@@ -262,7 +296,7 @@ export class PostgresSpillStore implements SpillStore {
           input.sessionId,
           locatorHash(input.locator),
           input.offset + 1,
-          length,
+          length + 4,
           this.#clock().toISOString()
         ]
       )
@@ -271,12 +305,15 @@ export class PostgresSpillStore implements SpillStore {
     if (!row) throw new SpillNotFound('Spill object not found')
     if (row.expired) throw new SpillExpired('Spill object expired')
     const total = Number(row.total)
+    const aligned = alignUtf8Slice(row.part, length)
+    const offset = input.offset + aligned.skippedBytes
     return {
-      text: row.part.toString('utf8'),
-      offset: input.offset,
-      bytesRead: row.part.length,
+      text: aligned.text,
+      offset,
+      skippedBytes: aligned.skippedBytes,
+      bytesRead: aligned.bytesRead,
       totalBytes: total,
-      eof: input.offset + row.part.length >= total
+      eof: offset + aligned.bytesRead >= total
     }
   }
 

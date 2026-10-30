@@ -17,6 +17,7 @@ import {
 } from '@cvg/harness'
 import {
   PostgresSpillStore,
+  lengthPrefixed,
   runSpillMigrations,
   type PostgresSpillStoreOptions
 } from '../spill-store-postgres.ts'
@@ -323,6 +324,7 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
     expect(await s.read({ ...base, offset: 2, length: 3 })).toEqual({
       text: 'cde',
       offset: 2,
+      skippedBytes: 0,
       bytesRead: 3,
       totalBytes: 10,
       eof: false
@@ -341,6 +343,116 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
         s.read({ ...base, offset: 0, length: 1, ...bad })
       ).rejects.toBeInstanceOf(SpillError)
     }
+  })
+
+  it('reads multibyte content in 32 KiB slices and reassembles it exactly (review P2)', async () => {
+    const s = store()
+    // 2-, 3- and 4-byte characters land on and around every multiple of 32768
+    const unit = 'aç€😀'
+    const text = unit.repeat(11_000) + '😀€ç'
+    const bytes = Buffer.byteLength(text, 'utf8')
+    expect(bytes).toBeGreaterThan(3 * 32_768)
+    const { locator } = await s.put(
+      put({ operationKey: 'op-multibyte', content: text })
+    )
+    let offset = 0
+    let rebuilt = ''
+    let slices = 0
+    for (;;) {
+      const slice = await s.read({
+        tenantId: tenant,
+        sessionId: 'session-a',
+        locator,
+        offset,
+        length: 32_768
+      })
+      expect(slice.skippedBytes).toBe(0)
+      expect(slice.offset).toBe(offset)
+      expect(slice.bytesRead).toBeLessThanOrEqual(32_768)
+      expect(slice.text).not.toContain('\uFFFD')
+      rebuilt += slice.text
+      offset += slice.bytesRead
+      slices += 1
+      if (slice.eof) break
+    }
+    expect(slices).toBeGreaterThanOrEqual(4)
+    expect(rebuilt).toBe(text)
+    expect(offset).toBe(bytes)
+  })
+
+  it('aligns a requested offset that falls inside a character and reports it', async () => {
+    const s = store()
+    const { locator } = await s.put(
+      put({ operationKey: 'op-align', content: 'a😀b€' })
+    )
+    const base = {
+      tenantId: tenant,
+      sessionId: 'session-a',
+      locator,
+      length: 100
+    }
+    expect(await s.read({ ...base, offset: 1 })).toMatchObject({
+      text: '😀b€',
+      offset: 1,
+      skippedBytes: 0
+    })
+    expect(await s.read({ ...base, offset: 2 })).toMatchObject({
+      text: 'b€',
+      offset: 5,
+      skippedBytes: 3,
+      eof: true
+    })
+    expect(await s.read({ ...base, offset: 7 })).toMatchObject({
+      text: '',
+      offset: 9,
+      skippedBytes: 2,
+      bytesRead: 0,
+      eof: true
+    })
+    // a window smaller than one character still makes progress
+    expect(await s.read({ ...base, offset: 1, length: 1 })).toMatchObject({
+      text: '😀',
+      bytesRead: 4
+    })
+  })
+
+  it('refuses identity fields with NUL or empty, and frames the HMAC input by length (review P3-b)', async () => {
+    const s = store()
+    for (const over of [
+      { operationKey: 'a\u0000b' },
+      { sessionId: 'a\u0000b' },
+      { sourceId: '' },
+      { executionId: 'x\u0000' }
+    ]) {
+      await expect(s.put(put(over))).rejects.toMatchObject({ retryable: false })
+    }
+    expect(
+      lengthPrefixed(['a\u0000b', 'c']).equals(
+        lengthPrefixed(['a', 'b\u0000c'])
+      )
+    ).toBe(false)
+    expect(
+      lengthPrefixed(['ab', 'c']).equals(lengthPrefixed(['a', 'bc']))
+    ).toBe(false)
+    expect(lengthPrefixed(['é']).length).toBe(4 + 2)
+  })
+
+  it('pins the search path inside every transaction (review P3-c)', async () => {
+    const seen: string[] = []
+    const recording: PostgresPoolLike = {
+      connect: async () => {
+        const client = await pool1.connect()
+        return {
+          query: async (text: string, values?: unknown[]) => {
+            seen.push(text)
+            return client.query(text, values as never)
+          },
+          release: (error?: Error) => client.release(error)
+        } as never
+      }
+    } as never
+    await store(recording).put(put({ operationKey: 'op-path' }))
+    expect(seen).toContain(`SET LOCAL search_path = pg_catalog, "${schema}"`)
   })
 
   it('refuses content above the stored limit and empty content', async () => {

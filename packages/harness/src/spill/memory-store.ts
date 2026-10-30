@@ -10,7 +10,7 @@ import type {
 } from '@cvg/harness-contracts'
 import { SpillExpired, SpillNotFound, SpillTooLarge } from './errors.ts'
 import { resolveSpillPolicy } from './policy.ts'
-import { sha256Hex, utf8Bytes } from './render.ts'
+import { alignUtf8Slice, sha256Hex, utf8Bytes } from './render.ts'
 
 interface Entry {
   readonly tenantId: string
@@ -111,13 +111,19 @@ export class InMemorySpillStore implements SpillStore {
     }
     const total = entry.content.length
     const length = Math.min(input.length, this.#policy.readMaxBytes)
-    const slice = entry.content.subarray(input.offset, input.offset + length)
+    const window = entry.content.subarray(
+      input.offset,
+      input.offset + length + 4
+    )
+    const aligned = alignUtf8Slice(window, length)
+    const offset = input.offset + aligned.skippedBytes
     return {
-      text: slice.toString('utf8'),
-      offset: input.offset,
-      bytesRead: slice.length,
+      text: aligned.text,
+      offset,
+      skippedBytes: aligned.skippedBytes,
+      bytesRead: aligned.bytesRead,
       totalBytes: total,
-      eof: input.offset + slice.length >= total
+      eof: offset + aligned.bytesRead >= total
     }
   }
 }

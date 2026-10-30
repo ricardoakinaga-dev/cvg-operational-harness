@@ -43,7 +43,11 @@ export interface SpillReadInput {
 
 export interface SpillSlice {
   readonly text: string
+  /** Effective start: the first code point boundary at or after the requested offset. */
   readonly offset: number
+  /** Bytes advanced from the requested offset to reach a code point boundary (0 when it was one). */
+  readonly skippedBytes: number
+  /** Whole code points only: the next read continues at `offset + bytesRead`. */
   readonly bytesRead: number
   readonly totalBytes: number
   readonly eof: boolean
