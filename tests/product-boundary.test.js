@@ -98,11 +98,28 @@ describe('harness product boundary', () => {
       'utf8'
     )
     write('packages/sandbox/src/capabilities.ts', probe)
+    // The reviewed host probes of the sandbox stay UNVERIFIED diagnostics, never exceptions:
+    // the bubblewrap probe (PDSH-011, 1 site) and the Landlock helper ABI probe (SPEC 0288
+    // slice 2: the spawn and the three reads of its result, 4 sites). They are pinned by line
+    // and expression digest, so any new or edited site in the probe shows up as a difference.
+    const reviewedProbeSites = [
+      'packages/sandbox/src/capabilities.ts:68 c67346bff110f76f',
+      'packages/sandbox/src/capabilities.ts:74 e5465ed4fe67ef28',
+      'packages/sandbox/src/capabilities.ts:75 cbebaf31ec85242c',
+      'packages/sandbox/src/capabilities.ts:76 d7439bee24773bcb',
+      'packages/sandbox/src/capabilities.ts:101 909718127ad27651'
+    ]
+    const probeDiagnostics = auditProductBoundary(root).diagnostics.filter(
+      (d) => d.file.startsWith('packages/sandbox/')
+    )
+    expect(probeDiagnostics.map((d) => `${d.file} ${d.expression}`)).toEqual(
+      reviewedProbeSites
+    )
     expect(
-      auditProductBoundary(root).diagnostics.filter((d) =>
-        d.file.startsWith('packages/sandbox/')
+      probeDiagnostics.every(
+        (d) => d.reason === 'UNVERIFIED_DYNAMIC_CODE_EXECUTION'
       )
-    ).toHaveLength(1)
+    ).toBe(true)
     write(
       'packages/sandbox/src/capabilities.ts',
       `${probe}\n// unreviewed mutation\n`
