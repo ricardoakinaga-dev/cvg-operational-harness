@@ -98,6 +98,33 @@ const request = (
 const tryWrite = (path: string) =>
   `try{require('node:fs').writeFileSync(${JSON.stringify(path)},'x');process.stdout.write('wrote')}` +
   `catch(e){process.stdout.write(e.code)}`
+/**
+ * A helper that is NOT the reviewed one (review P2s on slice 3): it applies no ruleset and runs
+ * the payload 1.5 s later, after a weak proof, after closing its channel, or saying nothing.
+ */
+function fakeHelper(mode: 'weak' | 'closed' | 'silent'): string {
+  const path = join(base, `fake-helper-${mode}`)
+  writeFileSync(
+    path,
+    [
+      `#!${process.execPath}`,
+      "const fs = require('node:fs')",
+      "const { spawnSync } = require('node:child_process')",
+      'const a = process.argv.slice(2)',
+      "const f = Number(a[a.indexOf('--status-fd') + 1])",
+      "const p = a.indexOf('--') + 1",
+      mode === 'weak'
+        ? "fs.writeSync(f, JSON.stringify({ applied: true, abi: 3, handledFs: 1, handledNet: 0, scoped: 0 }) + '\\n')"
+        : '',
+      mode === 'closed' ? 'fs.closeSync(f)' : '',
+      'Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1500)',
+      "spawnSync(a[p], a.slice(p + 1), { stdio: 'inherit' })",
+      ''
+    ].join('\n')
+  )
+  chmodSync(path, 0o755)
+  return path
+}
 
 beforeAll(() => {
   if (OWN_ROOT === '/tmp' || OWN_ROOT.startsWith('/tmp/'))
@@ -298,6 +325,42 @@ describe.skipIf(!native)(
       ])
       expect(outcome.landlock).toEqual({ applied: false })
     })
+
+    it('a proof that does not handle the ruleset rights is refused at once: the payload never runs', async () => {
+      const sentinel = join(workspace, 'x02-weak')
+      const outcome = await (
+        await landlocked.launch(
+          request(tryWrite(sentinel), profileWith(fakeHelper('weak')))
+        )
+      ).wait()
+      expect(outcome.cause).toBe('spawn_failed')
+      expect(outcome.landlock).toEqual({
+        applied: false,
+        error: 'rights_not_handled'
+      })
+      expect(outcome.secondaryErrors).toContain('landlock_rights_not_handled')
+      expect(existsSync(sentinel)).toBe(false)
+    }, 60_000)
+
+    for (const mode of ['closed', 'silent'] as const)
+      it(`a helper that ${mode === 'closed' ? 'closes its channel without' : 'never writes'} a proof does not run past the startup deadline`, async () => {
+        const sentinel = join(workspace, `x02-${mode}`)
+        const outcome = await (
+          await landlocked.launch({
+            ...request(tryWrite(sentinel), profileWith(fakeHelper(mode))),
+            limits: { ...request('1').limits, startupMs: 800 }
+          })
+        ).wait()
+        expect(outcome.cause).toBe(
+          mode === 'closed' ? 'spawn_failed' : 'startup_timeout'
+        )
+        expect(outcome.exitCode).toBeNull()
+        expect(outcome.landlock).toEqual({
+          applied: false,
+          error: 'status_missing'
+        })
+        expect(existsSync(sentinel)).toBe(false)
+      }, 60_000)
 
     afterAll(async () => {
       await plain.dispose()

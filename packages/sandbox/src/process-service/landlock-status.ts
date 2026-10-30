@@ -1,11 +1,13 @@
 import { Buffer } from 'node:buffer'
 import { LANDLOCK_MIN_ABI } from '../capabilities.ts'
+import { LANDLOCK_RULESET_RIGHTS } from '../process-profile.ts'
 import type { ProcessLandlockReport } from './types.ts'
 
 /**
- * Reader for the Landlock helper's private status channel (SPEC 0288 §4). The helper writes
- * exactly one JSON object and closes the fd before it executes the payload, so the payload
- * never writes here. Anything but one well-formed proof is "not applied".
+ * Reader for the Landlock helper's private status channel (SPEC 0288 §4). The reviewed helper
+ * writes exactly one newline-terminated JSON object and closes the fd before it executes the
+ * payload, so the payload never writes here. Anything but one well-formed proof that handles
+ * every right the ruleset names is "not applied".
  */
 export const LANDLOCK_STATUS_MAX_BYTES = 512
 const HELPER_ERROR = /^[a-z_]{1,40}$/
@@ -23,6 +25,11 @@ export class LandlockStatusChannel {
       return
     }
     this.#text += Buffer.from(chunk).toString('utf8')
+  }
+
+  /** The helper's one document is complete (or can no longer become a proof). */
+  settled(): boolean {
+    return this.#oversized || this.#text.includes('\n')
   }
 
   report(): ProcessLandlockReport {
@@ -61,6 +68,9 @@ export class LandlockStatusChannel {
       return { applied: false, error: 'status_malformed' }
     // The helper enforces the floor itself; a proof below it is still not Landlock (D-B).
     if (abi < LANDLOCK_MIN_ABI) return { applied: false, error: 'abi_too_low' }
+    // A right the ruleset grants but the ruleset does not handle would be unrestricted.
+    if ((handledFs & LANDLOCK_RULESET_RIGHTS) !== LANDLOCK_RULESET_RIGHTS)
+      return { applied: false, error: 'rights_not_handled' }
     return { applied: true, abi, handledFs, handledNet, scoped }
   }
 }

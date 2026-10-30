@@ -23,3 +23,8 @@ mutant M7-helper-not-required $PRO "s/if \(request\.landlock === true && !helper
 mutant M8-rules-not-written $SVC 's/rules\?\.end\(prepared\.landlock\.rules\)/rules?.end()/'
 mutant M9-tmp-not-allowed $PRO "s/\[LL_ALL_ABI3, '\/tmp'\],//"
 mutant M10-oversize-ignored $STA 's/if \(this\.#bytes > LANDLOCK_STATUS_MAX_BYTES\) \{/if (false) {/'
+# Review P2 fixes (07): proof strength and early judgement.
+mutant M11-rights-not-checked $STA 's/if \(\(handledFs & LANDLOCK_RULESET_RIGHTS\) !== LANDLOCK_RULESET_RIGHTS\)/if (false)/'
+mutant M12-no-eof-judgement $SVC "s/landlockPipe\?\.on\('end', \(\) => judgeProof\(true\)\)//"
+mutant M13-judged-only-at-exit $SVC 's/landlock\.feed\(chunk\)\n(\s+)judgeProof\(false\)/landlock.feed(chunk)/'
+mutant M14-start-without-proof $SVC 's/if \(initPid !== undefined && landlockProven\) clearTimeout/if (initPid !== undefined) clearTimeout/'

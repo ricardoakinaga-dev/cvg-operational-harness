@@ -68,6 +68,8 @@ const LL_READ_FILE = 0x4
 const LL_READ_DIR = 0x8
 const LL_TRUNCATE = 0x4000
 const LL_ALL_ABI3 = 0x7fff
+/** Every right the derived ruleset names: a proof must report all of them as handled. */
+export const LANDLOCK_RULESET_RIGHTS = LL_ALL_ABI3
 const MAX_FILE_BYTES = 256 * 1024 * 1024
 const MAX_RUNTIME_BYTES = 512 * 1024 * 1024
 const FIXED_ENV = Object.freeze({

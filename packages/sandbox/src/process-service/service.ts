@@ -585,6 +585,26 @@ function supervise(s: Supervision): Supervised {
   }
   child.stdout?.on('data', (chunk: Buffer) => take('out', chunk))
   child.stderr?.on('data', (chunk: Buffer) => take('err', chunk))
+  // A Landlock launch has started only once the helper's proof is in, so a launch whose
+  // proof never comes ends at the startup deadline instead of running unproven.
+  let landlockProven = landlock === undefined
+  const startedIfProven = (): void => {
+    if (initPid !== undefined && landlockProven) clearTimeout(startupTimer)
+  }
+  // Judged as soon as the one document is complete or the channel ends, not at exit: an
+  // unproven launch is torn down before it can run to completion (fail closed).
+  const judgeProof = (ended: boolean): void => {
+    if (!landlock || landlockProven || cause !== undefined) return
+    if (!ended && !landlock.settled()) return
+    const report = landlock.report()
+    if (report.applied) {
+      landlockProven = true
+      startedIfProven()
+    } else {
+      secondary.push(`landlock_${report.error ?? 'unproven'}`)
+      trigger('spawn_failed')
+    }
+  }
   const statusPipe = child.stdio[s.statusIndex]
   statusPipe?.on('data', (chunk: Buffer) => {
     status.feed(chunk)
@@ -593,13 +613,17 @@ function supervise(s: Supervision): Supervised {
       initPid = snap.childPid
       initStart = readStartTime(initPid, procRoot)
       nsInode = snap.pidNamespace
-      clearTimeout(startupTimer)
+      startedIfProven()
       resolveNsKnown()
     }
   })
   if (landlock && s.landlockStatusIndex !== undefined) {
     const landlockPipe = child.stdio[s.landlockStatusIndex]
-    landlockPipe?.on('data', (chunk: Buffer) => landlock.feed(chunk))
+    landlockPipe?.on('data', (chunk: Buffer) => {
+      landlock.feed(chunk)
+      judgeProof(false)
+    })
+    landlockPipe?.on('end', () => judgeProof(true))
     landlockPipe?.on('error', () => undefined)
   }
   child.stdin?.on('error', () => undefined)
@@ -631,7 +655,8 @@ function supervise(s: Supervision): Supervised {
         trigger('spawn_failed')
       } else if (landlock) {
         const report = landlock.report()
-        // Without a proof the helper never executed the payload (XL04): nothing ran.
+        // The reviewed helper never executes the payload without a proof (XL04); a launch that
+        // reached exit unproven is classified as a failed start, never as the payload's exit.
         if (!report.applied) {
           secondary.push(`landlock_${report.error ?? 'unproven'}`)
           trigger('spawn_failed')

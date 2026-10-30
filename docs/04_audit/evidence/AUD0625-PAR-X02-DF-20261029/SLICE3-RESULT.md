@@ -63,3 +63,27 @@ Task `AUD0625-PAR-X02-SPEC-DF-20261029`, Claude DF (Opus), 30/10/2026. Esta é a
 ## Fica para a fatia 4
 
 O build do helper na CI. A imagem de produção segue sem bubblewrap e sem helper (D-C), então `PROCESS` continua `unavailable` lá.
+
+## Correções da revisão da 07 (R1)
+
+A 07 rodou sondas com helpers falsos (`AUD0625-REVIEW-PAR-X02-F3F4-07-20261030`) e achou dois P2:
+
+1. **A prova era fraca.** Um helper que escrevesse `handledFs: 1` era aceito como aplicado. Agora a prova precisa tratar todos os direitos que o ruleset concede (`LANDLOCK_RULESET_RIGHTS`, os bits 0–14 do ABI 3). Se faltar algum, o resultado é `rights_not_handled`.
+2. **"Sem prova, nada rodou" só valia para o helper revisado, e só no `close`.** Agora a prova é julgada assim que o documento termina (`\n`) ou o canal fecha. Prova inválida ou ausente derruba o lançamento na hora (`spawn_failed`). O prazo de partida (`startupMs`) só para de correr quando o bwrap anunciou o filho **e** a prova chegou, então um helper calado termina em `startup_timeout`. Em nenhum dos casos o payload chega a rodar. A frase do código foi reescrita: o helper revisado nunca executa o payload sem prova, e o serviço não deixa um lançamento sem prova seguir.
+
+Testes novos, todos com o payload atrasado em 1,5 s depois do comportamento do falso:
+
+- prova fraca: `spawn_failed`, `rights_not_handled`, sentinela ausente;
+- canal fechado sem prova: `spawn_failed` no EOF, `status_missing`, sentinela ausente;
+- helper calado: `startup_timeout`, sentinela ausente;
+- leitor: cobertura de direitos e `settled()`.
+
+Mutantes (`mutations-s3-r1.log`): os novos M11 (direitos não conferidos), M12 (sem julgamento no EOF), M13 (julgado só na saída) e M14 (partida sem prova) morreram. O M1 (prova ignorada no `close`) agora **sobrevive como equivalente**: o julgamento no EOF sempre roda antes do `close`, porque o Node fecha os streams antes de emitir `close`. A checagem no `close` fica como defesa redundante. São 13 mortos e 1 equivalente declarado.
+
+Gates: 18 arquivos e 333 testes de sandbox/X01/X02, typecheck, eslint e prettier limpos.
+
+Limites aceitos (P3 da 07, sem mudança nesta fatia; vão para o PAR-X03):
+
+- o ruleset não concede `/dev/shm`, `readdir('/')` nem `readdir('/dev')`, então payloads com memória compartilhada POSIX falham;
+- `IOCTL_DEV` é tratado no ABI ≥ 5 e nunca concedido;
+- o `-Werror` da CI pode quebrar com um warning novo do gcc do runner. A falha seria visível e cairia no mesmo passo.

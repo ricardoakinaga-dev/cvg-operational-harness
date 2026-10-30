@@ -73,6 +73,29 @@ describe('PAR-X02 slice 3: Landlock status channel', () => {
       expect(read(text)).toEqual({ applied: false, error: 'status_malformed' })
   })
 
+  it('a proof that does not handle every right the ruleset grants is not Landlock', () => {
+    expect(read(proof({ handledFs: 1 }))).toEqual({
+      applied: false,
+      error: 'rights_not_handled'
+    })
+    expect(read(proof({ handledFs: 0x3fff }))).toEqual({
+      applied: false,
+      error: 'rights_not_handled'
+    })
+    expect(read(proof({ handledFs: 0x7fff }))).toMatchObject({ applied: true })
+  })
+
+  it('the document is settled once it ends its line or overflows', () => {
+    const channel = new LandlockStatusChannel()
+    channel.feed(Buffer.from('{"applied":'))
+    expect(channel.settled()).toBe(false)
+    channel.feed(Buffer.from('false}\n'))
+    expect(channel.settled()).toBe(true)
+    const big = new LandlockStatusChannel()
+    big.feed(Buffer.alloc(LANDLOCK_STATUS_MAX_BYTES + 1, 0x20))
+    expect(big.settled()).toBe(true)
+  })
+
   it('a proof below the floor is not Landlock', () => {
     expect(read(proof({ abi: LANDLOCK_MIN_ABI - 1 }))).toEqual({
       applied: false,
