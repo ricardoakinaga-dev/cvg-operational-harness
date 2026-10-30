@@ -62,7 +62,13 @@ function summarizeObservation(observation: Observation): string {
   const ref = observation.provenance.effectRef
     ? ` ref=${observation.provenance.effectRef}`
     : ''
-  return `[${observation.source}/${observation.type}] ${observation.summary} (source=${provenance})${ref}`
+  // SPEC 0293 §3.3: the runtime-set rendering of a tool result (whole output or
+  // preview plus locator) replaces the cut summary the model used to read
+  const body =
+    observation.type === 'TOOL_RESULT' && observation.source === 'TOOL'
+      ? (observation.rendering?.text ?? observation.summary)
+      : observation.summary
+  return `[${observation.source}/${observation.type}] ${body} (source=${provenance})${ref}`
 }
 
 /**

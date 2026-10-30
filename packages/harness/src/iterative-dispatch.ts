@@ -24,6 +24,10 @@ import {
   type LoopRun
 } from './iterative-runtime.ts'
 import { agentExposesTool } from './runtime.ts'
+import { DEFAULT_SPILL_CLASSIFICATION } from './spill/composition.ts'
+import { resolveSpillPolicy } from './spill/policy.ts'
+import { prepareToolOutput } from './spill/prepare.ts'
+import { serializeToolOutput, utf8Bytes } from './spill/render.ts'
 import type { KernelHost } from './kernel/host.ts'
 import {
   CANCELLED_RESPONSE,
@@ -57,6 +61,7 @@ export interface IterativeDispatchContext {
       trust: Observation['trust']
       payload: unknown
       summary: string
+      rendering?: Observation['rendering']
       provenance: Observation['provenance']
     }
   ): Observation
@@ -673,6 +678,25 @@ export async function dispatchTool(
         `unknown_effect: approval confirmation failed: ${outcome.error}.`
       )
     case 'succeeded': {
+      // SPEC 0293: what the model sees is decided once, here, and never rewritten
+      const spill = ctx.options.spill
+      const prepared = await prepareToolOutput({
+        tenantId: run.input.tenantId,
+        sessionId: run.input.sessionId,
+        executionId: run.executionId,
+        operationKey,
+        toolId: tool.id,
+        classification: (
+          spill?.classificationOf ?? (() => DEFAULT_SPILL_CLASSIFICATION)
+        )(tool.id),
+        output: outcome.result.output,
+        policy: resolveSpillPolicy(spill?.policy),
+        ...(spill?.store ? { store: spill.store } : {}),
+        ...(spill?.allowProcessLocal ? { allowProcessLocal: true } : {}),
+        ...(run.input.signal ? { signal: run.input.signal } : {}),
+        storedSoFar: spillCount.get(run) ?? 0
+      })
+      if (prepared.wrote) spillCount.set(run, (spillCount.get(run) ?? 0) + 1)
       const observation = ctx.makeObservation(run, {
         stepId,
         stepNumber,
@@ -687,10 +711,11 @@ export async function dispatchTool(
             ctx.maxObservationPayloadChars
           )
         },
-        summary: stringifySummary(
+        summary: summaryWithCutMarker(
           outcome.result.output,
           'Tool completed successfully.'
         ),
+        rendering: prepared.rendering,
         provenance: {
           sourceId: tool.id,
           ...(tool.version ? { sourceVersion: tool.version } : {}),
@@ -714,9 +739,36 @@ export async function dispatchTool(
         // terminally instead of continuing on an unlogged result.
         return ctx.stop('INSUFFICIENT_EVIDENCE', pipeline.logFailure.response)
       }
+      // SPEC 0293 §3.5: a decisive tool whose result neither fits inline nor
+      // could be stored is never decided on from a cut preview.
+      if (
+        tool.requiresCompleteResult === true &&
+        prepared.rendering.form === 'preview' &&
+        !prepared.rendering.stored
+      ) {
+        return ctx.stop(
+          'INSUFFICIENT_EVIDENCE',
+          'The tool result is too large to show and could not be stored; the model was not given a partial result.'
+        )
+      }
       return { kind: 'continue' }
     }
   }
+}
+
+/** Stored outputs per run (SPEC 0293 I5); a run is one turn of the loop. */
+const spillCount = new WeakMap<LoopRun, number>()
+
+const SUMMARY_CHARS = 300
+
+/**
+ * The 300-character summary of a tool result, now with an explicit mark when it
+ * is a cut (SPEC 0293 I1): the model never reads a silent head-only cut.
+ */
+function summaryWithCutMarker(value: unknown, fallback: string): string {
+  const { text } = serializeToolOutput(value)
+  if (text.length <= SUMMARY_CHARS) return stringifySummary(value, fallback)
+  return `${text.slice(0, SUMMARY_CHARS)} […cortado: ${utf8Bytes(text)} bytes no total]`
 }
 
 export async function dispatchKnowledge(

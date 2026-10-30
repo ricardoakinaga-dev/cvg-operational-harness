@@ -134,6 +134,12 @@ export interface ToolDescriptor {
    * closed when no `SandboxGate` is configured.
    */
   readonly sandbox?: SandboxMode
+  /**
+   * SPEC 0293: the decision needs the whole result. When the output does not fit
+   * inline and cannot be stored, the turn is refused before the model.
+   * Declared by the tool author, never by a result.
+   */
+  readonly requiresCompleteResult?: boolean
 }
 
 export interface ToolDefinition extends ToolDescriptor {

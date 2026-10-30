@@ -20,6 +20,7 @@ import type {
   ToolDescriptor,
   TraceId
 } from './contracts.ts'
+import type { ObservationRendering } from './spill.ts'
 
 export const RUNTIME_PROFILES = ['single_pass', 'iterative'] as const
 export type RuntimeProfile = (typeof RUNTIME_PROFILES)[number]
@@ -145,6 +146,11 @@ export interface Observation {
   readonly trust: ObservationTrust
   readonly payload: unknown
   readonly summary: string
+  /**
+   * SPEC 0293: what the model sees for a tool result (whole output or preview
+   * plus locator), set once by the runtime. Absent for every other observation.
+   */
+  readonly rendering?: ObservationRendering
   readonly provenance: ObservationProvenance
   readonly timestamp: string
 }
