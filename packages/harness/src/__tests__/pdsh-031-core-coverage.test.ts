@@ -1,3 +1,4 @@
+import { coreHook } from '../kernel/hook-authority.ts'
 import {
   mkdirSync,
   mkdtempSync,
@@ -608,18 +609,24 @@ describe('PDSH-031 core per-file closure — compaction control edges', () => {
           name: 'owned.history',
           kind: 'control',
           apply(ctx) {
-            ctx.on('model/before-call', async (call, next) => {
-              const request = call.request as {
-                messages: readonly { role: string; content: string }[]
-              }
-              request.messages = [
-                ...request.messages.slice(0, 1),
-                { role: 'user', content: 'pergunta anterior '.repeat(60) },
-                { role: 'assistant', content: 'resposta anterior '.repeat(60) },
-                ...request.messages.slice(1)
-              ]
-              return next()
-            })
+            ctx.on(
+              'model/before-call',
+              coreHook('model/before-call', async (call, next) => {
+                const request = call.request as {
+                  messages: readonly { role: string; content: string }[]
+                }
+                request.messages = [
+                  ...request.messages.slice(0, 1),
+                  { role: 'user', content: 'pergunta anterior '.repeat(60) },
+                  {
+                    role: 'assistant',
+                    content: 'resposta anterior '.repeat(60)
+                  },
+                  ...request.messages.slice(1)
+                ]
+                return next()
+              })
+            )
           }
         },
         createCompactionControl({

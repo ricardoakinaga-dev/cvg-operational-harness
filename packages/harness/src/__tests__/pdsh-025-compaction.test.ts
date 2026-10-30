@@ -1,3 +1,4 @@
+import { coreHook } from '../kernel/hook-authority.ts'
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { canonicalizeJson } from '@cvg/harness-contracts'
@@ -59,18 +60,21 @@ const history: KernelPlugin = {
   name: 'owned.history',
   kind: 'control',
   apply(ctx) {
-    ctx.on('model/before-call', async (call, next) => {
-      const request = call.request as {
-        messages: readonly ModelRequest['messages'][number][]
-      }
-      request.messages = [
-        request.messages[0] as ModelRequest['messages'][number],
-        { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
-        { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
-        ...request.messages.slice(1)
-      ]
-      return next()
-    })
+    ctx.on(
+      'model/before-call',
+      coreHook('model/before-call', async (call, next) => {
+        const request = call.request as {
+          messages: readonly ModelRequest['messages'][number][]
+        }
+        request.messages = [
+          request.messages[0] as ModelRequest['messages'][number],
+          { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
+          { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
+          ...request.messages.slice(1)
+        ]
+        return next()
+      })
+    )
   }
 }
 

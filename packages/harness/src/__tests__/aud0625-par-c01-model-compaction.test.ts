@@ -1,3 +1,4 @@
+import { coreHook } from '../kernel/hook-authority.ts'
 import { describe, expect, it } from 'vitest'
 import type {
   ModelGateway,
@@ -59,18 +60,21 @@ const olderTurns: KernelPlugin = {
   name: 'owned.older-turns',
   kind: 'control',
   apply(ctx) {
-    ctx.on('model/before-call', async (call, next) => {
-      const request = call.request as {
-        messages: readonly { role: 'user' | 'assistant'; content: string }[]
-      }
-      request.messages = [
-        ...request.messages.slice(0, 1),
-        { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
-        { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
-        ...request.messages.slice(1)
-      ]
-      return next()
-    })
+    ctx.on(
+      'model/before-call',
+      coreHook('model/before-call', async (call, next) => {
+        const request = call.request as {
+          messages: readonly { role: 'user' | 'assistant'; content: string }[]
+        }
+        request.messages = [
+          ...request.messages.slice(0, 1),
+          { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
+          { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
+          ...request.messages.slice(1)
+        ]
+        return next()
+      })
+    )
   }
 }
 
@@ -337,10 +341,13 @@ describe('PAR-C01 target: a cancelled compaction leaves nothing behind', () => {
       name: 'owned.abort-first',
       kind: 'control',
       apply(ctx) {
-        ctx.on('model/before-call', async (_call, next) => {
-          controller.abort()
-          return next()
-        })
+        ctx.on(
+          'model/before-call',
+          coreHook('model/before-call', async (_call, next) => {
+            controller.abort()
+            return next()
+          })
+        )
       }
     }
     const recorded: ContextCompactionResult[] = []

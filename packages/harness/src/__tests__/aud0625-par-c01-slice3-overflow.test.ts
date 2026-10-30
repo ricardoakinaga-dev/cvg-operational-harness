@@ -1,3 +1,4 @@
+import { coreHook } from '../kernel/hook-authority.ts'
 import { describe, expect, it } from 'vitest'
 import type {
   ExecutionBudget,
@@ -43,18 +44,21 @@ const olderTurns: KernelPlugin = {
   name: 'owned.older-turns',
   kind: 'control',
   apply(ctx) {
-    ctx.on('model/before-call', async (call, next) => {
-      const request = call.request as {
-        messages: readonly ModelRequest['messages'][number][]
-      }
-      request.messages = [
-        ...request.messages.slice(0, 1),
-        { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
-        { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
-        ...request.messages.slice(1)
-      ]
-      return next()
-    })
+    ctx.on(
+      'model/before-call',
+      coreHook('model/before-call', async (call, next) => {
+        const request = call.request as {
+          messages: readonly ModelRequest['messages'][number][]
+        }
+        request.messages = [
+          ...request.messages.slice(0, 1),
+          { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
+          { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
+          ...request.messages.slice(1)
+        ]
+        return next()
+      })
+    )
   }
 }
 
@@ -252,13 +256,16 @@ describe('PAR-C01 slice 3: overflow → compact → one retry', () => {
       name: 'owned.shrink-and-abort',
       kind: 'control',
       apply(ctx) {
-        ctx.on('model/overflow', async (call, next) => {
-          ;(call.request as { messages: unknown }).messages = [
-            { role: 'user', content: 'curto' }
-          ]
-          controller.abort()
-          return next()
-        })
+        ctx.on(
+          'model/overflow',
+          coreHook('model/overflow', async (call, next) => {
+            ;(call.request as { messages: unknown }).messages = [
+              { role: 'user', content: 'curto' }
+            ]
+            controller.abort()
+            return next()
+          })
+        )
       }
     }
     const t = build({
