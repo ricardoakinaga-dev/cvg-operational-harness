@@ -43,3 +43,9 @@ Task `AUD0625-PAR-C01-D9-20261029`, branch `claude/aud0625-par-c01-d9`, sobre `b
 - O pedido de compactação continua sem `model/request` no log (enum fechado), como na fatia 2 (aguarda a decisão do Ricardo sobre os desvios 1–4).
 - `COMPACTION` não entra no enum de `purpose` do schema de sessão, pelo mesmo motivo; o retry de overflow registra o pedido reenviado, cujo
   `purpose` é o do turno.
+
+## P3 da revisão do DF (registrado, sem retrabalho)
+
+O pedido enviado depois de `model/overflow` não passa de novo por `model/before-call`. Hoje esse ponto só tem a checagem de duração (`race` cobre
+o prazo) e o limite de pedidos é cobrado por `beginModelRequest`, então não há bypass atual. Um controle futuro de saída (DLP, política) não veria a
+vista compactada. Para a integração: rodar `model/before-call` de novo antes da 2ª tentativa, ou fixar essa invariante em teste e documentação.
