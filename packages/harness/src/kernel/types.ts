@@ -200,6 +200,16 @@ export interface HookMap {
     call: ModelCallView,
     next: Next<KernelGate>
   ) => Promise<KernelGate>
+  /**
+   * waterfall — the model port reported that the request does not fit the
+   * context window (`reason: 'context_window'`). A control may replace
+   * `call.request.messages` with a smaller view for exactly one more request;
+   * leaving them untouched keeps the original failure.
+   */
+  'model/overflow': (
+    call: ModelCallState,
+    next: Next<KernelGate>
+  ) => Promise<KernelGate>
   /** waterfall — policy and approval decide before dispatch. */
   'tool/pre-execute': (
     call: ToolCallView,

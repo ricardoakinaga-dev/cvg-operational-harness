@@ -9,6 +9,7 @@ import type {
 import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
 import {
   COMPACTION_STRATEGY_VERSION,
+  COMPACTION_SUMMARY_FRAME,
   compactConversation,
   createCompactionControl,
   createSessionCompactionRecorder,
@@ -17,6 +18,7 @@ import {
   type ContextCompactionResult
 } from '../compaction.ts'
 import { createKernelRuntime, InMemorySessionEventStore } from '../index.ts'
+import type { KernelPlugin } from '../kernel/types.ts'
 import {
   InMemoryApprovalEngine,
   RecordingAuditSink,
@@ -52,11 +54,32 @@ function messages(): CompactableMessage[] {
   ]
 }
 
+/** Earlier turns of the conversation, placed before the compaction control. */
+const history: KernelPlugin = {
+  name: 'owned.history',
+  kind: 'control',
+  apply(ctx) {
+    ctx.on('model/before-call', async (call, next) => {
+      const request = call.request as {
+        messages: readonly ModelRequest['messages'][number][]
+      }
+      request.messages = [
+        request.messages[0] as ModelRequest['messages'][number],
+        { role: 'user', content: 'pergunta anterior longa '.repeat(40) },
+        { role: 'assistant', content: 'resposta anterior longa '.repeat(40) },
+        ...request.messages.slice(1)
+      ]
+      return next()
+    })
+  }
+}
+
 function buildRuntime(
   options: {
     readonly instructions?: readonly string[]
     readonly onCompacted?: (result: ContextCompactionResult) => void
     readonly maxInputTokens?: number
+    readonly withHistory?: boolean
   } = {}
 ) {
   const captured: ModelRequest[] = []
@@ -82,8 +105,10 @@ function buildRuntime(
     audit: new RecordingAuditSink(),
     telemetry: new RecordingTelemetrySink(),
     plugins: [
+      ...(options.withHistory ? [history] : []),
       createCompactionControl({
         maxInputTokens: options.maxInputTokens ?? 50,
+        keepRecentMessages: 1,
         ...(options.onCompacted ? { onCompacted: options.onCompacted } : {})
       })
     ]
@@ -100,9 +125,11 @@ function buildRuntime(
 
 describe('PDSH-025 deterministic context compaction (SPEC 0206)', () => {
   it('estimates deterministically and skips compaction below the cap', () => {
+    // SPEC 0290 D5: ceil(12 bytes / 4) + 4 tokens of framing per message
     expect(
       estimateContextTokens([{ content: '12345678' }, { content: '1234' }])
-    ).toBe(3)
+    ).toBe(11)
+    expect(estimateContextTokens([{ content: 'ação' }])).toBe(6)
     const input = messages()
     const frozen = canonicalizeJson(input)
     const result = compactConversation(input, { maxInputTokens: 10_000 })
@@ -148,9 +175,10 @@ describe('PDSH-025 deterministic context compaction (SPEC 0206)', () => {
       .update(canonicalizeJson(input.slice(0, 3)))
       .digest('hex')
     expect(first.sourceDigest).toBe(expectedDigest)
-    expect(first.messages[0]).toMatchObject({ role: 'system' })
+    // SPEC 0290 §3.3: history becomes a `user` data message, never `system`.
+    expect(first.messages[0]).toMatchObject({ role: 'user' })
     expect((first.messages[0] as { content: string }).content).toContain(
-      '[contexto compactado]'
+      `[contexto compactado] ${COMPACTION_SUMMARY_FRAME}`
     )
     expect(first.messages.slice(1)).toEqual(input.slice(3))
     expect(canonicalizeJson(input)).toBe(frozen)
@@ -184,7 +212,9 @@ describe('PDSH-025 deterministic context compaction (SPEC 0206)', () => {
   it('compacts inside the kernel before the model and audits the event', async () => {
     const compacted: ContextCompactionResult[] = []
     const { runtime, input, captured } = buildRuntime({
-      instructions: ['instrução muito longa '.repeat(40)],
+      instructions: ['instrução curta'],
+      maxInputTokens: 200,
+      withHistory: true,
       onCompacted: (result) => {
         compacted.push(result)
       }
@@ -195,18 +225,21 @@ describe('PDSH-025 deterministic context compaction (SPEC 0206)', () => {
     expect(result.stopReason).toBe('COMPLETED')
     expect(captured).toHaveLength(1)
     const request = captured[0] as ModelRequest
-    expect(request.messages).toHaveLength(2)
+    expect(request.messages).toHaveLength(3)
+    // the governed instruction stays first and verbatim (SPEC 0290 §3.1)
     expect(request.messages[0]?.role).toBe('system')
-    expect(request.messages[0]?.content).toContain('[contexto compactado]')
-    expect(request.messages[1]).toEqual({
+    expect(request.messages[0]?.content).toContain('instrução curta')
+    expect(request.messages[1]?.role).toBe('user')
+    expect(request.messages[1]?.content).toContain('[contexto compactado]')
+    expect(request.messages[2]).toEqual({
       role: 'user',
       content: 'pergunta atual do plantão'
     })
     expect(compacted).toHaveLength(1)
     expect(compacted[0]).toMatchObject({
       compacted: true,
-      droppedMessages: 1,
-      throughSequence: 1,
+      droppedMessages: 2,
+      throughSequence: 3,
       strategyVersion: COMPACTION_STRATEGY_VERSION
     })
   })
@@ -231,7 +264,9 @@ describe('PDSH-025 deterministic context compaction (SPEC 0206)', () => {
 
   it('fails closed before the model when the audit callback fails', async () => {
     const { runtime, input, captured } = buildRuntime({
-      instructions: ['instrução muito longa '.repeat(40)],
+      instructions: ['instrução curta'],
+      maxInputTokens: 200,
+      withHistory: true,
       onCompacted: () => {
         throw new Error('audit store down')
       }

@@ -603,18 +603,41 @@ describe('PDSH-031 core per-file closure — compaction control edges', () => {
       tools: createPhase3ToolRegistry({ availability: 'AVAILABLE' }),
       audit: new RecordingAuditSink(),
       telemetry: new RecordingTelemetrySink(),
-      plugins: [createCompactionControl({ maxInputTokens: 50 })]
+      plugins: [
+        {
+          name: 'owned.history',
+          kind: 'control',
+          apply(ctx) {
+            ctx.on('model/before-call', async (call, next) => {
+              const request = call.request as {
+                messages: readonly { role: string; content: string }[]
+              }
+              request.messages = [
+                ...request.messages.slice(0, 1),
+                { role: 'user', content: 'pergunta anterior '.repeat(60) },
+                { role: 'assistant', content: 'resposta anterior '.repeat(60) },
+                ...request.messages.slice(1)
+              ]
+              return next()
+            })
+          }
+        },
+        createCompactionControl({
+          maxInputTokens: 200,
+          keepRecentMessages: 1
+        })
+      ]
     })
     const result = await runtime.execute(
       phase3RuntimeInput({
         runtimeProfile: 'single_pass',
         userMessage: 'pergunta atual',
-        agent: phase3AgentProfile({
-          instructions: ['instrução longa '.repeat(60)]
-        })
+        agent: phase3AgentProfile({ instructions: ['instrução curta'] })
       })
     )
     expect(result.stopReason).toBe('COMPLETED')
-    expect(captured[0]?.messages[0]?.content).toContain('[contexto compactado]')
+    expect(captured[0]?.messages[0]?.role).toBe('system')
+    expect(captured[0]?.messages[1]?.role).toBe('user')
+    expect(captured[0]?.messages[1]?.content).toContain('[contexto compactado]')
   })
 })
