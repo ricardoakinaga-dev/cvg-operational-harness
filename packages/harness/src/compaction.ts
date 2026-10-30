@@ -16,6 +16,8 @@ import { stop } from './kernel/types.ts'
  */
 
 export const COMPACTION_STRATEGY_VERSION = 'harness-compaction-v1'
+/** SPEC 0290: summary written by a model; idempotent by (through, digest). */
+export const MODEL_COMPACTION_STRATEGY_VERSION = 'model-compaction-v1'
 export const COMPACTION_KEEP_RECENT_DEFAULT = 4
 export const COMPACTION_SUMMARY_MAX_CHARS_DEFAULT = 512
 /** SPEC 0290 §3.3: fixed data frame; history never becomes an instruction. */
@@ -45,6 +47,16 @@ export interface ContextCompactionResult {
   readonly summary: string | null
   /** Estimated tokens of `messages`, the view that would be sent. */
   readonly viewTokens: number
+  /** SPEC 0290 model path only: digest of the pinned items that passed verbatim. */
+  readonly pinnedDigest?: string
+  /** SPEC 0290 model path only: provider model that wrote the summary. */
+  readonly model?: string
+  /** SPEC 0290 model path only: usage of the compaction request(s). */
+  readonly usage?: {
+    readonly inputTokens: number
+    readonly outputTokens: number
+    readonly costUsd: number
+  }
   /** False when even the view to send is above `maxInputTokens`. */
   readonly fits: boolean
   /**
@@ -63,6 +75,23 @@ export function estimateContextTokens(
     tokens += Math.ceil(message.content.length / 4)
   }
   return tokens
+}
+
+/** Canonical digest of the messages a summary was derived from. */
+export function digestMessages(
+  messages: readonly CompactableMessage[]
+): string {
+  return createHash('sha256')
+    .update(
+      canonicalizeJson(
+        messages.map(({ sequence, role, content }) => ({
+          sequence,
+          role,
+          content
+        }))
+      )
+    )
+    .digest('hex')
 }
 
 function positiveInt(value: number, fallback: number): number {
@@ -111,17 +140,7 @@ export function compactConversation(
   const dropped = history.slice(0, history.length - keepCount)
   const kept = history.slice(history.length - keepCount)
   const lastDropped = dropped[dropped.length - 1] as CompactableMessage
-  const sourceDigest = createHash('sha256')
-    .update(
-      canonicalizeJson(
-        dropped.map(({ sequence, role, content }) => ({
-          sequence,
-          role,
-          content
-        }))
-      )
-    )
-    .digest('hex')
+  const sourceDigest = digestMessages(dropped)
   const excerpts = dropped
     .map((message) => `${message.role}:${message.content.slice(0, 60)}`)
     .join(' | ')
@@ -242,21 +261,76 @@ export function createSessionCompactionRecorder(
     ) {
       return
     }
-    await options.store.append({
+    const payload = {
+      throughSequence: result.throughSequence,
+      summary: result.summary,
+      sourceDigest: result.sourceDigest,
+      strategyVersion: result.strategyVersion
+    }
+    // SPEC 0290 §3.5: the model summary is identified by what it summarises,
+    // so a repeat (or a lost append race) reuses the event already in the log.
+    const deterministic =
+      result.strategyVersion === MODEL_COMPACTION_STRATEGY_VERSION
+    const eventId = deterministic
+      ? `compaction_${createHash('sha256')
+          .update(
+            canonicalizeJson([
+              result.strategyVersion,
+              result.throughSequence,
+              result.sourceDigest
+            ])
+          )
+          .digest('hex')
+          .slice(0, 32)}`
+      : newEventId()
+    try {
+      await options.store.append({
+        tenantId: options.tenantId,
+        sessionId: options.sessionId,
+        formatVersion: 1,
+        eventId,
+        timestamp: clock().toISOString(),
+        correlationId: options.correlationId,
+        traceId: options.traceId,
+        type: 'context/compacted',
+        payload
+      })
+    } catch (error) {
+      if (!deterministic || !(await alreadyRecorded(options, payload))) {
+        throw error
+      }
+    }
+  }
+}
+
+async function alreadyRecorded(
+  options: SessionCompactionRecorderOptions,
+  payload: {
+    readonly throughSequence: number
+    readonly sourceDigest: string
+    readonly strategyVersion: string
+  }
+): Promise<boolean> {
+  let afterSequence = 0
+  for (;;) {
+    const page = await options.store.read({
       tenantId: options.tenantId,
       sessionId: options.sessionId,
-      formatVersion: 1,
-      eventId: newEventId(),
-      timestamp: clock().toISOString(),
-      correlationId: options.correlationId,
-      traceId: options.traceId,
-      type: 'context/compacted',
-      payload: {
-        throughSequence: result.throughSequence,
-        summary: result.summary,
-        sourceDigest: result.sourceDigest,
-        strategyVersion: result.strategyVersion
-      }
+      afterSequence,
+      limit: 500
     })
+    for (const event of page) {
+      const existing = event.payload as typeof payload | null
+      if (
+        event.type === 'context/compacted' &&
+        existing?.throughSequence === payload.throughSequence &&
+        existing.sourceDigest === payload.sourceDigest &&
+        existing.strategyVersion === payload.strategyVersion
+      ) {
+        return true
+      }
+    }
+    if (page.length < 500) return false
+    afterSequence = (page[page.length - 1] as { sequence: number }).sequence
   }
 }

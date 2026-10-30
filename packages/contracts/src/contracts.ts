@@ -263,6 +263,8 @@ export type ModelCallPurpose =
   | 'RESPONSE'
   | 'EVALUATION'
   | 'REPAIR'
+  /** SPEC 0290: the host condensing earlier turns of the same conversation. */
+  | 'COMPACTION'
 
 export interface ModelRequest {
   readonly messages: readonly ModelMessage[]

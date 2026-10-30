@@ -12,6 +12,10 @@ import {
   type ContextCompactionResult
 } from '../compaction.ts'
 import { createKernelRuntime } from '../index.ts'
+import {
+  createModelCompactionControl,
+  type PinnedItem
+} from '../model-compaction.ts'
 import type { KernelPlugin } from '../kernel/types.ts'
 import {
   InMemoryApprovalEngine,
@@ -80,6 +84,7 @@ function runtime(
     readonly before?: KernelPlugin[]
     readonly complete?: ModelGateway['complete']
     readonly signal?: AbortSignal
+    readonly pinned?: readonly PinnedItem[]
   } = {}
 ) {
   const captured: ModelRequest[] = []
@@ -108,10 +113,16 @@ function runtime(
     telemetry: new RecordingTelemetrySink(),
     plugins: [
       ...(options.before ?? []),
-      createCompactionControl({
-        maxInputTokens: options.maxInputTokens ?? 50,
-        ...(options.onCompacted ? { onCompacted: options.onCompacted } : {})
-      })
+      options.pinned
+        ? createModelCompactionControl({
+            maxInputTokens: options.maxInputTokens ?? 50,
+            pinned: () => options.pinned as readonly PinnedItem[],
+            ...(options.onCompacted ? { onCompacted: options.onCompacted } : {})
+          })
+        : createCompactionControl({
+            maxInputTokens: options.maxInputTokens ?? 50,
+            ...(options.onCompacted ? { onCompacted: options.onCompacted } : {})
+          })
     ]
   })
   const input: RuntimeInput = phase3RuntimeInput({
@@ -169,14 +180,28 @@ describe('PAR-C01 target: what governs the turn survives the compaction', () => 
     uncertainEffect:
       'EFEITO-INCERTO: operation_key op_abc123 iniciado e sem confirmação'
   }
+  const pinKinds: Record<string, PinnedItem['kind']> = {
+    patientFact: 'fact',
+    pendingApproval: 'approval',
+    openObligation: 'question',
+    uncertainEffect: 'effect'
+  }
   for (const [name, marker] of Object.entries(facts)) {
-    it.fails(`the ${name} is still in the view sent to the model`, () => {
-      const result = compactConversation(conversation(facts), {
-        maxInputTokens: 10,
-        keepRecentMessages: 1
+    it(`the ${name} pinned by the host is verbatim in the view sent to the model`, async () => {
+      const { kernel, input, captured } = runtime({
+        maxInputTokens: 300,
+        pinned: [{ kind: pinKinds[name]!, ref: `ref_${name}`, text: marker }],
+        before: [olderTurns]
       })
-      expect(result.compacted).toBe(true)
-      expect(sent(result.messages)).toContain(marker)
+      const result = await kernel.execute(input)
+      expect(result.stopReason).toBe('COMPLETED')
+      const request = captured.find((r) => r.purpose !== 'COMPACTION')!
+      expect(sent(request.messages)).toContain(marker)
+      expect(
+        request.messages.some(
+          (m) => m.role === 'system' && m.content.includes(marker)
+        )
+      ).toBe(false)
     })
   }
 
@@ -233,28 +258,27 @@ describe('PAR-C01 target: what governs the turn survives the compaction', () => 
 })
 
 describe('PAR-C01 target: pressure, overflow and refusal', () => {
-  it.fails(
-    'compaction is done by a model call of purpose COMPACTION',
-    async () => {
-      const purposes: (string | undefined)[] = []
-      const { kernel, input } = runtime({
-        instructions: ['instrução muito longa '.repeat(40)],
-        complete: async (request) => {
-          purposes.push(request.purpose)
-          return {
-            text: 'resumo sintético',
-            provider: 'synthetic',
-            model: 'synthetic-v1',
-            inputTokens: 1,
-            outputTokens: 1,
-            costUsd: 0
-          }
+  it('compaction is done by a model call of purpose COMPACTION', async () => {
+    const purposes: (string | undefined)[] = []
+    const { kernel, input } = runtime({
+      maxInputTokens: 300,
+      pinned: [],
+      before: [olderTurns],
+      complete: async (request) => {
+        purposes.push(request.purpose)
+        return {
+          text: 'resumo sintético',
+          provider: 'synthetic',
+          model: 'synthetic-v1',
+          inputTokens: 1,
+          outputTokens: 1,
+          costUsd: 0
         }
-      })
-      await kernel.execute(input)
-      expect(purposes).toContain('COMPACTION')
-    }
-  )
+      }
+    })
+    await kernel.execute(input)
+    expect(purposes).toContain('COMPACTION')
+  })
 
   it.fails(
     'an overflow reported by the model port is compacted and retried once',
