@@ -314,6 +314,17 @@ describe.skipIf(!cc || !kernelAbi())(
         closeSync(full)
       }
       expect(existsSync(sentinel)).toBe(false)
+      // (e) the probe whose answer cannot be written is a failure, never an ABI (review P3)
+      const probeFull = openSync('/dev/full', 'w')
+      try {
+        const probe = spawnSync(helper, ['--probe', '--status-fd', '3'], {
+          stdio: ['ignore', 'ignore', 'ignore', probeFull],
+          env: {}
+        })
+        expect(probe.status).toBe(125)
+      } finally {
+        closeSync(probeFull)
+      }
       // healthy control: the same payload runs when the channel works
       const healthy = await run(applyArgs(payload), baseRules())
       expect(JSON.parse(healthy.status)).toMatchObject({ applied: true })
