@@ -29,6 +29,8 @@ export interface PrepareToolOutputInput {
   /** Outputs already stored in this turn (I5). */
   readonly storedSoFar: number
   readonly marker?: (content: string) => string
+  /** The house `spill.read` result: shown whole, never stored again, never pruned (SPEC 0293 I11). */
+  readonly inlineAlways?: boolean
 }
 
 export interface PreparedToolOutput {
@@ -62,7 +64,7 @@ export async function prepareToolOutput(
   const bytes = utf8Bytes(text)
   const sha256 = sha256Hex(text)
   const newMarker = input.marker ?? newBlockMarker
-  if (bytes <= input.policy.thresholdBytes) {
+  if (input.inlineAlways === true || bytes <= input.policy.thresholdBytes) {
     return {
       rendering: {
         form: 'inline',
@@ -78,10 +80,10 @@ export async function prepareToolOutput(
       wrote: false
     }
   }
-  let locator: string | undefined
+  let stored: { locator: string; expiresAt: string } | undefined
   let uncertain = false
   if (eligible(input, bytes)) {
-    for (let attempt = 0; attempt < 2 && locator === undefined; attempt += 1) {
+    for (let attempt = 0; attempt < 2 && stored === undefined; attempt += 1) {
       try {
         const receipt = await (input.store as SpillStore).put({
           tenantId: input.tenantId,
@@ -94,7 +96,7 @@ export async function prepareToolOutput(
           content: text,
           ...(input.signal ? { signal: input.signal } : {})
         })
-        locator = receipt.locator
+        stored = { locator: receipt.locator, expiresAt: receipt.expiresAt }
         uncertain = false
       } catch (error) {
         uncertain = error instanceof SpillCommitUnknown
@@ -111,9 +113,9 @@ export async function prepareToolOutput(
     text,
     headBytes: input.policy.previewHeadBytes,
     tailBytes: input.policy.previewTailBytes,
-    stored: locator === undefined ? null : { locator },
+    stored: stored ?? null,
     truncatedAtSource: serialized.truncatedAtSource,
-    commitUncertain: locator === undefined && uncertain,
+    commitUncertain: stored === undefined && uncertain,
     marker
   })
   return {
@@ -122,9 +124,11 @@ export async function prepareToolOutput(
       text: block,
       bytes,
       sha256,
-      stored: locator !== undefined,
-      ...(locator === undefined ? {} : { locator })
+      stored: stored !== undefined,
+      ...(stored
+        ? { locator: stored.locator, expiresAt: stored.expiresAt }
+        : {})
     },
-    wrote: locator !== undefined
+    wrote: stored !== undefined
   }
 }

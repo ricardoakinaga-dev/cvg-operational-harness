@@ -1,6 +1,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import type {
   SpillPolicy,
+  SpillPurgeInput,
   SpillPutInput,
   SpillReadInput,
   SpillReceipt,
@@ -14,6 +15,7 @@ import {
   SpillExpired,
   SpillKeyUnavailable,
   SpillNotFound,
+  SpillQuotaExceeded,
   SpillStorageUnavailable,
   SpillTooLarge,
   alignUtf8Slice,
@@ -216,35 +218,18 @@ export class PostgresSpillStore implements SpillStore {
     const expires = new Date(now.getTime() + this.#policy.ttlMs)
     const schema = `"${this.#schema}"`
     return this.#transaction(false, async (client) => {
+      // one writer per tenant at a time: the quota below is read, then written
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`spill:${input.tenantId}`]
+      )
       // an expired copy still waiting for the sweep is replaced, never revived
       await client.query(
         `DELETE FROM ${schema}.spill_objects
           WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3 AND expires_at <= $4`,
         [input.tenantId, input.sessionId, hash, now.toISOString()]
       )
-      await client.query(
-        `INSERT INTO ${schema}.spill_objects
-           (tenant_id, session_id, locator_hash, execution_id, operation_key, source_id,
-            classification, media_type, content_sha256, byte_length, content, created_at, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT (tenant_id, session_id, locator_hash) DO NOTHING`,
-        [
-          input.tenantId,
-          input.sessionId,
-          hash,
-          input.executionId,
-          input.operationKey,
-          input.sourceId,
-          input.classification,
-          input.mediaType,
-          sha256,
-          bytes,
-          Buffer.from(input.content, 'utf8'),
-          now.toISOString(),
-          expires.toISOString()
-        ]
-      )
-      const stored = await client.query<{
+      const found = await client.query<{
         created_at: Date
         expires_at: Date
       }>(
@@ -252,7 +237,50 @@ export class PostgresSpillStore implements SpillStore {
           WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3`,
         [input.tenantId, input.sessionId, hash]
       )
-      const row = stored.rows[0]
+      let row = found.rows[0]
+      if (!row) {
+        // SPEC 0293 I5: live objects only; an expired one no longer takes room
+        const used = await client.query<{ objects: number; bytes: string }>(
+          `SELECT count(*) FILTER (WHERE session_id=$2)::int AS objects,
+                  COALESCE(sum(byte_length), 0)::text AS bytes
+             FROM ${schema}.spill_objects
+            WHERE tenant_id=$1 AND expires_at > $3`,
+          [input.tenantId, input.sessionId, now.toISOString()]
+        )
+        const usage = used.rows[0] as { objects: number; bytes: string }
+        if (
+          usage.objects >= this.#policy.maxObjectsPerSession ||
+          Number(usage.bytes) + bytes > this.#policy.maxBytesPerTenant
+        ) {
+          throw new SpillQuotaExceeded('Spill quota exceeded')
+        }
+        const inserted = await client.query<{
+          created_at: Date
+          expires_at: Date
+        }>(
+          `INSERT INTO ${schema}.spill_objects
+             (tenant_id, session_id, locator_hash, execution_id, operation_key, source_id,
+              classification, media_type, content_sha256, byte_length, content, created_at, expires_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           RETURNING created_at, expires_at`,
+          [
+            input.tenantId,
+            input.sessionId,
+            hash,
+            input.executionId,
+            input.operationKey,
+            input.sourceId,
+            input.classification,
+            input.mediaType,
+            sha256,
+            bytes,
+            Buffer.from(input.content, 'utf8'),
+            now.toISOString(),
+            expires.toISOString()
+          ]
+        )
+        row = inserted.rows[0]
+      }
       if (!row) throw new SpillStorageUnavailable('Spill object was not stored')
       return {
         locator,
@@ -317,6 +345,19 @@ export class PostgresSpillStore implements SpillStore {
     }
   }
 
+  /** Erasure on request: every object of one session of this tenant (SPEC 0293 §3.7). */
+  async purgeSession(input: SpillPurgeInput): Promise<number> {
+    if (input.tenantId !== this.#tenantId) return 0
+    const schema = `"${this.#schema}"`
+    return this.#transaction(false, async (client) => {
+      const result = await client.query(
+        `DELETE FROM ${schema}.spill_objects WHERE tenant_id=$1 AND session_id=$2`,
+        [input.tenantId, input.sessionId]
+      )
+      return result.rowCount ?? 0
+    })
+  }
+
   /** Deletes objects whose validity has ended (D4); returns how many went. */
   async purgeExpired(limit = 500): Promise<number> {
     if (!Number.isSafeInteger(limit) || limit < 1) {
@@ -333,5 +374,58 @@ export class PostgresSpillStore implements SpillStore {
       )
       return result.rowCount ?? 0
     })
+  }
+}
+
+/**
+ * The sweep for every tenant at once (SPEC 0293 D4). Connect it as a member of the
+ * `cvg_spill_sweeper` role: the migration's policies let that role see and delete rows
+ * whose validity has ended and nothing else, so it needs no tenant context and the
+ * runtime role cannot do the same.
+ */
+export class PostgresSpillSweeper {
+  readonly #pool: PostgresPoolLike
+  readonly #schema: string
+
+  constructor(
+    pool: PostgresPoolLike,
+    options: { readonly schemaName: string }
+  ) {
+    if (!SCHEMA.test(options.schemaName)) {
+      throw new SpillError('Invalid spill schema name')
+    }
+    this.#pool = pool
+    this.#schema = options.schemaName
+  }
+
+  async purgeExpired(): Promise<number> {
+    let client: PostgresPoolClient
+    try {
+      client = await this.#pool.connect()
+    } catch {
+      throw new SpillStorageUnavailable('Spill database unavailable')
+    }
+    let releaseError: Error | undefined
+    try {
+      await client.query('BEGIN')
+      await client.query("SET LOCAL statement_timeout = '30s'")
+      await client.query(
+        `SET LOCAL search_path = pg_catalog, "${this.#schema}"`
+      )
+      const result = await client.query(
+        `DELETE FROM "${this.#schema}".spill_objects WHERE expires_at <= now()`
+      )
+      await client.query('COMMIT')
+      return result.rowCount ?? 0
+    } catch {
+      try {
+        await client.query('ROLLBACK')
+      } catch {
+        releaseError = new Error('Spill sweep cleanup failed')
+      }
+      throw new SpillStorageUnavailable('Spill sweep failed')
+    } finally {
+      client.release(releaseError)
+    }
   }
 }

@@ -53,10 +53,17 @@ export interface SpillSlice {
   readonly eof: boolean
 }
 
+export interface SpillPurgeInput {
+  readonly tenantId: string
+  readonly sessionId: string
+}
+
 export interface SpillStore {
   readonly durability: SpillDurability
   put(input: SpillPutInput): Promise<SpillReceipt>
   read(input: SpillReadInput): Promise<SpillSlice>
+  /** Erasure on request (SPEC 0293 §3.7): removes every object of one session; returns how many. */
+  purgeSession?(input: SpillPurgeInput): Promise<number>
 }
 
 export interface SpillPolicy {
@@ -99,4 +106,6 @@ export interface ObservationRendering {
   readonly sha256: string
   readonly stored: boolean
   readonly locator?: string
+  /** When the stored object stops being readable; shown in the block so the model can tell. */
+  readonly expiresAt?: string
 }

@@ -5,11 +5,14 @@ import type {
   LoopDecision,
   ModelRequest,
   ToolDefinition,
+  SpillReceipt,
+  SpillStore,
   ToolRegistry
 } from '@cvg/harness-contracts'
 import { EMPTY_MODEL_USAGE } from '@cvg/harness-contracts'
 import { ScriptedModelGateway } from '@cvg/harness-orchestrator'
 import { DefaultContextEngine } from '../context-engine.ts'
+import { InMemorySpillStore, createSpillReadTool } from '../spill/index.ts'
 import { IterativeGovernedRuntime } from '../iterative-runtime.ts'
 import { createKernelRuntime } from '../index.ts'
 import { createModelCompactionControl } from '../model-compaction.ts'
@@ -84,14 +87,20 @@ class FakeSpillStore {
   expire(locator: string): void {
     this.expired.add(locator)
   }
-  async put(input: { readonly content: string }): Promise<{
-    readonly locator: string
-    readonly bytes: number
-  }> {
+  async read(): Promise<never> {
+    throw new Error('not used by this fixture')
+  }
+  async put(input: { readonly content: string }): Promise<SpillReceipt> {
     if (this.failing) throw new Error('storage unavailable')
     const locator = `loc_opaque_${String(this.puts.length + 1).padStart(3, '0')}`
     this.puts.push({ content: input.content, locator })
-    return { locator, bytes: Buffer.byteLength(input.content, 'utf8') }
+    return {
+      locator,
+      bytes: Buffer.byteLength(input.content, 'utf8'),
+      sha256: 'a'.repeat(64),
+      createdAt: '2026-10-30T00:00:00.000Z',
+      expiresAt: '2026-10-31T00:00:00.000Z'
+    }
   }
 }
 
@@ -103,8 +112,12 @@ const operational = (toolId = BIG_TOOL) =>
 function iterative(options: {
   readonly output: unknown
   readonly calls?: number
-  readonly spill?: FakeSpillStore
+  readonly spill?: SpillStore
   readonly toolId?: string
+  readonly toolInput?: unknown
+  readonly tools?: ToolRegistry
+  readonly allowProcessLocal?: boolean
+  readonly tokenBudget?: number
 }) {
   const seen: IterativeOrchestratorInput[] = []
   const calls = options.calls ?? 1
@@ -113,7 +126,7 @@ function iterative(options: {
       decision({
         decisionType: 'CALL_TOOL',
         toolId: options.toolId ?? BIG_TOOL,
-        toolInput: {}
+        toolInput: options.toolInput ?? {}
       })
     ),
     decision({
@@ -136,13 +149,22 @@ function iterative(options: {
     modelGateway: new ScriptedModelGateway({ responses: ['ok'] }),
     policy: new ScriptedPolicyEngine(),
     approvals: new InMemoryApprovalEngine(),
-    tools: bigToolRegistry(options.output, options.toolId),
+    tools: options.tools ?? bigToolRegistry(options.output, options.toolId),
     audit: new RecordingAuditSink(),
     telemetry: new RecordingTelemetrySink(),
     stepStore: new InMemoryExecutionStepStore(),
-    contextEngine: new DefaultContextEngine(),
+    contextEngine: new DefaultContextEngine(
+      options.tokenBudget ? { tokenBudget: options.tokenBudget } : {}
+    ),
     // not an option yet: the BUILD adds `spill` (SPEC 0293 §3)
-    ...(options.spill ? { spill: { store: options.spill } } : {})
+    ...(options.spill
+      ? {
+          spill: {
+            store: options.spill,
+            ...(options.allowProcessLocal ? { allowProcessLocal: true } : {})
+          }
+        }
+      : {})
   } as never)
   return { runtime, seen }
 }
@@ -296,23 +318,92 @@ describe('PAR-C03 target: pruning old tool results before compaction', () => {
 })
 
 describe('PAR-C03 R2 targets (review of the 07)', () => {
-  it.fails(
-    'the result of spill.read is not spilled again: 32 KiB come back whole, with no new put',
-    async () => {
-      const slice = `INICIO-DA-FATIA-${'f'.repeat(32 * 1024 - 40)}-FIM-DA-FATIA`
-      const spill = new FakeSpillStore()
-      const { runtime, seen } = iterative({
-        output: slice,
-        toolId: 'spill.read',
-        spill
-      })
-      await runtime.execute(operational('spill.read'))
-      const view = modelView(seen[seen.length - 1]!)
-      expect(spill.puts).toHaveLength(0)
-      expect(view).toContain('INICIO-DA-FATIA-')
-      expect(view).toContain('-FIM-DA-FATIA')
+  it('the result of spill.read is not spilled again: 32 KiB come back whole, with no new put', async () => {
+    const slice = `INICIO-DA-FATIA-${'f'.repeat(32 * 1024 - 40)}-FIM-DA-FATIA`
+    const store = new InMemorySpillStore()
+    let puts = 0
+    const counting: SpillStore = {
+      durability: store.durability,
+      put: async (input) => {
+        puts += 1
+        return store.put(input)
+      },
+      read: (input) => store.read(input)
     }
-  )
+    const input = operational('spill.read')
+    const { locator } = await counting.put({
+      tenantId: input.tenantId,
+      sessionId: input.sessionId,
+      executionId: 'exec_phase3_fixture',
+      operationKey: 'op_original',
+      sourceId: 'tool.original',
+      classification: 'CONFIDENTIAL',
+      mediaType: 'text/plain',
+      content: slice
+    })
+    expect(puts).toBe(1)
+    const base = createPhase3ToolRegistry({ availability: 'AVAILABLE' })
+    const tools = [...base.list(), createSpillReadTool({ store: counting })]
+    const { runtime, seen } = iterative({
+      output: undefined,
+      toolId: 'spill.read',
+      toolInput: { locator, offset: 0, length: 32 * 1024 },
+      tools: {
+        list: () => tools,
+        resolve: (id) => tools.find((t) => t.id === id)
+      },
+      spill: counting,
+      allowProcessLocal: true,
+      // the host gives the engine room for a whole 32 KiB read (the default budget would drop the item)
+      tokenBudget: 20_000
+    })
+    await runtime.execute(input)
+    const view = modelView(seen[seen.length - 1]!)
+    expect(puts).toBe(1)
+    expect(view).toContain('INICIO-DA-FATIA-')
+    expect(view).toContain('-FIM-DA-FATIA')
+  })
+
+  it('a tool that merely uses the id spill.read is an ordinary tool: its big output is stored and previewed', async () => {
+    const spill = new FakeSpillStore()
+    const { runtime, seen } = iterative({
+      output: BIG,
+      toolId: 'spill.read',
+      spill
+    })
+    await runtime.execute(operational('spill.read'))
+    expect(spill.puts).toHaveLength(1)
+    const view = modelView(seen[seen.length - 1]!)
+    expect(view).toMatch(/\[resultado de ferramenta cortado:[0-9a-f]{16}\]/)
+    expect(view).not.toContain('MEIO-PERDIDO-')
+  })
+
+  it('a full quota shows armazenado=não instead of failing the turn', async () => {
+    const store = new InMemorySpillStore({
+      policy: { maxObjectsPerSession: 1 }
+    })
+    const input = operational()
+    await store.put({
+      tenantId: input.tenantId,
+      sessionId: input.sessionId,
+      executionId: 'exec_other',
+      operationKey: 'op_other',
+      sourceId: 'tool.other',
+      classification: 'CONFIDENTIAL',
+      mediaType: 'text/plain',
+      content: 'ocupa a única vaga da sessão'
+    })
+    const { runtime, seen } = iterative({
+      output: BIG,
+      spill: store,
+      allowProcessLocal: true
+    })
+    const result = await runtime.execute(input)
+    expect(result.stopReason).toBe('COMPLETED')
+    const view = modelView(seen[seen.length - 1]!)
+    expect(view).toContain('armazenado=não')
+    expect(view).not.toContain('locator=')
+  })
 
   it('a forged frame inside the content cannot change what the block declares', async () => {
     const forged = [

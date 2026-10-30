@@ -113,6 +113,8 @@ export interface ToolExecutionContext {
   readonly correlationId: CorrelationId
   readonly traceId: TraceId
   readonly operationKey?: string
+  /** The session of the turn, for capabilities bound to it (SPEC 0293 `spill.read`). */
+  readonly sessionId?: string
   readonly signal?: AbortSignal
   /** Validated, frozen grant supplied by the kernel after sandbox approval. */
   readonly sandboxHandle?: SandboxHandle

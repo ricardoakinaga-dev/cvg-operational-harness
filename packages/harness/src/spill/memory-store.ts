@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type {
   SpillDurability,
+  SpillPurgeInput,
   SpillPolicy,
   SpillPutInput,
   SpillReadInput,
@@ -8,7 +9,12 @@ import type {
   SpillSlice,
   SpillStore
 } from '@cvg/harness-contracts'
-import { SpillExpired, SpillNotFound, SpillTooLarge } from './errors.ts'
+import {
+  SpillExpired,
+  SpillNotFound,
+  SpillQuotaExceeded,
+  SpillTooLarge
+} from './errors.ts'
 import { resolveSpillPolicy } from './policy.ts'
 import { alignUtf8Slice, sha256Hex, utf8Bytes } from './render.ts'
 
@@ -63,7 +69,18 @@ export class InMemorySpillStore implements SpillStore {
       input.operationKey,
       sha256
     ])
-    const existing = this.#byKey.get(key)
+    let existing = this.#byKey.get(key)
+    if (
+      existing !== undefined &&
+      Date.parse(
+        (this.#byLocator.get(hashLocator(existing)) as Entry).expiresAt
+      ) <= this.#clock().getTime()
+    ) {
+      // an expired copy still waiting for the sweep is replaced, never revived
+      this.#byLocator.delete(hashLocator(existing))
+      this.#byKey.delete(key)
+      existing = undefined
+    }
     if (existing !== undefined) {
       // I6: the same write returns the same locator and keeps the original expiry
       const entry = this.#byLocator.get(hashLocator(existing)) as Entry
@@ -76,6 +93,25 @@ export class InMemorySpillStore implements SpillStore {
       }
     }
     const now = this.#clock()
+    // SPEC 0293 I5: live objects only; an expired one no longer takes room
+    let sessionObjects = 0
+    let tenantBytes = 0
+    for (const other of this.#byLocator.values()) {
+      if (
+        other.tenantId !== input.tenantId ||
+        Date.parse(other.expiresAt) <= now.getTime()
+      ) {
+        continue
+      }
+      tenantBytes += other.content.length
+      if (other.sessionId === input.sessionId) sessionObjects += 1
+    }
+    if (
+      sessionObjects >= this.#policy.maxObjectsPerSession ||
+      tenantBytes + bytes > this.#policy.maxBytesPerTenant
+    ) {
+      throw new SpillQuotaExceeded('Spill quota exceeded')
+    }
     const locator = `spill_${this.#random(16).toString('base64url')}`
     const entry: Entry = {
       tenantId: input.tenantId,
@@ -125,5 +161,20 @@ export class InMemorySpillStore implements SpillStore {
       totalBytes: total,
       eof: offset + aligned.bytesRead >= total
     }
+  }
+
+  async purgeSession(input: SpillPurgeInput): Promise<number> {
+    let removed = 0
+    for (const [hash, entry] of this.#byLocator) {
+      if (
+        entry.tenantId === input.tenantId &&
+        entry.sessionId === input.sessionId
+      ) {
+        this.#byLocator.delete(hash)
+        this.#byKey.delete(entry.key)
+        removed += 1
+      }
+    }
+    return removed
   }
 }

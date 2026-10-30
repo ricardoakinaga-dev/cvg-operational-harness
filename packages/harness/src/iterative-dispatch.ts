@@ -27,6 +27,7 @@ import { agentExposesTool } from './runtime.ts'
 import { DEFAULT_SPILL_CLASSIFICATION } from './spill/composition.ts'
 import { resolveSpillPolicy } from './spill/policy.ts'
 import { prepareToolOutput } from './spill/prepare.ts'
+import { isSpillReadTool } from './spill/read-tool.ts'
 import { serializeToolOutput, utf8Bytes } from './spill/render.ts'
 import type { KernelHost } from './kernel/host.ts'
 import {
@@ -693,6 +694,8 @@ export async function dispatchTool(
         policy: resolveSpillPolicy(spill?.policy),
         ...(spill?.store ? { store: spill.store } : {}),
         ...(spill?.allowProcessLocal ? { allowProcessLocal: true } : {}),
+        // SPEC 0293 I11: the house read is delivered whole and never stored again
+        ...(isSpillReadTool(tool) ? { inlineAlways: true } : {}),
         ...(run.input.signal ? { signal: run.input.signal } : {}),
         storedSoFar: spillCount.get(run) ?? 0
       })

@@ -518,6 +518,7 @@ async function dispatch(
           correlationId: turn.input.correlationId,
           traceId: turn.input.traceId,
           operationKey: call.invocation.operationKey,
+          sessionId: turn.input.sessionId,
           ...(call.sandboxHandle ? { sandboxHandle: call.sandboxHandle } : {}),
           signal: AbortSignal.any([toolController.signal, turn.signal])
         })

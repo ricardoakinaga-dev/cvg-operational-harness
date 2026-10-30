@@ -1,0 +1,58 @@
+[
+ {
+  "id": "F1",
+  "what": "postgres per-session count off by one",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "usage.objects >= this.#policy.maxObjectsPerSession",
+  "new": "usage.objects > this.#policy.maxObjectsPerSession"
+ },
+ {
+  "id": "F2",
+  "what": "postgres tenant bytes off by one",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "Number(usage.bytes) + bytes > this.#policy.maxBytesPerTenant",
+  "new": "Number(usage.bytes) + bytes >= this.#policy.maxBytesPerTenant"
+ },
+ {
+  "id": "F3",
+  "what": "postgres counts expired objects",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "            WHERE tenant_id=$1 AND expires_at > $3`,",
+  "new": "            WHERE tenant_id=$1 AND $3::timestamptz IS NOT NULL`,"
+ },
+ {
+  "id": "F4",
+  "what": "postgres tenant writers not serialised",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "      await client.query(\n        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',\n        [`spill:${input.tenantId}`]\n      )\n",
+  "new": ""
+ },
+ {
+  "id": "F5",
+  "what": "postgres erasure removes by tenant only",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "`DELETE FROM ${schema}.spill_objects WHERE tenant_id=$1 AND session_id=$2`",
+  "new": "`DELETE FROM ${schema}.spill_objects WHERE tenant_id=$1 AND $2::text IS NOT NULL`"
+ },
+ {
+  "id": "F6",
+  "what": "sweep policy without the expiry condition",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "         AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member')\n         AND expires_at <= now());\nCREATE POLICY spill_objects_expiry_sweep ON spill_objects FOR DELETE\n  USING (to_regrole('cvg_spill_sweeper') IS NOT NULL\n         AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member')\n         AND expires_at <= now());",
+  "new": "         AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member'));\nCREATE POLICY spill_objects_expiry_sweep ON spill_objects FOR DELETE\n  USING (to_regrole('cvg_spill_sweeper') IS NOT NULL\n         AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member'));"
+ },
+ {
+  "id": "F7",
+  "what": "sweep policy without the role",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "  USING (to_regrole('cvg_spill_sweeper') IS NOT NULL\n         AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member')\n         AND expires_at <= now());\nCREATE POLICY spill_objects_expiry_sweep ON spill_objects FOR DELETE\n  USING (to_regrole('cvg_spill_sweeper') IS NOT NULL\n         AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member')\n         AND expires_at <= now());",
+  "new": "  USING (expires_at <= now());\nCREATE POLICY spill_objects_expiry_sweep ON spill_objects FOR DELETE\n  USING (expires_at <= now());"
+ },
+ {
+  "id": "F8",
+  "what": "sweeper deletes live rows",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "`DELETE FROM \"${this.#schema}\".spill_objects WHERE expires_at <= now()`",
+  "new": "`DELETE FROM \"${this.#schema}\".spill_objects`"
+ }
+]

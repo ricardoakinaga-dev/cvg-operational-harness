@@ -10,6 +10,7 @@ import {
   SpillExpired,
   SpillKeyUnavailable,
   SpillNotFound,
+  SpillQuotaExceeded,
   SpillStorageUnavailable,
   SpillTooLarge,
   prepareToolOutput,
@@ -17,6 +18,7 @@ import {
 } from '@cvg/harness'
 import {
   PostgresSpillStore,
+  PostgresSpillSweeper,
   lengthPrefixed,
   runSpillMigrations,
   type PostgresSpillStoreOptions
@@ -42,6 +44,8 @@ const KEY = randomBytes(32)
 let admin: Client
 let pool1: Pool
 let pool2: Pool
+let sweepPool: Pool
+const sweepRole = `parc03_sweep_${suffix}`
 
 const put = (over: Partial<SpillPutInput> = {}): SpillPutInput => ({
   tenantId: tenant,
@@ -72,6 +76,19 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
     const roleUrl = new URL(url!)
     roleUrl.username = role
     roleUrl.password = password
+    // the maintenance job connects as a member of the dedicated sweep role
+    await admin.query(
+      `CREATE ROLE ${sweepRole} LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD '${password}'`
+    )
+    await admin.query(`GRANT cvg_spill_sweeper TO ${sweepRole}`)
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${sweepRole}`)
+    await admin.query(
+      `GRANT SELECT, DELETE ON ${schema}.spill_objects TO ${sweepRole}`
+    )
+    const sweepUrl = new URL(url!)
+    sweepUrl.username = sweepRole
+    sweepUrl.password = password
+    sweepPool = new Pool({ connectionString: sweepUrl.toString(), max: 2 })
     pool1 = new Pool({ connectionString: roleUrl.toString(), max: 4 })
     pool2 = new Pool({ connectionString: roleUrl.toString(), max: 4 })
   }, 30000)
@@ -79,9 +96,11 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
   afterAll(async () => {
     await pool1?.end()
     await pool2?.end()
+    await sweepPool?.end()
     if (admin) {
       await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`)
       await admin.query(`DROP ROLE IF EXISTS ${role}`)
+      await admin.query(`DROP ROLE IF EXISTS ${sweepRole}`)
       await admin.end()
     }
   })
@@ -453,6 +472,280 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
     } as never
     await store(recording).put(put({ operationKey: 'op-path' }))
     expect(seen).toContain(`SET LOCAL search_path = pg_catalog, "${schema}"`)
+  })
+
+  describe('slice 3: quota, erasure on request and the all-tenant sweep', () => {
+    const quota = (tenantId: string, over: Record<string, number> = {}) =>
+      new PostgresSpillStore(pool1, {
+        tenantId,
+        schemaName: schema,
+        locatorKey: () => KEY,
+        policy: {
+          thresholdBytes: 4_000,
+          previewHeadBytes: 100,
+          previewTailBytes: 100,
+          ...over
+        }
+      })
+    const putAs = (tenantId: string, over: Partial<SpillPutInput> = {}) =>
+      put({ tenantId, ...over })
+
+    it('refuses the object past the per-session count; a repeat of an existing one still answers', async () => {
+      const s = quota('quota-count', { maxObjectsPerSession: 2 })
+      const one = await s.put(
+        putAs('quota-count', { operationKey: 'o1', content: 'a1' })
+      )
+      await s.put(putAs('quota-count', { operationKey: 'o2', content: 'a2' }))
+      await expect(
+        s.put(putAs('quota-count', { operationKey: 'o3', content: 'a3' }))
+      ).rejects.toBeInstanceOf(SpillQuotaExceeded)
+      await expect(
+        s.put(putAs('quota-count', { operationKey: 'o3', content: 'a3' }))
+      ).rejects.toMatchObject({ retryable: false })
+      expect(
+        (
+          await s.put(
+            putAs('quota-count', { operationKey: 'o1', content: 'a1' })
+          )
+        ).locator
+      ).toBe(one.locator)
+      // another session of the same tenant has its own count
+      await expect(
+        s.put(
+          putAs('quota-count', {
+            sessionId: 'session-z',
+            operationKey: 'o3',
+            content: 'a3'
+          })
+        )
+      ).resolves.toBeDefined()
+      const stored = await admin.query(
+        `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE tenant_id='quota-count' AND session_id='session-a'`
+      )
+      expect(stored.rows[0].n).toBe(2)
+    })
+
+    it('refuses what would pass the per-tenant bytes, to the byte, across sessions', async () => {
+      const s = quota('quota-bytes', {
+        maxBytesPerTenant: 100,
+        maxObjectsPerSession: 50
+      })
+      await s.put(
+        putAs('quota-bytes', { operationKey: 'o1', content: 'x'.repeat(60) })
+      )
+      await expect(
+        s.put(
+          putAs('quota-bytes', {
+            sessionId: 'session-z',
+            operationKey: 'o2',
+            content: 'y'.repeat(41)
+          })
+        )
+      ).rejects.toBeInstanceOf(SpillQuotaExceeded)
+      await expect(
+        s.put(
+          putAs('quota-bytes', {
+            sessionId: 'session-z',
+            operationKey: 'o3',
+            content: 'z'.repeat(40)
+          })
+        )
+      ).resolves.toBeDefined()
+      // another tenant is not counted
+      const other = quota('quota-bytes-other', { maxBytesPerTenant: 100 })
+      await expect(
+        other.put(
+          putAs('quota-bytes-other', {
+            operationKey: 'o1',
+            content: 'w'.repeat(100)
+          })
+        )
+      ).resolves.toBeDefined()
+    })
+
+    it('does not count an expired object against the quota', async () => {
+      let now = new Date('2026-10-30T00:00:00.000Z')
+      const s = new PostgresSpillStore(pool1, {
+        tenantId: 'quota-expiry',
+        schemaName: schema,
+        locatorKey: () => KEY,
+        clock: () => now,
+        policy: { maxObjectsPerSession: 1 }
+      })
+      await s.put(putAs('quota-expiry', { operationKey: 'o1', content: 'um' }))
+      await expect(
+        s.put(putAs('quota-expiry', { operationKey: 'o2', content: 'dois' }))
+      ).rejects.toBeInstanceOf(SpillQuotaExceeded)
+      now = new Date('2026-10-31T00:00:01.000Z')
+      await expect(
+        s.put(putAs('quota-expiry', { operationKey: 'o2', content: 'dois' }))
+      ).resolves.toBeDefined()
+    })
+
+    it('admits exactly the quota under concurrent writers (one tenant, two pools)', async () => {
+      const writers = [quota('quota-race', { maxObjectsPerSession: 3 })]
+      writers.push(
+        new PostgresSpillStore(pool2, {
+          tenantId: 'quota-race',
+          schemaName: schema,
+          locatorKey: () => KEY,
+          policy: { maxObjectsPerSession: 3 }
+        })
+      )
+      const results = await Promise.allSettled(
+        Array.from({ length: 10 }, (_, i) =>
+          writers[i % 2]!.put(
+            putAs('quota-race', {
+              operationKey: `race-${i}`,
+              content: `conteudo ${i}`
+            })
+          )
+        )
+      )
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(3)
+      const refused = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected'
+      )
+      expect(refused).toHaveLength(7)
+      for (const r of refused)
+        expect(r.reason).toBeInstanceOf(SpillQuotaExceeded)
+      const stored = await admin.query(
+        `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE tenant_id='quota-race'`
+      )
+      expect(stored.rows[0].n).toBe(3)
+    })
+
+    it('erases one session on request and touches nothing else', async () => {
+      const s = quota('purge-a')
+      const mine = await s.put(
+        putAs('purge-a', { operationKey: 'o1', content: 'um' })
+      )
+      await s.put(putAs('purge-a', { operationKey: 'o2', content: 'dois' }))
+      const kept = await s.put(
+        putAs('purge-a', {
+          sessionId: 'session-z',
+          operationKey: 'o1',
+          content: 'um'
+        })
+      )
+      const otherTenant = quota('purge-b')
+      await otherTenant.put(
+        putAs('purge-b', { operationKey: 'o1', content: 'um' })
+      )
+      expect(
+        await s.purgeSession({ tenantId: 'purge-a', sessionId: 'session-a' })
+      ).toBe(2)
+      expect(
+        await s.purgeSession({ tenantId: 'purge-a', sessionId: 'session-a' })
+      ).toBe(0)
+      // a store bound to another tenant removes nothing of this one
+      expect(
+        await otherTenant.purgeSession({
+          tenantId: 'purge-a',
+          sessionId: 'session-z'
+        })
+      ).toBe(0)
+      await expect(
+        s.read({
+          tenantId: 'purge-a',
+          sessionId: 'session-a',
+          locator: mine.locator,
+          offset: 0,
+          length: 5
+        })
+      ).rejects.toBeInstanceOf(SpillNotFound)
+      await expect(
+        s.read({
+          tenantId: 'purge-a',
+          sessionId: 'session-z',
+          locator: kept.locator,
+          offset: 0,
+          length: 5
+        })
+      ).resolves.toBeDefined()
+      const remaining = await admin.query(
+        `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE tenant_id IN ('purge-a','purge-b')`
+      )
+      expect(remaining.rows[0].n).toBe(2)
+    })
+
+    it('sweeps the expired rows of every tenant as the maintenance role, and only those', async () => {
+      const insert = async (
+        tenantId: string,
+        hash: string,
+        expires: string
+      ) => {
+        await admin.query("SELECT set_config('cvg.tenant_id', $1, false)", [
+          tenantId
+        ])
+        await admin.query(
+          `INSERT INTO ${schema}.spill_objects (tenant_id,session_id,locator_hash,execution_id,operation_key,source_id,classification,media_type,content_sha256,byte_length,content,created_at,expires_at)
+           VALUES ($1,'s',$2,'e','o','x','C','text/plain',$3,2,'\\x6162','2020-01-01',$4)`,
+          [tenantId, hash.repeat(64), 'b'.repeat(64), expires]
+        )
+      }
+      await insert('sweep-a', 'a', '2020-01-02')
+      await insert('sweep-a', 'b', '2999-01-01')
+      await insert('sweep-b', 'c', '2020-01-02')
+      // a session that is not a member of the maintenance role removes and sees nothing across tenants
+      const outsider = new PostgresSpillSweeper(pool1, { schemaName: schema })
+      expect(await outsider.purgeExpired()).toBe(0)
+      const sweeper = new PostgresSpillSweeper(sweepPool, {
+        schemaName: schema
+      })
+      expect(await sweeper.purgeExpired()).toBeGreaterThanOrEqual(2)
+      const left = await admin.query(
+        `SELECT tenant_id, expires_at > now() AS live FROM ${schema}.spill_objects WHERE tenant_id IN ('sweep-a','sweep-b')`
+      )
+      expect(left.rows).toEqual([{ tenant_id: 'sweep-a', live: true }])
+      expect(await sweeper.purgeExpired()).toBe(0)
+    })
+
+    it('the maintenance role can neither read a live row nor write', async () => {
+      await admin.query(
+        "SELECT set_config('cvg.tenant_id', 'sweep-live', false)"
+      )
+      await admin.query(
+        `INSERT INTO ${schema}.spill_objects (tenant_id,session_id,locator_hash,execution_id,operation_key,source_id,classification,media_type,content_sha256,byte_length,content,created_at,expires_at)
+         VALUES ('sweep-live','s','${'9'.repeat(64)}','e','o','x','C','text/plain','${'b'.repeat(64)}',2,'\\x6162','2020-01-01','2999-01-01')`
+      )
+      const seen = await sweepPool.query(
+        `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE tenant_id='sweep-live'`
+      )
+      expect(seen.rows[0].n).toBe(0)
+      await expect(
+        sweepPool.query(
+          `INSERT INTO ${schema}.spill_objects (tenant_id,session_id,locator_hash,execution_id,operation_key,source_id,classification,media_type,content_sha256,byte_length,content,created_at,expires_at)
+           VALUES ('sweep-live','s','${'8'.repeat(64)}','e','o','x','C','text/plain','${'b'.repeat(64)}',2,'\\x6162','2020-01-01','2999-01-01')`
+        )
+      ).rejects.toThrow(/permission denied|row-level security/i)
+      const role = await admin.query(
+        `SELECT rolcanlogin, rolsuper, rolbypassrls FROM pg_roles WHERE rolname='cvg_spill_sweeper'`
+      )
+      expect(role.rows).toEqual([
+        { rolcanlogin: false, rolsuper: false, rolbypassrls: false }
+      ])
+    })
+
+    it('reports a sweep failure as a retryable error and rejects a bad schema', async () => {
+      const dead = {
+        connect: async () => {
+          throw new Error('down')
+        }
+      } as unknown as PostgresPoolLike
+      await expect(
+        new PostgresSpillSweeper(dead, { schemaName: schema }).purgeExpired()
+      ).rejects.toBeInstanceOf(SpillStorageUnavailable)
+      expect(
+        () => new PostgresSpillSweeper(pool1, { schemaName: 'Bad Schema' })
+      ).toThrow(SpillError)
+      const broken = new PostgresSpillSweeper(pool1, {
+        schemaName: 'no_such_schema'
+      })
+      await expect(broken.purgeExpired()).rejects.toMatchObject({
+        retryable: true
+      })
+    })
   })
 
   it('refuses content above the stored limit and empty content', async () => {

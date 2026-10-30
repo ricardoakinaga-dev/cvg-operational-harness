@@ -80,7 +80,10 @@ export interface PreviewBlockInput {
   readonly text: string
   readonly headBytes: number
   readonly tailBytes: number
-  readonly stored: { readonly locator: string } | null
+  readonly stored: {
+    readonly locator: string
+    readonly expiresAt?: string
+  } | null
   readonly truncatedAtSource: boolean
   readonly commitUncertain: boolean
   readonly marker: string
@@ -105,6 +108,7 @@ export function renderPreviewBlock(input: PreviewBlockInput): string {
     `omitidos=${omitted}`,
     `armazenado=${input.stored ? 'sim' : 'não'}`,
     ...(input.stored ? [`locator=${input.stored.locator}`] : []),
+    ...(input.stored?.expiresAt ? [`expiraEm=${input.stored.expiresAt}`] : []),
     ...(input.truncatedAtSource ? ['cortadoNaOrigem'] : []),
     ...(input.commitUncertain ? ['commitIncerto'] : [])
   ].join(' ')
