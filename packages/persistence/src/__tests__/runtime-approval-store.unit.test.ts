@@ -550,6 +550,8 @@ describe('synthetic PostgreSQL runtime approval authority', () => {
       data_classification: null,
       proposal_payload: null,
       operation_key: null,
+      origin_conversation_id: null,
+      origin_session_id: null,
       revision: 1,
       created_at: baseNow,
       updated_at: baseNow

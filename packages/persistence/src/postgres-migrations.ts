@@ -54,7 +54,10 @@ const defaultPostgresMigrations = [
   '0031_channel_effect_retry_not_before',
   // SPEC 0225 (note 0225b: renumbered from 0030): additive, closed expansion of
   // the operational effect journal for the complete tool result storage.
-  '0033_complete_tool_result_journal'
+  '0033_complete_tool_result_journal',
+  // SPEC 0291: additive, immutable origin (conversation and session) of an approval request.
+  // 0034 is the opt-in session writer ownership and is not in this run.
+  '0035_runtime_approval_origin'
 ]
 
 /**
