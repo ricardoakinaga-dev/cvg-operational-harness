@@ -34,19 +34,15 @@ CREATE POLICY spill_objects_tenant_isolation ON spill_objects
   WITH CHECK (tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));
 
 -- The expiry sweep runs for every tenant without a tenant context, as a member of the
--- dedicated maintenance role cvg_spill_sweeper (granted by the operator to the sweep job
--- only). Members can see and delete rows whose validity has ended, and nothing else: a live
--- row is out of reach and there is no INSERT or UPDATE path. Creating the role needs
--- CREATEROLE; where the migration authority lacks it, the operator creates the role and the
--- sweep stays unavailable until then (no other policy changes).
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cvg_spill_sweeper') THEN
-    CREATE ROLE cvg_spill_sweeper NOLOGIN NOSUPERUSER NOBYPASSRLS;
-  END IF;
-EXCEPTION WHEN insufficient_privilege THEN
-  RAISE NOTICE 'cvg_spill_sweeper was not created: the expiry sweep needs it';
-END $$;
+-- maintenance role cvg_spill_sweeper (granted by the operator to the sweep job only). The
+-- migration does not create the role and grants nothing to it: the migration authority has
+-- no CREATEROLE (deploy/harness/postgres/roles.sql), so the instance administrator
+-- provisions the role and its least-privilege grants with
+-- deploy/harness/postgres/spill-sweeper.sql, and the sweeper refuses to run until its
+-- privileges are verified. The policies below tolerate the role's absence: with no role no
+-- row is reachable. Members see and delete rows whose validity has ended, and nothing else:
+-- a live row is out of reach, there is no INSERT or UPDATE path, and the column grants of
+-- the provisioning script keep `content` unreadable even for an expired row.
 CREATE POLICY spill_objects_expiry_sweep_read ON spill_objects FOR SELECT
   USING (to_regrole('cvg_spill_sweeper') IS NOT NULL
          AND pg_has_role(current_user, 'cvg_spill_sweeper', 'member')

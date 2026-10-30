@@ -18,21 +18,26 @@ export interface PruneScope {
  * function of the message and the policy: a deterministic marker, no expiry in
  * the block and an idempotent write, so the same history gives the same text on
  * every pass and the `sourceDigest` the compaction records does not move.
- * Messages of any other role, and tool messages that fit, pass untouched.
+ * Messages of any other role, tool messages that fit, and positions in `exempt` (the house
+ * `spill.read` results, I11) pass untouched.
  */
 export async function pruneToolMessages<
   T extends { readonly role: string; readonly content: string }
 >(
   messages: readonly T[],
   scope: PruneScope,
-  spill: SpillComposition
+  spill: SpillComposition,
+  exempt: ReadonlySet<number> = new Set()
 ): Promise<T[]> {
   const policy = resolveSpillPolicy(spill.policy)
   const markerScope = `${scope.tenantId}\u0000${scope.sessionId}`
   let storedSoFar = 0
   const out: T[] = []
-  for (const message of messages) {
+  for (const [position, message] of messages.entries()) {
     if (
+      // I11: the result of the house spill.read is never stored again nor cut. The host
+      // names it by position (trusted runtime data); the text is never consulted.
+      exempt.has(position) ||
       message.role !== 'tool' ||
       utf8Bytes(message.content) <= policy.thresholdBytes
     ) {

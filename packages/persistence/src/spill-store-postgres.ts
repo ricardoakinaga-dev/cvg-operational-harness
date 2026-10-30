@@ -139,9 +139,23 @@ export class PostgresSpillStore implements SpillStore {
     return `spill_${mac}`
   }
 
+  /** Best effort, from a second connection: stop the statement the aborted writer waits in. */
+  async #cancelBackend(pid: number): Promise<void> {
+    let other: PostgresPoolClient | undefined
+    try {
+      other = await this.#pool.connect()
+      await other.query('SELECT pg_cancel_backend($1)', [pid])
+    } catch {
+      // the lock/statement timeouts still bound the wait
+    } finally {
+      other?.release()
+    }
+  }
+
   async #transaction<T>(
     readOnly: boolean,
-    operation: (client: PostgresPoolClient) => Promise<T>
+    operation: (client: PostgresPoolClient) => Promise<T>,
+    signal?: AbortSignal
   ): Promise<T> {
     let client: PostgresPoolClient
     try {
@@ -151,6 +165,8 @@ export class PostgresSpillStore implements SpillStore {
     }
     let releaseError: Error | undefined
     let committing = false
+    let inFlight = false
+    let onAbort: (() => void) | undefined
     try {
       await client.query(readOnly ? 'BEGIN READ ONLY' : 'BEGIN')
       await client.query("SET LOCAL statement_timeout = '5s'")
@@ -161,23 +177,50 @@ export class PostgresSpillStore implements SpillStore {
       await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
         this.#tenantId
       ])
+      if (signal) {
+        // SPEC 0293 I7: an abort while a statement waits (the tenant lock of the quota, a
+        // busy row) cancels that statement; the writer then rolls back and nothing is stored.
+        const pid = Number(
+          (
+            await client.query<{ pid: number }>(
+              'SELECT pg_backend_pid() AS pid'
+            )
+          ).rows[0]?.pid
+        )
+        inFlight = true
+        onAbort = () => {
+          if (inFlight && Number.isSafeInteger(pid))
+            void this.#cancelBackend(pid)
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        if (signal.aborted) onAbort()
+      }
       const value = await operation(client)
+      // the last point where an abort still means "nothing stored"
+      inFlight = false
+      if (signal?.aborted) throw new SpillCancelled('Spill write cancelled')
       committing = true
       await client.query('COMMIT')
       return value
     } catch (error) {
+      inFlight = false
       try {
         await client.query('ROLLBACK')
       } catch {
         releaseError = new Error('Spill transaction cleanup failed')
       }
       if (error instanceof SpillError) throw error
+      // the statement was cancelled because the caller aborted, before any commit
+      if (signal?.aborted && !committing) {
+        throw new SpillCancelled('Spill write cancelled')
+      }
       // a lost COMMIT is an unknown outcome, never a plain failure (SPEC 0293 §3.1)
       if (committing && !readOnly) {
         throw new SpillCommitUnknown('Spill commit outcome is unknown')
       }
       throw new SpillStorageUnavailable('Spill transaction failed')
     } finally {
+      if (onAbort) signal?.removeEventListener('abort', onAbort)
       client.release(releaseError)
     }
   }
@@ -217,79 +260,89 @@ export class PostgresSpillStore implements SpillStore {
     const now = this.#clock()
     const expires = new Date(now.getTime() + this.#policy.ttlMs)
     const schema = `"${this.#schema}"`
-    return this.#transaction(false, async (client) => {
-      // one writer per tenant at a time: the quota below is read, then written
-      await client.query(
-        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-        [`spill:${input.tenantId}`]
-      )
-      // an expired copy still waiting for the sweep is replaced, never revived
-      await client.query(
-        `DELETE FROM ${schema}.spill_objects
-          WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3 AND expires_at <= $4`,
-        [input.tenantId, input.sessionId, hash, now.toISOString()]
-      )
-      const found = await client.query<{
-        created_at: Date
-        expires_at: Date
-      }>(
-        `SELECT created_at, expires_at FROM ${schema}.spill_objects
-          WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3`,
-        [input.tenantId, input.sessionId, hash]
-      )
-      let row = found.rows[0]
-      if (!row) {
-        // SPEC 0293 I5: live objects only; an expired one no longer takes room
-        const used = await client.query<{ objects: number; bytes: string }>(
-          `SELECT count(*) FILTER (WHERE session_id=$2)::int AS objects,
-                  COALESCE(sum(byte_length), 0)::text AS bytes
-             FROM ${schema}.spill_objects
-            WHERE tenant_id=$1 AND expires_at > $3`,
-          [input.tenantId, input.sessionId, now.toISOString()]
+    return this.#transaction(
+      false,
+      async (client) => {
+        // one writer per tenant at a time: the quota below is read, then written
+        await client.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`spill:${input.tenantId}`]
         )
-        const usage = used.rows[0] as { objects: number; bytes: string }
-        if (
-          usage.objects >= this.#policy.maxObjectsPerSession ||
-          Number(usage.bytes) + bytes > this.#policy.maxBytesPerTenant
-        ) {
-          throw new SpillQuotaExceeded('Spill quota exceeded')
+        // the wait for the lock can be long: an abort that came meanwhile stops here, before
+        // any write
+        if (input.signal?.aborted) {
+          throw new SpillCancelled('Spill write cancelled')
         }
-        const inserted = await client.query<{
+        // an expired copy still waiting for the sweep is replaced, never revived
+        await client.query(
+          `DELETE FROM ${schema}.spill_objects
+          WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3 AND expires_at <= $4`,
+          [input.tenantId, input.sessionId, hash, now.toISOString()]
+        )
+        const found = await client.query<{
           created_at: Date
           expires_at: Date
         }>(
-          `INSERT INTO ${schema}.spill_objects
+          `SELECT created_at, expires_at FROM ${schema}.spill_objects
+          WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3`,
+          [input.tenantId, input.sessionId, hash]
+        )
+        let row = found.rows[0]
+        if (!row) {
+          // SPEC 0293 I5: live objects only; an expired one no longer takes room
+          const used = await client.query<{ objects: number; bytes: string }>(
+            `SELECT count(*) FILTER (WHERE session_id=$2)::int AS objects,
+                  COALESCE(sum(byte_length), 0)::text AS bytes
+             FROM ${schema}.spill_objects
+            WHERE tenant_id=$1 AND expires_at > $3`,
+            [input.tenantId, input.sessionId, now.toISOString()]
+          )
+          const usage = used.rows[0] as { objects: number; bytes: string }
+          if (
+            usage.objects >= this.#policy.maxObjectsPerSession ||
+            Number(usage.bytes) + bytes > this.#policy.maxBytesPerTenant
+          ) {
+            throw new SpillQuotaExceeded('Spill quota exceeded')
+          }
+          const inserted = await client.query<{
+            created_at: Date
+            expires_at: Date
+          }>(
+            `INSERT INTO ${schema}.spill_objects
              (tenant_id, session_id, locator_hash, execution_id, operation_key, source_id,
               classification, media_type, content_sha256, byte_length, content, created_at, expires_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
            RETURNING created_at, expires_at`,
-          [
-            input.tenantId,
-            input.sessionId,
-            hash,
-            input.executionId,
-            input.operationKey,
-            input.sourceId,
-            input.classification,
-            input.mediaType,
-            sha256,
-            bytes,
-            Buffer.from(input.content, 'utf8'),
-            now.toISOString(),
-            expires.toISOString()
-          ]
-        )
-        row = inserted.rows[0]
-      }
-      if (!row) throw new SpillStorageUnavailable('Spill object was not stored')
-      return {
-        locator,
-        bytes,
-        sha256,
-        createdAt: new Date(row.created_at).toISOString(),
-        expiresAt: new Date(row.expires_at).toISOString()
-      }
-    })
+            [
+              input.tenantId,
+              input.sessionId,
+              hash,
+              input.executionId,
+              input.operationKey,
+              input.sourceId,
+              input.classification,
+              input.mediaType,
+              sha256,
+              bytes,
+              Buffer.from(input.content, 'utf8'),
+              now.toISOString(),
+              expires.toISOString()
+            ]
+          )
+          row = inserted.rows[0]
+        }
+        if (!row)
+          throw new SpillStorageUnavailable('Spill object was not stored')
+        return {
+          locator,
+          bytes,
+          sha256,
+          createdAt: new Date(row.created_at).toISOString(),
+          expiresAt: new Date(row.expires_at).toISOString()
+        }
+      },
+      input.signal
+    )
   }
 
   async read(input: SpillReadInput): Promise<SpillSlice> {
@@ -386,6 +439,7 @@ export class PostgresSpillStore implements SpillStore {
 export class PostgresSpillSweeper {
   readonly #pool: PostgresPoolLike
   readonly #schema: string
+  #verified = false
 
   constructor(
     pool: PostgresPoolLike,
@@ -412,20 +466,69 @@ export class PostgresSpillSweeper {
       await client.query(
         `SET LOCAL search_path = pg_catalog, "${this.#schema}"`
       )
+      if (!this.#verified) {
+        await this.#verifyPrivileges(client)
+        this.#verified = true
+      }
       const result = await client.query(
         `DELETE FROM "${this.#schema}".spill_objects WHERE expires_at <= now()`
       )
       await client.query('COMMIT')
       return result.rowCount ?? 0
-    } catch {
+    } catch (error) {
       try {
         await client.query('ROLLBACK')
       } catch {
         releaseError = new Error('Spill sweep cleanup failed')
       }
+      if (error instanceof SpillError) throw error
       throw new SpillStorageUnavailable('Spill sweep failed')
     } finally {
       client.release(releaseError)
+    }
+  }
+
+  /**
+   * N01/F02: the role is provisioned outside the migration (deploy/harness/postgres/
+   * spill-sweeper.sql). The sweep runs only as a member of it, with the identity and expiry
+   * columns and DELETE and nothing more: `content` unreadable, no INSERT/UPDATE/TRUNCATE, and
+   * no way around the policies (superuser, BYPASSRLS, CREATEROLE).
+   */
+  async #verifyPrivileges(client: PostgresPoolClient): Promise<void> {
+    const table = `"${this.#schema}".spill_objects`
+    const result = await client.query<Record<string, boolean | null>>(
+      `SELECT CASE WHEN to_regrole('cvg_spill_sweeper') IS NULL THEN false
+                   ELSE pg_has_role(current_user, 'cvg_spill_sweeper', 'member') END AS member,
+              has_column_privilege(current_user, $1, 'expires_at', 'SELECT') AS read_expiry,
+              has_column_privilege(current_user, $1, 'locator_hash', 'SELECT') AS read_identity,
+              has_column_privilege(current_user, $1, 'content', 'SELECT') AS read_content,
+              has_table_privilege(current_user, $1, 'DELETE') AS can_delete,
+              has_any_column_privilege(current_user, $1, 'INSERT') AS can_insert,
+              has_any_column_privilege(current_user, $1, 'UPDATE') AS can_update,
+              has_table_privilege(current_user, $1, 'TRUNCATE') AS can_truncate,
+              (has_table_privilege(current_user, $1, 'TRIGGER')
+                 OR has_any_column_privilege(current_user, $1, 'REFERENCES')) AS can_alter_shape,
+              (SELECT rolsuper OR rolbypassrls OR rolcreaterole
+                 FROM pg_roles WHERE rolname = current_user) AS powerful`,
+      [table]
+    )
+    const row = result.rows[0]
+    if (
+      !row ||
+      row.member !== true ||
+      row.read_expiry !== true ||
+      row.read_identity !== true ||
+      row.can_delete !== true ||
+      row.read_content !== false ||
+      row.can_insert !== false ||
+      row.can_update !== false ||
+      row.can_truncate !== false ||
+      row.can_alter_shape !== false ||
+      row.powerful !== false
+    ) {
+      throw new SpillStorageUnavailable(
+        'Spill sweeper role is not provisioned with least privilege'
+      )
     }
   }
 }

@@ -77,7 +77,8 @@ export async function prepareToolOutput(
         }),
         bytes,
         sha256,
-        stored: false
+        stored: false,
+        ...(input.inlineAlways === true ? { houseRead: true as const } : {})
       },
       wrote: false
     }

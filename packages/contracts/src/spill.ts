@@ -108,4 +108,10 @@ export interface ObservationRendering {
   readonly locator?: string
   /** When the stored object stops being readable; shown in the block so the model can tell. */
   readonly expiresAt?: string
+  /**
+   * Set by the runtime, never by a tool or by text: this is the result of the house `spill.read`
+   * tool (SPEC 0293 I11). A host that builds model messages from observations answers the
+   * compaction control's `houseReadOf` port from this field.
+   */
+  readonly houseRead?: true
 }

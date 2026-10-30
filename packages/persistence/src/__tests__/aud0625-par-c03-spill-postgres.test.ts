@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { createHash, randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { Pool, Client } from 'pg'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { SpillPutInput } from '@cvg/harness-contracts'
@@ -47,6 +48,23 @@ let pool2: Pool
 let sweepPool: Pool
 const sweepRole = `parc03_sweep_${suffix}`
 
+/** Runs deploy/harness/postgres/spill-sweeper.sql the way psql would, with its variables. */
+const provisionSweeper = async (dataSchema: string, loginRole: string) => {
+  const script = readFileSync(
+    new URL(
+      '../../../../deploy/harness/postgres/spill-sweeper.sql',
+      import.meta.url
+    ),
+    'utf8'
+  )
+    .split('\n')
+    .filter((line) => !line.startsWith('\\'))
+    .join('\n')
+    .replaceAll(':"data_schema"', `"${dataSchema}"`)
+    .replaceAll(':"sweep_login_role"', `"${loginRole}"`)
+  await admin.query(script)
+}
+
 const put = (over: Partial<SpillPutInput> = {}): SpillPutInput => ({
   tenantId: tenant,
   sessionId: 'session-a',
@@ -80,11 +98,9 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
     await admin.query(
       `CREATE ROLE ${sweepRole} LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD '${password}'`
     )
-    await admin.query(`GRANT cvg_spill_sweeper TO ${sweepRole}`)
-    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${sweepRole}`)
-    await admin.query(
-      `GRANT SELECT, DELETE ON ${schema}.spill_objects TO ${sweepRole}`
-    )
+    // the role and its least-privilege grants come from the supported provisioning script,
+    // run by the administrator; the migration creates and grants nothing (N01, F02)
+    await provisionSweeper(schema, sweepRole)
     const sweepUrl = new URL(url!)
     sweepUrl.username = sweepRole
     sweepUrl.password = password
@@ -687,9 +703,16 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
       await insert('sweep-a', 'a', '2020-01-02')
       await insert('sweep-a', 'b', '2999-01-01')
       await insert('sweep-b', 'c', '2020-01-02')
-      // a session that is not a member of the maintenance role removes and sees nothing across tenants
+      // a session that is not a member of the maintenance role is refused before any delete,
+      // and what it deletes on its own sees nothing across tenants
       const outsider = new PostgresSpillSweeper(pool1, { schemaName: schema })
-      expect(await outsider.purgeExpired()).toBe(0)
+      await expect(outsider.purgeExpired()).rejects.toBeInstanceOf(
+        SpillStorageUnavailable
+      )
+      const own = await pool1.query(
+        `DELETE FROM ${schema}.spill_objects WHERE expires_at <= now()`
+      )
+      expect(own.rowCount).toBe(0)
       const sweeper = new PostgresSpillSweeper(sweepPool, {
         schemaName: schema
       })
@@ -724,6 +747,340 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
       )
       expect(role.rows).toEqual([
         { rolcanlogin: false, rolsuper: false, rolbypassrls: false }
+      ])
+    })
+
+    describe('F03: an abort while the put waits for the tenant lock stores nothing', () => {
+      const lockSql =
+        "SELECT pg_advisory_lock(hashtextextended('spill:' || $1, 0))"
+      const unlockSql =
+        "SELECT pg_advisory_unlock(hashtextextended('spill:' || $1, 0))"
+      const waiters = async () =>
+        Number(
+          (
+            await admin.query(
+              `SELECT count(*)::int AS n FROM pg_locks WHERE locktype='advisory' AND NOT granted`
+            )
+          ).rows[0].n
+        )
+      const untilWaiting = async () => {
+        for (let i = 0; i < 100; i += 1) {
+          if ((await waiters()) > 0) return
+          await new Promise((r) => setTimeout(r, 20))
+        }
+        throw new Error('the put never reached the lock wait')
+      }
+      const rowsFor = async (content: string) =>
+        Number(
+          (
+            await admin.query(
+              `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE content = convert_to($1,'UTF8')`,
+              [content]
+            )
+          ).rows[0].n
+        )
+
+      it('cancels the waiting statement at once, while the lock is still held', async () => {
+        const tenantId = `f03-a-${suffix}`
+        const holder = new Client({ connectionString: url })
+        await holder.connect()
+        await holder.query(lockSql, [tenantId])
+        try {
+          const abort = new AbortController()
+          const content = `f03-a-${suffix}`
+          const running = store(pool1, { tenantId })
+            .put(put({ tenantId, content, signal: abort.signal }))
+            .then(
+              () => 'stored' as const,
+              (error: unknown) => error
+            )
+          await untilWaiting()
+          const started = Date.now()
+          abort.abort()
+          const outcome = await running
+          expect(outcome).toBeInstanceOf(SpillCancelled)
+          // far below the 5 s lock timeout: the abort cancelled the wait, it did not outlast it
+          expect(Date.now() - started).toBeLessThan(3000)
+        } finally {
+          await holder.query(unlockSql, [tenantId])
+          await holder.end()
+        }
+        expect(await rowsFor(`f03-a-${suffix}`)).toBe(0)
+      })
+
+      it('stops after the lock when the cancel could not land: nothing is written', async () => {
+        const tenantId = `f03-b-${suffix}`
+        const holder = new Client({ connectionString: url })
+        await holder.connect()
+        await holder.query(lockSql, [tenantId])
+        // a second connection is never available, so pg_cancel_backend cannot be sent
+        let connects = 0
+        const statements: string[] = []
+        const noCancel = {
+          connect: async () => {
+            connects += 1
+            if (connects > 1) throw new Error('no second connection')
+            const client = await pool1.connect()
+            const query = client.query.bind(client) as (
+              ...args: unknown[]
+            ) => Promise<unknown>
+            ;(client as unknown as { query: unknown }).query = (
+              text: unknown,
+              ...rest: unknown[]
+            ) => {
+              if (typeof text === 'string') statements.push(text)
+              return query(text, ...rest)
+            }
+            return client
+          }
+        } as unknown as PostgresPoolLike
+        try {
+          const abort = new AbortController()
+          const content = `f03-b-${suffix}`
+          const running = store(noCancel, { tenantId })
+            .put(put({ tenantId, content, signal: abort.signal }))
+            .then(
+              () => 'stored' as const,
+              (error: unknown) => error
+            )
+          await untilWaiting()
+          abort.abort()
+          await new Promise((r) => setTimeout(r, 100))
+          await holder.query(unlockSql, [tenantId])
+          expect(await running).toBeInstanceOf(SpillCancelled)
+        } finally {
+          await holder.end()
+        }
+        expect(await rowsFor(`f03-b-${suffix}`)).toBe(0)
+        // stopped at the lock: not a single write was sent after the wait
+        expect(
+          statements.filter((text) => /INSERT INTO|DELETE FROM/.test(text))
+        ).toEqual([])
+      })
+
+      it('an abort that arrives while the statement after the lock runs is rolled back, not committed', async () => {
+        const tenantId = `f03-c-${suffix}`
+        const abort = new AbortController()
+        const content = `f03-c-${suffix}`
+        // abort exactly when the INSERT is sent: the first statement that mentions the table
+        let fired = false
+        let opened = 0
+        const probe = {
+          connect: async () => {
+            // one connection only: pg_cancel_backend can never be sent, so the check before
+            // the commit is the only thing between the abort and a stored row
+            opened += 1
+            if (opened > 1) throw new Error('no second connection')
+            const client = await pool1.connect()
+            const query = client.query.bind(client) as (
+              ...args: unknown[]
+            ) => Promise<unknown>
+            ;(client as unknown as { query: unknown }).query = (
+              text: unknown,
+              ...rest: unknown[]
+            ) => {
+              if (
+                !fired &&
+                typeof text === 'string' &&
+                text.includes('INSERT INTO')
+              ) {
+                fired = true
+                abort.abort()
+              }
+              return query(text, ...rest)
+            }
+            return client
+          }
+        } as unknown as PostgresPoolLike
+        const outcome = await store(probe, { tenantId })
+          .put(put({ tenantId, content, signal: abort.signal }))
+          .then(
+            () => 'stored' as const,
+            (error: unknown) => error
+          )
+        expect(fired).toBe(true)
+        expect(outcome).toBeInstanceOf(SpillCancelled)
+        expect(await rowsFor(content)).toBe(0)
+      })
+
+      it('control: without an abort the same put commits', async () => {
+        const tenantId = `f03-d-${suffix}`
+        const content = `f03-d-${suffix}`
+        const receipt = await store(pool1, { tenantId }).put(
+          put({ tenantId, content, signal: new AbortController().signal })
+        )
+        expect(receipt.locator).toMatch(/^spill_/)
+        expect(await rowsFor(content)).toBe(1)
+      })
+    })
+
+    it('F02: the sweeper deletes what expired in every tenant but can never read content', async () => {
+      const insert = async (
+        tenantId: string,
+        hash: string,
+        expires: string
+      ) => {
+        await admin.query("SELECT set_config('cvg.tenant_id', $1, false)", [
+          tenantId
+        ])
+        await admin.query(
+          `INSERT INTO ${schema}.spill_objects (tenant_id,session_id,locator_hash,execution_id,operation_key,source_id,classification,media_type,content_sha256,byte_length,content,created_at,expires_at)
+           VALUES ($1,'s',$2,'e','o','x','C','text/plain',$3,${'CANARIO-CONFIDENCIAL'.length},convert_to('CANARIO-CONFIDENCIAL','UTF8'),'2020-01-01',$4)`,
+          [tenantId, hash.repeat(64), 'b'.repeat(64), expires]
+        )
+      }
+      await insert('f02-a', '1', '2020-01-02')
+      await insert('f02-b', '2', '2020-01-02')
+      await insert('f02-b', '3', '2999-01-01')
+      for (const read of [
+        `SELECT content FROM ${schema}.spill_objects`,
+        `SELECT * FROM ${schema}.spill_objects`,
+        `SELECT length(content) FROM ${schema}.spill_objects`
+      ])
+        await expect(sweepPool.query(read)).rejects.toThrow(
+          /permission denied/i
+        )
+      // identity and expiry stay readable, so the DELETE can find the expired rows
+      const visible = await sweepPool.query(
+        `SELECT tenant_id, expires_at FROM ${schema}.spill_objects WHERE tenant_id LIKE 'f02-%' ORDER BY tenant_id`
+      )
+      expect(visible.rows.map((r) => r.tenant_id)).toEqual(['f02-a', 'f02-b'])
+      await expect(
+        sweepPool.query(`UPDATE ${schema}.spill_objects SET expires_at = now()`)
+      ).rejects.toThrow(/permission denied/i)
+      await expect(
+        sweepPool.query(`TRUNCATE ${schema}.spill_objects`)
+      ).rejects.toThrow(/permission denied/i)
+      const sweeper = new PostgresSpillSweeper(sweepPool, {
+        schemaName: schema
+      })
+      expect(await sweeper.purgeExpired()).toBeGreaterThanOrEqual(2)
+      const left = await admin.query(
+        `SELECT tenant_id, locator_hash FROM ${schema}.spill_objects WHERE tenant_id LIKE 'f02-%'`
+      )
+      expect(left.rows).toEqual([
+        { tenant_id: 'f02-b', locator_hash: '3'.repeat(64) }
+      ])
+    })
+
+    it('N01: the sweeper refuses to run unless the role is provisioned with least privilege', async () => {
+      const login = async (
+        name: string,
+        setup: (name: string) => Promise<void>
+      ) => {
+        await admin.query(
+          `CREATE ROLE ${name} LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD '${password}'`
+        )
+        await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${name}`)
+        await setup(name)
+        const u = new URL(url!)
+        u.username = name
+        u.password = password
+        return new Pool({ connectionString: u.toString(), max: 1 })
+      }
+      const refused = async (
+        name: string,
+        setup: (name: string) => Promise<void>
+      ) => {
+        const p = await login(name, setup)
+        try {
+          await expect(
+            new PostgresSpillSweeper(p, { schemaName: schema }).purgeExpired()
+          ).rejects.toMatchObject({
+            message: expect.stringContaining('least privilege')
+          })
+        } finally {
+          await p.end()
+          await admin.query(`DROP OWNED BY ${name}`)
+          await admin.query(`DROP ROLE ${name}`)
+        }
+      }
+      const column = `SELECT (tenant_id, session_id, locator_hash, expires_at), DELETE`
+      // member, but the privileges of the role are not inherited (the pre-0291 shape of a login)
+      await refused(`n01_none_${suffix}`, async (n) => {
+        await admin.query(`GRANT cvg_spill_sweeper TO ${n} WITH INHERIT FALSE`)
+      })
+      // grants, but not a member of the role
+      await refused(`n01_nomember_${suffix}`, async (n) => {
+        await admin.query(`GRANT ${column} ON ${schema}.spill_objects TO ${n}`)
+      })
+      // member with the reading of content the old composition had
+      await refused(`n01_content_${suffix}`, async (n) => {
+        await admin.query(`GRANT cvg_spill_sweeper TO ${n} WITH INHERIT TRUE`)
+        await admin.query(
+          `GRANT SELECT, DELETE ON ${schema}.spill_objects TO ${n}`
+        )
+      })
+      // member with the right columns and one privilege more
+      for (const extra of [
+        'UPDATE (expires_at)',
+        'INSERT',
+        'TRUNCATE',
+        'TRIGGER',
+        'REFERENCES (tenant_id)'
+      ]) {
+        await refused(
+          `n01_x${extra.replace(/\W/g, '').toLowerCase()}_${suffix}`,
+          async (n) => {
+            await admin.query(
+              `GRANT cvg_spill_sweeper TO ${n} WITH INHERIT TRUE`
+            )
+            await admin.query(
+              `GRANT ${column} ON ${schema}.spill_objects TO ${n}`
+            )
+            await admin.query(
+              `GRANT ${extra} ON ${schema}.spill_objects TO ${n}`
+            )
+          }
+        )
+      }
+      // the provisioned login role is accepted
+      expect(
+        await new PostgresSpillSweeper(sweepPool, {
+          schemaName: schema
+        }).purgeExpired()
+      ).toBeGreaterThanOrEqual(0)
+    })
+
+    it('N01: with the role absent the sweeper refuses, with its own message', async () => {
+      const missing = `cvg_spill_sweeper_gone_${suffix}`
+      await admin.query(`ALTER ROLE cvg_spill_sweeper RENAME TO ${missing}`)
+      try {
+        await expect(
+          new PostgresSpillSweeper(sweepPool, {
+            schemaName: schema
+          }).purgeExpired()
+        ).rejects.toMatchObject({
+          message: expect.stringContaining('least privilege')
+        })
+      } finally {
+        await admin.query(`ALTER ROLE ${missing} RENAME TO cvg_spill_sweeper`)
+      }
+    })
+
+    it('N01: the migration creates no role and grants nothing', () => {
+      const sql = readFileSync(
+        new URL('../../migrations/0037_tool_output_spill.sql', import.meta.url),
+        'utf8'
+      )
+      expect(sql).not.toMatch(/CREATE\s+ROLE/i)
+      expect(sql).not.toMatch(/^\s*GRANT\b/im)
+    })
+
+    it('the provisioning script leaves the role without CREATEROLE, login, bypass or superuser', async () => {
+      const r = await admin.query(
+        `SELECT rolcanlogin, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication
+           FROM pg_roles WHERE rolname='cvg_spill_sweeper'`
+      )
+      expect(r.rows).toEqual([
+        {
+          rolcanlogin: false,
+          rolsuper: false,
+          rolbypassrls: false,
+          rolcreaterole: false,
+          rolcreatedb: false,
+          rolreplication: false
+        }
       ])
     })
 
