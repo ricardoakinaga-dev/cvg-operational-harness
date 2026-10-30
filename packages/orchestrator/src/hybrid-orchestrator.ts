@@ -104,11 +104,36 @@ function parseDecisionText(text: string): unknown {
   }
 }
 
+/**
+ * The prompt is line oriented: every observation is one `- [source/type] ...` line and
+ * every section starts with a fixed label. Text that comes from a user, a tool, a model
+ * or an external capability must not be able to start a line of its own, so it is
+ * flattened to one line: each line break the text carries (LF, CR, VT, FF, NEL, LS, PS)
+ * becomes a visible escape. A framed tool result (SPEC 0293) is the one exception: it
+ * keeps its own lines because its markers delimit it.
+ */
+const LINE_BREAKS = /[\n\r\v\f\u0085\u2028\u2029]/g
+const LINE_BREAK_ESCAPES: Readonly<Record<string, string>> = {
+  '\n': '\\n',
+  '\r': '\\r',
+  '\v': '\\v',
+  '\f': '\\f',
+  '\u0085': '\\u0085',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+}
+function oneLine(text: string): string {
+  return text.replace(
+    LINE_BREAKS,
+    (match) => LINE_BREAK_ESCAPES[match] as string
+  )
+}
+
 function buildDecisionPrompt(context: StepContext): string {
   const capabilities = context.capabilities
     .map(
       (tool) =>
-        `- ${tool.id}@${tool.version}: ${tool.description} (risk=${tool.risk}, sideEffect=${tool.sideEffect})`
+        `- ${oneLine(tool.id)}@${oneLine(tool.version)}: ${oneLine(tool.description)} (risk=${tool.risk}, sideEffect=${tool.sideEffect})`
     )
     .join('\n')
   // SPEC 0293: a tool result is read as the runtime rendered it on arrival, but only
@@ -120,12 +145,12 @@ function buildDecisionPrompt(context: StepContext): string {
         `- [${observation.source}/${observation.type}] ${
           kept.has(`tool.${observation.observationId}`)
             ? renderedObservationText(observation)
-            : observation.summary
+            : oneLine(observation.summary)
         }`
     )
     .join('\n')
   const repair = context.decisionRepair
-    ? `\nPrevious attempt was rejected: ${context.decisionRepair.errors.join('; ')}. Correct it.\n`
+    ? `\nPrevious attempt was rejected: ${oneLine(context.decisionRepair.errors.join('; '))}. Correct it.\n`
     : ''
   return [
     'Decide the next governed step. Respond with a single JSON object and nothing else.',
@@ -133,8 +158,8 @@ function buildDecisionPrompt(context: StepContext): string {
       context.allowedDecisionTypes.join(', ') +
       '], "reasonCode": one of [MISSING_INFORMATION, EVIDENCE_INCOMPLETE, TOOL_REQUIRED, ACTION_CONFIRMED, POLICY_REQUIRED, GOAL_SATISFIED, USER_REQUESTED_STOP, BUDGET_EXHAUSTED, STRATEGY_CHANGED, VERIFICATION_FAILED, HANDOFF_REQUIRED, LOOP_SUSPECTED, CAPABILITY_UNAVAILABLE]}',
     'Optional fields: toolId, toolInput, query, knowledgeCategories, responseIntent, responseText, requestedInput{questionType,missingFields,promptIntent}, verificationTarget.',
-    `Goal: ${context.goal}`,
-    `State: ${context.stateSummary}`,
+    `Goal: ${oneLine(context.goal)}`,
+    `State: ${oneLine(context.stateSummary)}`,
     `Knowledge available: ${context.knowledgeAvailable ? 'yes' : 'no'}`,
     `Completion strategy: ${context.completionStrategy}`,
     capabilities ? `Capabilities:\n${capabilities}` : 'Capabilities: none',
