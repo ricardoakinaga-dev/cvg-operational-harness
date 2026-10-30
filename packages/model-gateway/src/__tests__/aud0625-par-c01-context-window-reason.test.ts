@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { estimateInputTokens } from '@cvg/shared'
-import { estimateInputTokens as fromContracts } from '@cvg/harness-contracts'
 import type {
   ModelGatewayEvent,
   ModelGatewayRequest,
@@ -149,7 +148,8 @@ describe('PAR-C01 slice 3: gateway window refusal and shared estimator', () => {
   })
 
   it('projects with the estimator shared with the harness, bytes and framing included', async () => {
-    expect(estimateInputTokens).toBe(fromContracts)
+    // That this is the very function the harness uses is proved where both packages are declared
+    // dependencies: packages/shared/src/__tests__/aud0625-estimator-identity.test.ts.
     const content = 'ação clínica sintética: ' + 'ç'.repeat(40)
     const w = world([ok])
     await w.gateway.generate(request(content))

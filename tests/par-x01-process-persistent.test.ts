@@ -215,7 +215,8 @@ describe('PAR-X01 slice 4: persistent mode and disposal', () => {
     const flood = (progress: string) =>
       `const fs=require('node:fs');const buf=Buffer.alloc(16384,97);let total=0;` +
       `const go=()=>{while(process.stdout.write(buf)){total+=buf.length}total+=buf.length;process.stdout.once('drain',go)};go();` +
-      `setInterval(()=>fs.writeFileSync(${JSON.stringify(progress)},String(total)),50)`
+      // Atomic replace: a reader never sees the truncated, empty file (it read 0 mid-write under load).
+      `setInterval(()=>{fs.writeFileSync(${JSON.stringify(progress + '.tmp')},String(total));fs.renameSync(${JSON.stringify(progress + '.tmp')},${JSON.stringify(progress)})},50)`
     const written = (file: string): number =>
       existsSync(file) ? Number(readFileSync(file, 'utf8') || '0') : 0
 
