@@ -13,6 +13,7 @@ import type {
   SessionHeaderV1,
   SessionPersistence,
   SessionPersistenceForkOptions,
+  SessionResume,
   SessionPersistenceOptions
 } from '@cvg/harness-contracts'
 import {
@@ -33,6 +34,7 @@ import {
   SessionCommitUnknownError,
   SessionEventError,
   SessionForkRefusedError,
+  analyzeSessionLog,
   checkSessionFork,
   planSessionFork,
   materializeSessionEvent,
@@ -606,6 +608,21 @@ class PostgresSessionPersistence implements SessionPersistence {
         ? { depth: l.depth as number, root: l.root }
         : undefined
     return { events, ...(lineage ? { lineage } : {}) }
+  }
+
+  /** SPEC 0287 §5: the writer handle and the analysis of its log; nothing is written or closed. */
+  async resumeSession(
+    id: string,
+    resumeOptions: SessionPersistenceOptions = {}
+  ): Promise<SessionResume> {
+    const handle = await this.open(id, 'write', resumeOptions)
+    try {
+      const { events } = await handle.read(0)
+      return { handle, analysis: analyzeSessionLog(events) }
+    } catch (error) {
+      await handle.close().catch(() => undefined)
+      throw error
+    }
   }
 
   #reserveWriter(): void {

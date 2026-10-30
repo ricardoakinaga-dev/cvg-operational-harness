@@ -3,7 +3,9 @@ import { canonicalizeJson } from '@cvg/harness-contracts'
 import type {
   SessionEvent,
   SessionEventAppend,
-  SessionHeaderV1
+  SessionHeaderV1,
+  SessionLogAnalysis,
+  TurnReport
 } from '@cvg/harness-contracts'
 import { sessionEventInputDigest } from './events.ts'
 import {
@@ -32,23 +34,7 @@ export class SessionForkRefusedError extends SessionPersistenceError {
   }
 }
 
-export interface TurnReport {
-  readonly correlationId: string
-  readonly firstSequence: number
-  readonly lastSequence: number
-  /** `ended` = a `turn/end` that does not make a completed turn; `open` = no `turn/end`. */
-  readonly state: 'completed' | 'ended' | 'open'
-  readonly stopReason?: string
-  /** `operationKey`s whose effect the log cannot prove either way. */
-  readonly uncertainEffects: readonly string[]
-}
-export interface SessionLogAnalysis {
-  readonly turns: readonly TurnReport[]
-  /** Last sequence of the longest contiguous prefix of completed, certain turns; 0 for none. */
-  readonly inheritableThrough: number
-  /** The most recent turn without `turn/end`. */
-  readonly openTurn?: TurnReport
-}
+export type { SessionLogAnalysis, TurnReport }
 
 const UNCERTAIN_OUTCOMES: ReadonlySet<unknown> = new Set([
   'deadline',

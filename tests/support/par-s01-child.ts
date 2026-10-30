@@ -130,6 +130,17 @@ async function run(r: Request): Promise<unknown> {
         add('turn/end', c, { correlationId: c, stopReason: 'COMPLETED' })
         add('message/assistant', c, { text: `answer ${c}` })
       }
+      if (r.crashed) {
+        // A turn the process never finished: asked, started, called a tool, no turn/end.
+        add('message/user', 'tc', { text: 'ask tc' })
+        add('turn/start', 'tc', { correlationId: 'tc' })
+        add('tool/call', 'tc', {
+          correlationId: 'tc',
+          toolId: 'tool-a',
+          operationKey: 'op-tc',
+          input: {}
+        })
+      }
       await handle.append(events)
       return { events: events.length }
     }

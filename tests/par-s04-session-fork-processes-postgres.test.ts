@@ -300,4 +300,42 @@ describe.skipIf(!url)('PAR-S04 slice 2: fork across processes', () => {
     await next.ok('close', { name: 'c' })
     await owner.kill()
   })
+
+  it('FP08: a live owner in another process is AlreadyOwned; after its kill a new handle reads the exact prefix, writes nothing and finds the open turn', async () => {
+    const owner = spawn()
+    expect(
+      await owner.ok('seedTurns', {
+        session: 'kr-src',
+        name: 'src',
+        turns: 2,
+        crashed: true
+      })
+    ).toEqual({ events: 11 })
+    const svc = await inProcess()
+    await expect(svc.resumeSession('kr-src')).rejects.toMatchObject({
+      name: 'SessionAlreadyOwnedError'
+    })
+    await owner.kill()
+    await waitFor(async () => (await holderPids('kr-src')).length === 0)
+    const before = await rows('kr-src')
+    const { handle, analysis } = await svc.resumeSession('kr-src')
+    expect((await handle.read(0)).events).toHaveLength(11)
+    expect(analysis.inheritableThrough).toBe(8)
+    expect(analysis.openTurn).toMatchObject({
+      correlationId: 'tc',
+      uncertainEffects: ['op-tc']
+    })
+    expect(await rows('kr-src')).toEqual(before)
+    // The interrupted turn does not cross a fork either.
+    const child = await svc.fork('kr-src', {
+      version: 1,
+      id: 'kr-child',
+      createdAt: 1_700_000_000_000,
+      isSeeded: false
+    })
+    expect(child.inheritedEventCount).toBe(8)
+    expect(await verifySessionFork(svc, 'kr-child', 'kr-src')).toEqual([])
+    await child.close()
+    await handle.close()
+  })
 })
