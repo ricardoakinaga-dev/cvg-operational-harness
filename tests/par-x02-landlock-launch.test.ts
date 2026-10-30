@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process'
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -219,8 +220,9 @@ describe('PAR-X02 slice 3: profile and launch preparation', () => {
     )
     for (const file of reviewedNodeRuntimeFiles())
       expect(byPath.get(file.destination ?? file.source)).toBe('5')
-    expect(byPath.get(workspace)).toBe('7fff')
-    expect(byPath.get('/tmp')).toBe('7fff')
+    // Everything but execute: execution stays on the profile's reviewed files (§5.5).
+    expect(byPath.get(workspace)).toBe('7ffe')
+    expect(byPath.get('/tmp')).toBe('7ffe')
     expect(byPath.get('/dev/null')).toBe('4006')
     expect(byPath.has('/')).toBe(false)
     expect(byPath.has(dirname(workspace))).toBe(false)
@@ -295,7 +297,38 @@ describe.skipIf(!native)(
     }, 60_000)
 
     it.skipIf(!cc)(
-      'XL04: a helper that cannot prove the ruleset never runs the payload: spawn_failed',
+      'a binary copied into the workspace or the launch tmp never executes under the helper (review F01)',
+      async () => {
+        // The static helper is a small ELF outside the profile's executable paths. The host puts
+        // a copy in the workspace (the only host path the sandbox sees); the payload copies it on
+        // to the launch tmp and tries both.
+        const copied = join(workspace, 'x02-copied-elf')
+        const js =
+          `const fs=require('node:fs'),{spawnSync}=require('node:child_process');` +
+          `const run=(p)=>{const r=spawnSync(p,['x']);return r.error?r.error.code:'ran'};` +
+          `fs.copyFileSync(${JSON.stringify(copied)},'/tmp/elf');fs.chmodSync('/tmp/elf',0o755);` +
+          `process.stdout.write(run(${JSON.stringify(copied)})+','+run('/tmp/elf'))`
+        const place = () => {
+          copyFileSync(helper, copied)
+          chmodSync(copied, 0o755)
+        }
+        place()
+        const under = await (await landlocked.launch(request(js))).wait()
+        expect(under).toMatchObject({
+          cause: 'exit',
+          exitCode: 0,
+          stdout: 'EACCES,EACCES'
+        })
+        place()
+        const without = await (await plain.launch(request(js))).wait()
+        expect(without).toMatchObject({ cause: 'exit', stdout: 'ran,ran' })
+        rmSync(copied, { force: true })
+      },
+      60_000
+    )
+
+    it.skipIf(!cc)(
+      'XL04: the reviewed helper that cannot prove the ruleset never runs the payload: spawn_failed',
       async () => {
         const sentinel = join(workspace, 'x02-sentinel')
         const outcome = await (
@@ -326,7 +359,11 @@ describe.skipIf(!native)(
       expect(outcome.landlock).toEqual({ applied: false })
     })
 
-    it('a proof that does not handle the ruleset rights is refused at once: the payload never runs', async () => {
+    // Fake helpers (review F02): the service bounds an unproven launch by tearing it down at once
+    // or at the startup deadline. That is all it can promise; the payload here waits 1.5 s, and a
+    // fake that executes the payload immediately could act before teardown. Only the reviewed
+    // helper, pinned by digest in a host-qualified profile, guarantees that nothing ran.
+    it('a proof that does not handle the ruleset rights is refused at once, before the delayed payload', async () => {
       const sentinel = join(workspace, 'x02-weak')
       const outcome = await (
         await landlocked.launch(
@@ -343,7 +380,7 @@ describe.skipIf(!native)(
     }, 60_000)
 
     for (const mode of ['closed', 'silent'] as const)
-      it(`a helper that ${mode === 'closed' ? 'closes its channel without' : 'never writes'} a proof does not run past the startup deadline`, async () => {
+      it(`a helper that ${mode === 'closed' ? 'closes its channel without' : 'never writes'} a proof is torn down by the startup deadline, before the delayed payload`, async () => {
         const sentinel = join(workspace, `x02-${mode}`)
         const outcome = await (
           await landlocked.launch({

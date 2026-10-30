@@ -15,16 +15,18 @@ mutant() { # id file perl-expr
 }
 mutant M1-status-ignored $SVC 's/if \(!report\.applied\) \{/if (false) {/'
 mutant M2-landlock-not-requested $SVC 's/\.\.\.\(options\.requireLandlock === true \? \{ landlock: true \} : \{\}\)/...({})/'
-mutant M3-workspace-rule-is-root $PRO 's/\[LL_ALL_ABI3, record\.workspaceRoot\]/[LL_ALL_ABI3, "\/"]/'
+mutant M3-workspace-rule-is-root $PRO 's/\[writableTree, record\.workspaceRoot\]/[writableTree, "\/"]/'
 mutant M4-payload-not-wrapped $PRO 's/if \(landlock\)\n(\s+)args\.push\(\n(\s+)LANDLOCK_HELPER_DESTINATION,/if (false)\n$1args.push(\n$2LANDLOCK_HELPER_DESTINATION,/'
 mutant M5-floor-ignored $STA 's/if \(abi < LANDLOCK_MIN_ABI\)/if (false)/'
 mutant M6-extra-keys-accepted $STA 's/Object\.keys\(record\)\.length !== 5 \|\|//'
 mutant M7-helper-not-required $PRO "s/if \(request\.landlock === true && !helper\) fail\('landlock_helper_required'\)//"
 mutant M8-rules-not-written $SVC 's/rules\?\.end\(prepared\.landlock\.rules\)/rules?.end()/'
-mutant M9-tmp-not-allowed $PRO "s/\[LL_ALL_ABI3, '\/tmp'\],//"
+mutant M9-tmp-not-allowed $PRO "s/\[writableTree, '\/tmp'\],//"
 mutant M10-oversize-ignored $STA 's/if \(this\.#bytes > LANDLOCK_STATUS_MAX_BYTES\) \{/if (false) {/'
 # Review P2 fixes (07): proof strength and early judgement.
 mutant M11-rights-not-checked $STA 's/if \(\(handledFs & LANDLOCK_RULESET_RIGHTS\) !== LANDLOCK_RULESET_RIGHTS\)/if (false)/'
 mutant M12-no-eof-judgement $SVC "s/landlockPipe\?\.on\('end', \(\) => judgeProof\(true\)\)//"
 mutant M13-judged-only-at-exit $SVC 's/landlock\.feed\(chunk\)\n(\s+)judgeProof\(false\)/landlock.feed(chunk)/'
 mutant M14-start-without-proof $SVC 's/if \(initPid !== undefined && landlockProven\) clearTimeout/if (initPid !== undefined) clearTimeout/'
+# Codex review R1 (F01): execution stays on the profile's reviewed files.
+mutant M15-workspace-executes $PRO 's/const writableTree = LL_ALL_ABI3 & ~LL_EXECUTE/const writableTree = LL_ALL_ABI3/'

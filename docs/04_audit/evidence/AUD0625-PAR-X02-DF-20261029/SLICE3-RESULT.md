@@ -69,7 +69,7 @@ O build do helper na CI. A imagem de produção segue sem bubblewrap e sem helpe
 A 07 rodou sondas com helpers falsos (`AUD0625-REVIEW-PAR-X02-F3F4-07-20261030`) e achou dois P2:
 
 1. **A prova era fraca.** Um helper que escrevesse `handledFs: 1` era aceito como aplicado. Agora a prova precisa tratar todos os direitos que o ruleset concede (`LANDLOCK_RULESET_RIGHTS`, os bits 0–14 do ABI 3). Se faltar algum, o resultado é `rights_not_handled`.
-2. **"Sem prova, nada rodou" só valia para o helper revisado, e só no `close`.** Agora a prova é julgada assim que o documento termina (`\n`) ou o canal fecha. Prova inválida ou ausente derruba o lançamento na hora (`spawn_failed`). O prazo de partida (`startupMs`) só para de correr quando o bwrap anunciou o filho **e** a prova chegou, então um helper calado termina em `startup_timeout`. Em nenhum dos casos o payload chega a rodar. A frase do código foi reescrita: o helper revisado nunca executa o payload sem prova, e o serviço não deixa um lançamento sem prova seguir.
+2. **"Sem prova, nada rodou" só valia para o helper revisado, e só no `close`.** Agora a prova é julgada assim que o documento termina (`\n`) ou o canal fecha. Prova inválida ou ausente derruba o lançamento na hora (`spawn_failed`). O prazo de partida (`startupMs`) só para de correr quando o bwrap anunciou o filho **e** a prova chegou, então um helper calado termina em `startup_timeout`. Nos testes, o payload atrasado em 1,5 s não chega a rodar. Isso prova o teardown antes desse atraso, não a ausência de efeito (ver R2/F02).
 
 Testes novos, todos com o payload atrasado em 1,5 s depois do comportamento do falso:
 
@@ -87,3 +87,16 @@ Limites aceitos (P3 da 07, sem mudança nesta fatia; vão para o PAR-X03):
 - o ruleset não concede `/dev/shm`, `readdir('/')` nem `readdir('/dev')`, então payloads com memória compartilhada POSIX falham;
 - `IOCTL_DEV` é tratado no ABI ≥ 5 e nunca concedido;
 - o `-Werror` da CI pode quebrar com um warning novo do gcc do runner. A falha seria visível e cairia no mesmo passo.
+
+## Correções da revisão da Codex (R2)
+
+Revisão da Codex: `AUD0625-REVIEW-X02-R1-CODEX-20261030`, c3d9856df. Veredito CHANGES_REQUESTED, com dois P2.
+
+1. **F01, execução fora do perfil.** O ruleset concedia `EXECUTE` no workspace e no `/tmp`, então um ELF copiado para lá executava sob o Landlock. Isso contraria o §5.5, que diz "execução só nos caminhos de binário do perfil". O workspace e o `/tmp` agora recebem todos os direitos do ABI 3, **menos** `EXECUTE` (`0x7ffe`). Um teste novo põe um ELF estático no workspace pelo host, e o payload o copia para o `/tmp`: sob o helper os dois dão `EACCES`, sem ele os dois rodam.
+2. **F02, escopo da garantia.** "Sem prova, nada rodou" vale **só para o helper revisado**, fixado pelo digest num perfil que o anfitrião qualificou. Capturar e fixar o helper no perfil não é atestação. Para qualquer outro helper, o serviço só **limita** um lançamento sem prova: derruba na hora, ou no prazo de partida. Ele não prova ausência de efeito. Um helper falso que executa o payload imediatamente pode agir antes do teardown, e a Codex demonstrou isso com 3 helpers C estáticos. O `spawn_failed` significa "sem prova", não "sem efeito". O comentário do serviço, os nomes dos testes com helper falso e a seção R1 acima foram corrigidos nesse sentido. O XL04 (helper revisado, piso inalcançável) continua provando que o payload não roda.
+
+Mutantes (`mutations-s3-r2.log`):
+- o M15 (workspace volta a executar) morreu;
+- os padrões do M3 e do M9 foram atualizados para o texto novo e os dois morreram (o M9 foi rodado de novo sozinho depois da troca do padrão);
+- o M1 segue equivalente, como declarado na R1;
+- total: 14 mortos e 1 equivalente.

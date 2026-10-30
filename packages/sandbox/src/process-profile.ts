@@ -350,18 +350,21 @@ export interface PreparedProcessLaunch {
 
 /**
  * SPEC 0288 §5.5: a closed list derived from the reviewed profile, never from the payload.
- * Read and execute on each mounted runtime file, everything on the workspace and the launch
- * tmp, and the device and proc nodes a payload reads. Anything else is denied.
+ * Read and execute on each mounted runtime file; everything except execute on the workspace
+ * and the launch tmp, so a binary written or copied there never runs (execution stays on the
+ * profile's reviewed files); and the device and proc nodes a payload reads. Anything else is
+ * denied.
  */
 export function landlockRulesFor(profile: ProcessContainmentProfile): string {
   const record = recordOf(profile)
+  const writableTree = LL_ALL_ABI3 & ~LL_EXECUTE
   const rules: Array<[number, string]> = [
     ...record.files.map((f): [number, string] => [
       LL_READ_FILE | LL_EXECUTE,
       f.destination
     ]),
-    [LL_ALL_ABI3, record.workspaceRoot],
-    [LL_ALL_ABI3, '/tmp'],
+    [writableTree, record.workspaceRoot],
+    [writableTree, '/tmp'],
     [LL_READ_FILE | LL_WRITE_FILE | LL_TRUNCATE, '/dev/null'],
     [LL_READ_FILE, '/dev/zero'],
     [LL_READ_FILE, '/dev/urandom'],

@@ -592,7 +592,8 @@ function supervise(s: Supervision): Supervised {
     if (initPid !== undefined && landlockProven) clearTimeout(startupTimer)
   }
   // Judged as soon as the one document is complete or the channel ends, not at exit: an
-  // unproven launch is torn down before it can run to completion (fail closed).
+  // unproven launch is torn down at once (fail closed). Teardown bounds an unproven launch;
+  // it does not prove that nothing ran before it (only the reviewed helper does).
   const judgeProof = (ended: boolean): void => {
     if (!landlock || landlockProven || cause !== undefined) return
     if (!ended && !landlock.settled()) return
@@ -655,8 +656,10 @@ function supervise(s: Supervision): Supervised {
         trigger('spawn_failed')
       } else if (landlock) {
         const report = landlock.report()
-        // The reviewed helper never executes the payload without a proof (XL04); a launch that
-        // reached exit unproven is classified as a failed start, never as the payload's exit.
+        // A launch that reached exit unproven is a failed start, never the payload's exit. Only
+        // the reviewed helper, pinned by digest in a host-qualified profile, guarantees the
+        // payload did not run (XL04); for any other helper this means "unproven", not "no
+        // effects".
         if (!report.applied) {
           secondary.push(`landlock_${report.error ?? 'unproven'}`)
           trigger('spawn_failed')
