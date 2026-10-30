@@ -89,6 +89,7 @@ describe('PAR-S02 phase 1: controls on the starting point', () => {
     for (const name of [
       'projectSession',
       'foldSessionProjection',
+      'currentStops',
       'emptySessionProjection'
     ])
       expect(api[name]).toBeUndefined()
@@ -140,19 +141,18 @@ describe('PAR-S02 phase 1: RED witnesses of the pure projection (SPEC 0292 §3)'
     () => {
       const events = fixture()
       const state = api.projectSession(events)
-      const kinds = state.stops.map((s: any) => s.kind).sort()
+      const stops = api.currentStops(state)
+      const kinds = stops.map((s: any) => s.kind).sort()
       expect(kinds).toEqual([
         'approval_required',
         'open_turn',
         'uncertain_effect'
       ])
-      for (const item of state.stops) {
+      for (const item of stops) {
         const origin = events[item.source.sequence - 1]!
         expect(origin.eventId).toBe(item.source.eventId)
       }
-      const uncertain = state.stops.find(
-        (s: any) => s.kind === 'uncertain_effect'
-      )
+      const uncertain = stops.find((s: any) => s.kind === 'uncertain_effect')
       expect(uncertain.operationKey).toBe('k3')
       expect(events[uncertain.source.sequence - 1]!.type).toBe('tool/call')
     }
