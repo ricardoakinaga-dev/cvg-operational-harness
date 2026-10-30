@@ -1,12 +1,17 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import type { SessionEvent, SessionEventAppend } from '@cvg/harness-contracts'
+import type {
+  SessionEvent,
+  SessionEventAppend,
+  SessionHeaderV1
+} from '@cvg/harness-contracts'
 import {
   SESSION_FORK_MAX_DEPTH,
   SessionForkRefusedError,
   SessionPersistenceCorruptionError,
   analyzeSessionLog,
+  checkSessionFork,
   materializeSessionEvent,
   planSessionFork,
   sessionEventInputDigest,
@@ -225,5 +230,190 @@ describe('PAR-S04 slice 1: planSessionFork edges', () => {
     const plan = planSessionFork(log, { targetSessionId: 'x' })
     expect(log.every((e) => e.sessionId === SOURCE)).toBe(true)
     expect(plan.inherited[0]).not.toBe(log[0])
+  })
+})
+
+describe('PAR-S04 slice 2: checkSessionFork', () => {
+  const header = (id: string, extra: Record<string, unknown> = {}) =>
+    ({
+      version: 1,
+      id,
+      createdAt: 1,
+      isSeeded: false,
+      ...extra
+    }) as unknown as SessionHeaderV1
+  const setup = () => {
+    n = 0
+    const events = [
+      ev('message/user', 'a', { text: 'hi' }),
+      ...done('a'),
+      ev('message/assistant', 'a', { text: 'yo' }),
+      ev('turn/start', 'b', { correlationId: 'b' })
+    ]
+    const plan = planSessionFork(events, { targetSessionId: 'child' })
+    const lineage = { ...plan.lineage }
+    const source = { header: header(SOURCE), events }
+    const child = {
+      header: header('child', {
+        isSeeded: true,
+        parentSession: SOURCE,
+        lineage
+      }),
+      inheritedEventCount: plan.cutSequence,
+      events: [...plan.inherited]
+    }
+    return { source, child, plan }
+  }
+  const withLineage = (
+    child: ReturnType<typeof setup>['child'],
+    patch: object
+  ) => ({
+    ...child,
+    header: header('child', {
+      isSeeded: true,
+      parentSession: SOURCE,
+      lineage: { ...(child.header.lineage as object), ...patch }
+    })
+  })
+
+  it('accepts exactly what the planner produced', () => {
+    const { source, child } = setup()
+    expect(checkSessionFork(source, child)).toEqual([])
+  })
+  it('names each way a child can be wrong', () => {
+    const { source, child } = setup()
+    const text = (c: Parameters<typeof checkSessionFork>[1]) =>
+      checkSessionFork(source, c).join('|')
+    expect(
+      text({
+        ...child,
+        header: header('child', { ...child.header, isSeeded: false })
+      })
+    ).toMatch(/not seeded/)
+    expect(
+      text({
+        ...child,
+        header: header('child', {
+          isSeeded: true,
+          lineage: child.header.lineage
+        })
+      })
+    ).toMatch(/parentSession/)
+    for (const bad of [
+      null,
+      [],
+      'x',
+      { source: SOURCE },
+      { ...(child.header.lineage as object), depth: 1.5 }
+    ])
+      expect(
+        text({
+          ...child,
+          header: header('child', {
+            isSeeded: true,
+            parentSession: SOURCE,
+            lineage: bad
+          })
+        })
+      ).toMatch(/no well-formed lineage/)
+    expect(text({ ...child, inheritedEventCount: 0 })).toMatch(/cut is empty/)
+    expect(text({ ...child, inheritedEventCount: 99 })).toMatch(
+      /exceeds its body/
+    )
+    expect(
+      checkSessionFork(
+        { ...source, events: source.events.slice(0, 2) },
+        child
+      ).join()
+    ).toMatch(/exceeds the source/)
+    expect(text(withLineage(child, { source: 'other' }))).toMatch(
+      /lineage source/
+    )
+    expect(text(withLineage(child, { cutSequence: 3 }))).toMatch(/lineage cut/)
+    expect(text(withLineage(child, { depth: 2 }))).toMatch(
+      /lineage depth differs/
+    )
+    expect(text(withLineage(child, { root: 'other' }))).toMatch(/lineage root/)
+    expect(text(withLineage(child, { sourceDigest: 'f'.repeat(64) }))).toMatch(
+      /digest differs/
+    )
+  })
+  it('checks depth against the source lineage and the limit', () => {
+    const { source, child } = setup()
+    const deep = {
+      ...source,
+      header: header(SOURCE, {
+        lineage: {
+          source: 'r',
+          cutSequence: 1,
+          sourceDigest: 'd',
+          depth: SESSION_FORK_MAX_DEPTH,
+          root: 'r'
+        }
+      })
+    }
+    expect(
+      checkSessionFork(
+        deep,
+        withLineage(child, { depth: SESSION_FORK_MAX_DEPTH + 1, root: 'r' })
+      ).join()
+    ).toMatch(/exceeds the limit/)
+    const mid = {
+      ...source,
+      header: header(SOURCE, {
+        lineage: {
+          source: 'r',
+          cutSequence: 1,
+          sourceDigest: 'd',
+          depth: 2,
+          root: 'r'
+        }
+      })
+    }
+    expect(
+      checkSessionFork(mid, withLineage(child, { depth: 3, root: 'r' })).join()
+    ).not.toMatch(/depth|root/)
+  })
+  it('finds a changed event, a swapped session id and a prefix that is not inheritable', () => {
+    const { source, child } = setup()
+    const changed = [...child.events]
+    changed[0] = { ...changed[0]!, payload: { text: 'other' } } as never
+    expect(
+      checkSessionFork(source, { ...child, events: changed }).join()
+    ).toMatch(/inherited event 1 differs/)
+    const unswapped = [...child.events]
+    unswapped[1] = { ...unswapped[1]!, sessionId: SOURCE } as never
+    expect(
+      checkSessionFork(source, { ...child, events: unswapped }).join()
+    ).toMatch(/inherited event 2 differs/)
+    // A source whose prefix ends inside an open turn is not a completed-turn prefix.
+    const open = { header: header(SOURCE), events: source.events.slice(0, 2) }
+    const cut2 = {
+      ...child,
+      inheritedEventCount: 2,
+      header: header('child', {
+        isSeeded: true,
+        parentSession: SOURCE,
+        lineage: {
+          ...(child.header.lineage as object),
+          cutSequence: 2,
+          sourceDigest: 'x'
+        }
+      }),
+      events: child.events.slice(0, 2)
+    }
+    expect(checkSessionFork(open, cut2).join()).toMatch(
+      /not made of completed certain turns/
+    )
+    const gap = {
+      header: header(SOURCE),
+      events: [source.events[0]!, source.events[2]!]
+    }
+    expect(
+      checkSessionFork(gap, {
+        ...cut2,
+        events: [child.events[0]!, child.events[2]!]
+      }).join()
+    ).toMatch(/not analyzable/)
   })
 })

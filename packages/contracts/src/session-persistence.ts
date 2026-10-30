@@ -42,6 +42,10 @@ export interface SessionHandle extends AsyncDisposable {
   flush(options?: SessionPersistenceOptions): Promise<void>
   close(): Promise<void>
 }
+export interface SessionPersistenceForkOptions extends SessionPersistenceOptions {
+  /** Stops at the end of this completed turn; default is the whole inheritable prefix. */
+  readonly through?: { readonly correlationId: string }
+}
 /** First slice: stat/list, aggregate flush, owner shutdown and recovery tickets are deferred. */
 export interface SessionPersistence {
   readonly identity: symbol
@@ -53,5 +57,14 @@ export interface SessionPersistence {
     id: string,
     access: SessionAccess,
     options?: SessionPersistenceOptions
+  ): Promise<SessionHandle>
+  /**
+   * SPEC 0287: atomic copy of the completed-turn prefix of `sourceId` into a new session with
+   * its own writer. The service writes `isSeeded`, `parentSession` and `lineage` itself.
+   */
+  fork(
+    sourceId: string,
+    header: SessionHeaderV1,
+    options?: SessionPersistenceForkOptions
   ): Promise<SessionHandle>
 }

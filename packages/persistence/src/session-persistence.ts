@@ -12,6 +12,7 @@ import type {
   SessionHandle,
   SessionHeaderV1,
   SessionPersistence,
+  SessionPersistenceForkOptions,
   SessionPersistenceOptions
 } from '@cvg/harness-contracts'
 import {
@@ -31,6 +32,9 @@ import {
   SessionStorageUnavailableError,
   SessionCommitUnknownError,
   SessionEventError,
+  SessionForkRefusedError,
+  checkSessionFork,
+  planSessionFork,
   materializeSessionEvent,
   sessionEventInputDigest,
   validateSessionEvent,
@@ -405,6 +409,203 @@ class PostgresSessionPersistence implements SessionPersistence {
         }
       )
     }
+  }
+
+  /** SPEC 0287 §4: one REPEATABLE READ transaction reads the source, plans and writes the child. */
+  async fork(
+    sourceId: string,
+    header: SessionHeaderV1,
+    forkOptions: SessionPersistenceForkOptions = {}
+  ): Promise<SessionHandle> {
+    if (
+      typeof sourceId !== 'string' ||
+      sourceId.length === 0 ||
+      sourceId.length > 200
+    )
+      throw new SessionHeaderValidationError('Invalid session id')
+    // Capture once, before the first await. The service owns lineage, seeding and parent.
+    const requested = validateSessionHeader(header, 0)
+    const asked = requested.header
+    if ('lineage' in asked)
+      throw new SessionHeaderValidationError(
+        'A fork header cannot carry lineage: only the service writes it'
+      )
+    // `isSeeded` is the service's to set: whatever the caller wrote is overwritten below.
+    if (asked.parentSession !== undefined && asked.parentSession !== sourceId)
+      throw new SessionHeaderValidationError(
+        'A fork header descends from its source only'
+      )
+    const targetId = asked.id
+    if (targetId === sourceId)
+      throw new SessionForkRefusedError('fork_target_is_source', sourceId)
+    const through = forkOptions.through
+      ? { correlationId: String(forkOptions.through.correlationId) }
+      : undefined
+    const signal = forkOptions.signal
+    if (signal?.aborted) throw abortError()
+    this.#reserveWriter()
+    let lease: PhysicalSessionLease | undefined
+    try {
+      lease = await this.#acquire(signal)
+      const schema = quote(this.options.schemaName)
+      const tenant = this.options.tenantId
+      await lease.query('BEGIN ISOLATION LEVEL REPEATABLE READ')
+      let key: number
+      let captured: SessionHeaderV1
+      let cut: number
+      try {
+        await lease.query("SET LOCAL statement_timeout = '5s'")
+        await lease.query("SET LOCAL lock_timeout = '5s'")
+        await lease.query('SET LOCAL synchronous_commit = on')
+        await lease.query("SELECT set_config('cvg.tenant_id', $1, true)", [
+          tenant
+        ])
+        const source = await this.#readSource(lease, sourceId)
+        const plan = planSessionFork(source.events, {
+          targetSessionId: targetId,
+          ...(through ? { through } : {}),
+          ...(source.lineage ? { sourceLineage: source.lineage } : {})
+        })
+        let bytes = 0
+        for (const e of plan.inherited)
+          bytes += Buffer.byteLength(canonicalizeJson(e), 'utf8')
+        if (bytes > SESSION_BATCH_MAX_BYTES)
+          throw new SessionForkRefusedError('fork_too_large', sourceId)
+        cut = plan.cutSequence
+        const validated = validateSessionHeader(
+          {
+            ...asked,
+            isSeeded: true,
+            parentSession: sourceId,
+            lineage: { ...plan.lineage }
+          },
+          cut
+        )
+        captured = validated.header
+        let inserted
+        try {
+          inserted = await lease.query<{ writer_lock_id: number }>(
+            `INSERT INTO ${schema}.session_streams (tenant_id,session_id,format_version,header_json,inherited_event_count)
+             VALUES ($1,$2,1,$3,$4) RETURNING writer_lock_id`,
+            [tenant, targetId, JSON.stringify(captured), cut]
+          )
+        } catch (error) {
+          if ((error as { code?: string }).code === '23505')
+            throw new SessionAlreadyExistsError(
+              'Session already exists',
+              targetId
+            )
+          throw error
+        }
+        key = Number(inserted.rows[0]?.writer_lock_id)
+        const got = await lease.query<{ ok: boolean }>(
+          'SELECT pg_try_advisory_lock($1,$2) AS ok',
+          [this.keyBase, key]
+        )
+        if (got.rows[0]?.ok !== true)
+          throw new SessionAlreadyOwnedError(
+            'Session is owned by another writer',
+            targetId
+          )
+        let next = 1
+        for (const event of plan.inherited) {
+          const { sequence: _s, schemaFingerprint: _f, ...input } = event
+          void _s
+          void _f
+          await lease.query(
+            `INSERT INTO ${schema}.session_events (tenant_id,session_id,sequence,event_id,format_version,event_type,schema_fingerprint,input_digest,record)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+            [
+              tenant,
+              targetId,
+              event.sequence,
+              event.eventId,
+              event.formatVersion,
+              event.type,
+              event.schemaFingerprint,
+              sessionEventInputDigest(input),
+              canonicalizeJson(event)
+            ]
+          )
+          next++
+          await lease.query(
+            `UPDATE ${schema}.session_streams SET next_sequence=$3 WHERE tenant_id=$1 AND session_id=$2`,
+            [tenant, targetId, next]
+          )
+        }
+        try {
+          await lease.query('COMMIT')
+        } catch (cause) {
+          throw new SessionCommitUnknownError(
+            'The session fork outcome is unknown',
+            targetId,
+            { cause }
+          )
+        }
+      } catch (error) {
+        if (!(error instanceof SessionCommitUnknownError))
+          await lease.query('ROLLBACK').catch(() => undefined)
+        throw error
+      }
+      return this.#writerHandle(lease, captured, cut, key)
+    } catch (error) {
+      if (lease) await lease.destroy()
+      this.#writers--
+      if (error instanceof SessionPersistenceError || isAbort(error))
+        throw error
+      if ((error as { code?: string }).code === '23505')
+        throw new SessionAlreadyExistsError('Session already exists', targetId)
+      throw new SessionStorageUnavailableError(
+        'Session could not be forked',
+        targetId,
+        { cause: error }
+      )
+    }
+  }
+
+  /** Whole validated source inside the caller's snapshot: header, lineage and every event. */
+  async #readSource(
+    runner: Runner,
+    sourceId: string
+  ): Promise<{
+    events: SessionEvent[]
+    lineage?: { depth: number; root: string }
+  }> {
+    const schema = quote(this.options.schemaName)
+    const tenant = this.options.tenantId
+    const stream = await runner.query<StreamRow>(
+      `SELECT writer_lock_id, header_json, inherited_event_count, next_sequence, format_version
+         FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+      [tenant, sourceId]
+    )
+    const row = stream.rows[0]
+    if (!row)
+      throw new SessionPersistenceNotFoundError('Session not found', sourceId)
+    const meta = parseStream(row, sourceId)
+    const events: SessionEvent[] = []
+    while (events.length < meta.head) {
+      const from = events.length + 1
+      const page = await runner.query<EventRow>(
+        `SELECT record, input_digest FROM ${schema}.session_events
+          WHERE tenant_id=$1 AND session_id=$2 AND sequence>=$3 AND sequence<$4 ORDER BY sequence ASC`,
+        [tenant, sourceId, from, Math.min(from + PAGE, meta.head + 1)]
+      )
+      if (page.rows.length !== Math.min(PAGE, meta.head + 1 - from))
+        throw new SessionPersistenceCorruptionError(
+          'Session prefix has a gap',
+          sourceId
+        )
+      for (const item of page.rows)
+        events.push(checkEvent(item, sourceId, tenant, events.length + 1))
+    }
+    const l = meta.header.lineage as
+      | { depth?: unknown; root?: unknown }
+      | undefined
+    const lineage =
+      l && Number.isSafeInteger(l.depth) && typeof l.root === 'string'
+        ? { depth: l.depth as number, root: l.root }
+        : undefined
+    return { events, ...(lineage ? { lineage } : {}) }
   }
 
   #reserveWriter(): void {
@@ -1262,4 +1463,29 @@ function checkEvent(
       sessionId
     )
   return event
+}
+
+/**
+ * Reads both sessions through read handles (no ownership taken) and recomposes the fork:
+ * the problems found, empty when the child is exactly the inheritable prefix of its source.
+ */
+export async function verifySessionFork(
+  service: SessionPersistence,
+  childId: string,
+  sourceId: string
+): Promise<readonly string[]> {
+  const side = async (id: string) => {
+    const handle = await service.open(id, 'read')
+    try {
+      return {
+        header: handle.header,
+        inheritedEventCount: handle.inheritedEventCount,
+        events: (await handle.read(0)).events
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+  const [source, child] = [await side(sourceId), await side(childId)]
+  return checkSessionFork(source, child)
 }

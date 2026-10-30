@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto'
-import type { SessionEvent, SessionEventAppend } from '@cvg/harness-contracts'
+import { canonicalizeJson } from '@cvg/harness-contracts'
+import type {
+  SessionEvent,
+  SessionEventAppend,
+  SessionHeaderV1
+} from '@cvg/harness-contracts'
 import { sessionEventInputDigest } from './events.ts'
 import {
   SessionPersistenceCorruptionError,
@@ -223,4 +228,75 @@ export function planSessionFork(
       root: options.sourceLineage?.root ?? sourceId!
     }
   }
+}
+
+export interface SessionForkCheckSide {
+  readonly header: SessionHeaderV1
+  readonly events: readonly SessionEvent[]
+}
+function lineageOf(header: SessionHeaderV1): SessionForkLineage | undefined {
+  const l = header.lineage as Record<string, unknown> | undefined
+  if (
+    l === null ||
+    typeof l !== 'object' ||
+    Array.isArray(l) ||
+    typeof l.source !== 'string' ||
+    typeof l.root !== 'string' ||
+    typeof l.sourceDigest !== 'string' ||
+    !Number.isSafeInteger(l.cutSequence) ||
+    !Number.isSafeInteger(l.depth)
+  )
+    return undefined
+  return l as unknown as SessionForkLineage
+}
+/**
+ * Recomposes a fork from both sides (SPEC 0287 I4): returns the problems, empty when the
+ * child is exactly the completed-turn prefix of the source with only the session id swapped.
+ */
+export function checkSessionFork(
+  source: SessionForkCheckSide,
+  child: SessionForkCheckSide & { readonly inheritedEventCount: number }
+): readonly string[] {
+  const problems: string[] = []
+  const lineage = lineageOf(child.header)
+  const cut = child.inheritedEventCount
+  if (!child.header.isSeeded) problems.push('child is not seeded')
+  if (child.header.parentSession !== source.header.id)
+    problems.push('child parentSession is not the source')
+  if (!lineage) problems.push('child has no well-formed lineage')
+  if (cut < 1) problems.push('child cut is empty')
+  if (cut > child.events.length) problems.push('child cut exceeds its body')
+  if (cut > source.events.length) problems.push('child cut exceeds the source')
+  if (lineage) {
+    if (lineage.source !== source.header.id)
+      problems.push('lineage source differs')
+    if (lineage.cutSequence !== cut) problems.push('lineage cut differs')
+    const parent = lineageOf(source.header)
+    if (lineage.depth !== (parent?.depth ?? 0) + 1)
+      problems.push('lineage depth differs')
+    if (lineage.depth > SESSION_FORK_MAX_DEPTH)
+      problems.push('lineage depth exceeds the limit')
+    if (lineage.root !== (parent?.root ?? source.header.id))
+      problems.push('lineage root differs')
+  }
+  const prefix = source.events.slice(0, cut)
+  if (prefix.length === cut && child.events.length >= cut) {
+    if (lineage && lineage.sourceDigest !== sessionForkSourceDigest(prefix))
+      problems.push('lineage digest differs from the source prefix')
+    for (let i = 0; i < cut; i++)
+      if (
+        canonicalizeJson({ ...prefix[i]!, sessionId: child.header.id }) !==
+        canonicalizeJson(child.events[i]!)
+      ) {
+        problems.push(`inherited event ${i + 1} differs from the source`)
+        break
+      }
+    try {
+      if (analyzeSessionLog(prefix).inheritableThrough !== cut)
+        problems.push('inherited prefix is not made of completed certain turns')
+    } catch {
+      problems.push('inherited prefix is not analyzable')
+    }
+  }
+  return problems
 }
