@@ -22,7 +22,7 @@ import type {
 import type { PostgresQueryable } from './postgres.ts'
 import { runPostgresMigrations } from './postgres-migrations.ts'
 
-const migration = '0028_session_events'
+const migrations = ['0028_session_events', '0034_session_writer_ownership']
 function schemaName(raw: string): string {
   if (!/^[a-z][a-z0-9_]{0,62}$/.test(raw))
     throw new SessionEventError(
@@ -38,7 +38,7 @@ export async function runSessionEventMigrations(
 ): Promise<void> {
   await runPostgresMigrations(client, {
     schemaName: schemaName(options.schemaName),
-    migrations: [migration]
+    migrations
   })
 }
 interface EventRow {
