@@ -1,12 +1,13 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import type { SandboxHandle } from '@cvg/harness-contracts'
-import {
-  prepareProcessLaunch,
-  type ProcessContainmentProfile,
-  type PreparedProcessLaunch
-} from './process-profile.ts'
+import type { ProcessContainmentProfile } from './process-profile.ts'
+import { createProcessService } from './process-service/service.ts'
+import type {
+  ProcessCleanup,
+  ProcessCause,
+  ProcessService
+} from './process-service/types.ts'
 
 export interface ContainedRunRequest {
   /** Pure argv array — never a shell string, never interpolated. */
@@ -17,7 +18,7 @@ export interface ContainedRunRequest {
   /** Defaults to `handle.deadlineMs`, then 30s. */
   readonly timeoutMs?: number
   readonly stdin?: string
-  /** Pre-abort refuses launch; in-flight tree supervision belongs to X01. */
+  /** Pre-abort refuses launch; an abort in flight stops the whole tree (SPEC 0286). */
   readonly signal?: AbortSignal
   /** Explicit reviewed host profile; absence refuses native PROCESS. */
   readonly processProfile?: ProcessContainmentProfile
@@ -28,13 +29,18 @@ export interface ContainedRunRequest {
 }
 
 export interface ContainedRunResult {
-  readonly exitCode: number | 'timeout' | 'spawn_failed'
+  readonly exitCode: number | 'timeout' | 'spawn_failed' | 'cancelled'
   readonly stdout: string
   readonly stderr: string
   readonly truncated: boolean
+  /** What the process service observed when the launch ended; absent for pre-launch refusals. */
+  readonly cleanup?: ProcessCleanup
+  readonly cause?: ProcessCause
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const STARTUP_MS = 30_000
+const CLEANUP_MS = 5_000
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024
 
 /**
@@ -83,120 +89,92 @@ export function runContained(
     }
   }
 
-  let launch: PreparedProcessLaunch
-  try {
-    launch = prepareProcessLaunch({
-      ...(request.processProfile ? { profile: request.processProfile } : {}),
-      handle,
-      argv: [program, ...rest],
-      ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
-      ...(request.bwrapPath !== undefined
-        ? { bwrapPath: request.bwrapPath }
-        : {})
-    })
-  } catch (error) {
-    return refused(
-      error instanceof Error ? error.message : 'process_profile_unavailable'
-    )
-  }
-  if (request.signal?.aborted) {
-    launch.close()
-    return refused('command_cancelled_before_launch')
-  }
-
   const timeoutMs = request.timeoutMs ?? handle.deadlineMs ?? DEFAULT_TIMEOUT_MS
+  const stdin =
+    request.stdin === undefined
+      ? undefined
+      : new TextEncoder().encode(request.stdin)
 
-  return new Promise<ContainedRunResult>((resolvePromise) => {
-    let settled = false
-    let timedOut = false
-    const stdoutChunks: Buffer[] = []
-    const stderrChunks: Buffer[] = []
-    let stdoutBytes = 0
-    let stderrBytes = 0
-    let truncated = false
-
-    let child: ChildProcessWithoutNullStreams
+  return (async (): Promise<ContainedRunResult> => {
+    let outcome
     try {
-      child = spawn(launch.executable, [...launch.args], {
-        stdio: ['pipe', 'pipe', 'pipe', ...launch.fds],
-        env: launch.env
-      }) as ChildProcessWithoutNullStreams
-    } catch {
-      resolvePromise({
+      const launched = await serviceFor(request.bwrapPath).launch({
+        consumer: 'shell',
+        // An absent or copied profile is refused by the launch preparation, with its own reason.
+        profile: request.processProfile as ProcessContainmentProfile,
+        handle,
+        argv: [program, ...rest],
+        ...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
+        mode: 'oneshot',
+        ...(stdin !== undefined ? { stdin } : {}),
+        limits: {
+          startupMs: STARTUP_MS,
+          lifetimeMs: timeoutMs,
+          cleanupMs: CLEANUP_MS,
+          graceMs: 0,
+          maxOutputBytes,
+          maxStdinBytes: stdin?.length ?? 0
+        },
+        // The legacy runner kept a noisy process alive and dropped the excess.
+        outputOverflow: 'drop',
+        ...(request.signal ? { signal: request.signal } : {})
+      })
+      outcome = await launched.wait()
+    } catch (error) {
+      return {
         exitCode: 'spawn_failed',
         stdout: '',
-        stderr: 'contained_process_launch_failed',
+        stderr:
+          error instanceof Error
+            ? error.message
+            : 'process_service_unavailable',
         truncated: false
-      })
-      return
-    } finally {
-      launch.close()
-    }
-
-    const timer = setTimeout(() => {
-      timedOut = true
-      child.kill('SIGKILL')
-    }, timeoutMs)
-
-    const drain = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
-      let bytes = stream === 'stdout' ? stdoutBytes : stderrBytes
-      if (bytes >= maxOutputBytes) {
-        truncated = true
-        return
       }
-      const room = maxOutputBytes - bytes
-      const taken = chunk.length > room ? chunk.subarray(0, room) : chunk
-      bytes += taken.length
-      if (stream === 'stdout') {
-        stdoutChunks.push(taken)
-        stdoutBytes = bytes
-      } else {
-        stderrChunks.push(taken)
-        stderrBytes = bytes
-      }
-      if (chunk.length > taken.length) truncated = true
     }
-
-    child.stdout.on('data', (chunk: Buffer) => drain('stdout', chunk))
-    child.stderr.on('data', (chunk: Buffer) => drain('stderr', chunk))
-
-    const finish = (exitCode: number | 'timeout' | 'spawn_failed'): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolvePromise({
-        exitCode,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        truncated
-      })
+    const detail = {
+      cleanup: outcome.cleanup,
+      cause: outcome.cause
     }
+    const text = {
+      stdout: outcome.stdout ?? '',
+      stderr: outcome.stderr ?? '',
+      truncated: outcome.truncated
+    }
+    switch (outcome.cause) {
+      case 'exit':
+        return {
+          exitCode: outcome.exitCode ?? 'spawn_failed',
+          ...text,
+          ...detail
+        }
+      case 'timeout':
+        return { exitCode: 'timeout', ...text, ...detail }
+      case 'cancelled':
+      case 'dispose':
+        return { exitCode: 'cancelled', ...text, ...detail }
+      default:
+        // spawn_failed, startup_timeout, signal, output_limit: containment or launcher
+        // faults, never a normal exit status. The reason is the launcher's, not the payload's.
+        return {
+          exitCode: 'spawn_failed',
+          ...text,
+          stderr: text.stderr || outcome.secondaryErrors.join('; '),
+          ...detail
+        }
+    }
+  })()
+}
 
-    child.on('error', () => {
-      // ENOENT (bwrap ausente) and any other spawn fault are containment
-      // failures, never a child exit status.
-      finish('spawn_failed')
+const services = new Map<string, ProcessService>()
+function serviceFor(bwrapPath: string | undefined): ProcessService {
+  const key = bwrapPath ?? ''
+  let service = services.get(key)
+  if (!service) {
+    service = createProcessService({
+      maxConcurrent: 64,
+      ...(bwrapPath !== undefined ? { bwrapPath } : {})
     })
-
-    child.on('close', (code: number | null) => {
-      if (timedOut) {
-        finish('timeout')
-        return
-      }
-      const stderrText = Buffer.concat(stderrChunks).toString('utf8')
-      // bwrap reports namespace/setup faults itself before the child runs;
-      // that is a containment failure, not the child's exit status.
-      if (stderrText.startsWith('bwrap:')) {
-        finish('spawn_failed')
-        return
-      }
-      finish(code ?? 'spawn_failed')
-    })
-
-    if (request.stdin !== undefined) {
-      child.stdin.end(request.stdin)
-    } else {
-      child.stdin.end()
-    }
-  })
+    services.set(key, service)
+  }
+  return service
 }
