@@ -8,7 +8,7 @@ import type {
   ModelUsage,
   StepContext
 } from '@cvg/harness-contracts'
-import { renderedObservationText } from '@cvg/harness-contracts'
+import { trustedRendering } from '@cvg/harness-contracts'
 import {
   EMPTY_MODEL_USAGE,
   sanitizeLoopDecision,
@@ -140,14 +140,15 @@ function buildDecisionPrompt(context: StepContext): string {
   // while the context engine kept it inside its budget; otherwise the (marked) summary
   const kept = new Set(context.contextItems.map((item) => item.contextId))
   const observations = context.observations
-    .map(
-      (observation) =>
-        `- [${observation.source}/${observation.type}] ${
-          kept.has(`tool.${observation.observationId}`)
-            ? renderedObservationText(observation)
-            : oneLine(observation.summary)
-        }`
-    )
+    .map((observation) => {
+      const rendering = kept.has(`tool.${observation.observationId}`)
+        ? trustedRendering(observation)
+        : undefined
+      // only the framed rendering keeps its own lines; every other text is one line
+      return `- [${observation.source}/${observation.type}] ${
+        rendering ? rendering.text : oneLine(observation.summary)
+      }`
+    })
     .join('\n')
   const repair = context.decisionRepair
     ? `\nPrevious attempt was rejected: ${oneLine(context.decisionRepair.errors.join('; '))}. Correct it.\n`

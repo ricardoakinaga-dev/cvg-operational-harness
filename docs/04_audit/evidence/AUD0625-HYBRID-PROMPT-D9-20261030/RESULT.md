@@ -23,9 +23,15 @@ Não houve mudança relevante de formato para o modelo: para texto de uma linha 
 - Teste hostil por tipo de observação (USER_MESSAGE, MODEL_PROPOSAL, VERIFICATION, SUFFICIENCY, SYSTEM_EVENT, KNOWLEDGE_RESULT, POLICY_DECISION, TOOL_RESULT) × 8 quebras de linha: o prompt tem exatamente N linhas `- [`, a de cada observação
   com a sua própria fonte/tipo, e cada rótulo de seção aparece uma única vez. O analisador do teste considera como quebra qualquer um dos 7 separadores, não só `\n`.
 - Resumo de resultado de ferramenta descartado pelo motor de contexto (cai no resumo marcado) e sem renderização; capacidade com id, versão e descrição hostis; objetivo, estado e reparo hostis; escape visível (não espaço).
-- Mutantes `mutations.json`: 15/15 mortos (cada ponto de aplicação, cada separador do regex, escape trocado por espaço e a moldura achatada). H7 sobreviveu até o analisador do teste passar a reconhecer CR como quebra.
+- Mutantes `mutations.json`: 17/17 mortos (cada ponto de aplicação, cada separador do regex, escape trocado por espaço e a moldura achatada). H7 sobreviveu até o analisador do teste passar a reconhecer CR como quebra.
 - Cobertura por arquivo de `hybrid-orchestrator.ts`: 100% (com os testes do harness, que cobrem o laço de decisão, como antes). Harness, contracts e orchestrator verdes; `packages` + `apps` verdes.
 - typecheck, eslint, prettier, `docs:check-links`, `skip:governance`.
+
+## P3 da revisão do DF (corrigido no mesmo branch)
+
+Um item TOOL mantido pelo motor **sem** renderização (observação de outro caminho ou anterior à C03), ou com renderização que não é de uma ferramenta, devolvia o `summary` cru e as quebras passavam. Agora só uma
+renderização confiável (`trustedRendering`, novo em harness-contracts: `TOOL_RESULT` vindo de `TOOL`) mantém as próprias linhas; qualquer outro texto passa por `oneLine`. Teste hostil novo e mutantes H16 (item mantido sem
+renderização servido cru) e H17 (renderização de observação não-ferramenta confiável) mortos; H15 reescrito para o novo código.
 
 ## Limites
 
