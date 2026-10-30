@@ -14,3 +14,8 @@ export * from './schemas/api.ts'
 export * from './schemas/application.ts'
 export * from './ssrf.ts'
 export * from './url.ts'
+export {
+  ESTIMATE_BYTES_PER_TOKEN,
+  ESTIMATE_FRAMING_TOKENS,
+  estimateInputTokens
+} from '@cvg/harness-contracts'

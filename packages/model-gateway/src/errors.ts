@@ -29,11 +29,20 @@ export class ModelGatewayError extends Error {
   readonly code: ModelGatewayErrorCode
   readonly retryable: boolean
   readonly status?: number
+  /**
+   * SPEC 0290 D4, additive: why an `invalid_request` was refused when a caller
+   * can act on it (the request does not fit the declared context window).
+   */
+  readonly reason?: 'context_window'
 
   constructor(
     code: ModelGatewayErrorCode,
     message: string,
-    options: { retryable?: boolean; status?: number } = {}
+    options: {
+      retryable?: boolean
+      status?: number
+      reason?: 'context_window'
+    } = {}
   ) {
     super(message)
     this.name = 'ModelGatewayError'
@@ -41,6 +50,9 @@ export class ModelGatewayError extends Error {
     this.retryable = options.retryable ?? false
     if (options.status !== undefined) {
       this.status = options.status
+    }
+    if (options.reason !== undefined) {
+      this.reason = options.reason
     }
   }
 }

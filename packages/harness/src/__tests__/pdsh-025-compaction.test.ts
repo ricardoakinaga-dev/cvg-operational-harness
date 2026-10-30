@@ -125,9 +125,11 @@ function buildRuntime(
 
 describe('PDSH-025 deterministic context compaction (SPEC 0206)', () => {
   it('estimates deterministically and skips compaction below the cap', () => {
+    // SPEC 0290 D5: ceil(12 bytes / 4) + 4 tokens of framing per message
     expect(
       estimateContextTokens([{ content: '12345678' }, { content: '1234' }])
-    ).toBe(3)
+    ).toBe(11)
+    expect(estimateContextTokens([{ content: 'ação' }])).toBe(6)
     const input = messages()
     const frozen = canonicalizeJson(input)
     const result = compactConversation(input, { maxInputTokens: 10_000 })

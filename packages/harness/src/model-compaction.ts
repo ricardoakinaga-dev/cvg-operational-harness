@@ -9,7 +9,13 @@ import {
   type CompactableMessage,
   type ContextCompactionResult
 } from './compaction.ts'
-import type { KernelPlugin, TurnState } from './kernel/types.ts'
+import type {
+  KernelGate,
+  KernelPlugin,
+  ModelCallState,
+  Next,
+  TurnState
+} from './kernel/types.ts'
 import { stop } from './kernel/types.ts'
 
 /**
@@ -123,156 +129,171 @@ export function createModelCompactionControl(
     requires: ['model'],
     apply(ctx) {
       const model = ctx.get('model')
-      ctx.on('model/before-call', async (call, next) => {
-        const messages: CompactableMessage[] = call.request.messages.map(
-          (message, index) => ({
-            sequence: index + 1,
-            role: message.role,
-            content: message.content
-          })
-        )
-        const inputTokens = estimateContextTokens(messages)
-        if (inputTokens <= options.maxInputTokens) return next()
-
-        const governed = messages.filter((m) => m.role === 'system')
-        const history = messages.filter((m) => m.role !== 'system')
-        const keep = Math.max(
-          1,
-          Math.min(options.keepRecentMessages ?? 1, history.length - 1)
-        )
-        const prefix = history.slice(0, history.length - keep)
-        const kept = history.slice(history.length - keep)
-        const refuse = () => stop('INSUFFICIENT_EVIDENCE', REFUSAL)
-        if (prefix.length === 0) return refuse()
-
-        let pins: readonly PinnedItem[]
-        try {
-          pins = await options.pinned(call.turn)
-        } catch {
-          return refuse()
-        }
-        if (!validPins(pins)) return refuse()
-        if (call.turn.signal.aborted) return next()
-
-        const budgetCap =
-          call.request.budget.maxCostUsd * MODEL_COMPACTION_COST_SHARE
-        const cap = Math.min(budgetCap, options.maxCostUsd ?? Infinity)
-        const request = excerpt(prefix)
-        if (
-          !(cap > 0) ||
-          estimateContextTokens(request) >
-            (options.maxCompactionInputTokens ?? Infinity)
-        )
-          return refuse()
-
-        let spent = 0
-        let summary: string | null = null
-        let written: ModelResult | null = null
-        const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
-        for (
-          let attempt = 0;
-          attempt < MODEL_COMPACTION_ATTEMPTS && summary === null;
-          attempt += 1
-        ) {
-          const gate = call.turn.budget.beginModelRequest()
-          if (gate) return gate
-          let result: ModelResult
-          try {
-            result = await model.complete({
-              messages: request,
-              context: call.request.context,
-              budget: call.request.budget,
-              correlationId: call.request.correlationId,
-              purpose: 'COMPACTION',
-              signal: call.turn.signal
+      // `force`: the model port already said the request does not fit
+      // (`model/overflow`), so the trigger is not consulted (SPEC 0290 §3.4).
+      const handler =
+        (force: boolean) =>
+        async (
+          call: ModelCallState,
+          next: Next<KernelGate>
+        ): Promise<KernelGate> => {
+          const messages: CompactableMessage[] = call.request.messages.map(
+            (message, index) => ({
+              sequence: index + 1,
+              role: message.role,
+              content: message.content
             })
-          } catch (error) {
-            if (call.turn.signal.aborted) return next()
-            // only a failure the port itself calls retryable earns the second
-            // request: an uncertain settlement (C02 `internal_error`), a policy
-            // or budget refusal or a window refusal would be repeated or paid
-            // for twice
-            if ((error as { retryable?: unknown } | null)?.retryable !== true) {
-              return refuse()
-            }
-            continue
-          }
-          if (call.turn.signal.aborted) return next()
-          const accounted = call.turn.budget.recordModelResult({
-            inputTokens: result.inputTokens,
-            outputTokens: result.outputTokens,
-            costUsd: result.costUsd
-          })
-          if (accounted) return accounted
-          spent += result.costUsd
-          usage.inputTokens += result.inputTokens
-          usage.outputTokens += result.outputTokens
-          usage.costUsd = spent
-          if (!Number.isFinite(spent) || spent > cap) return refuse()
-          const text = typeof result.text === 'string' ? result.text.trim() : ''
-          if (text.length > 0 && text.length <= COMPACTION_SUMMARY_MAX_CHARS) {
-            summary = text
-            written = result
-          }
-        }
-        if (summary === null || written === null) return refuse()
+          )
+          const inputTokens = estimateContextTokens(messages)
+          if (!force && inputTokens <= options.maxInputTokens) return next()
 
-        const last = prefix[prefix.length - 1] as CompactableMessage
-        const view: CompactableMessage[] = [
-          ...governed,
-          ...(pins.length > 0
-            ? [
-                {
-                  sequence: last.sequence,
-                  role: 'user' as const,
-                  content: renderPinned(pins)
-                }
-              ]
-            : []),
-          {
-            sequence: last.sequence,
-            role: 'user',
-            content: `[contexto compactado] ${COMPACTION_SUMMARY_FRAME} ${summary}`
-          },
-          ...kept
-        ]
-        const viewTokens = estimateContextTokens(view)
-        if (viewTokens > options.maxInputTokens) return refuse()
-        // No await separates the last cancellation check (right after the
-        // compaction result) from the record below, so a cancelled turn has
-        // already left through `next()` and records nothing (SPEC 0290 §3.5).
+          const governed = messages.filter((m) => m.role === 'system')
+          const history = messages.filter((m) => m.role !== 'system')
+          const keep = Math.max(
+            1,
+            Math.min(options.keepRecentMessages ?? 1, history.length - 1)
+          )
+          const prefix = history.slice(0, history.length - keep)
+          const kept = history.slice(history.length - keep)
+          const refuse = () => stop('INSUFFICIENT_EVIDENCE', REFUSAL)
+          if (prefix.length === 0) return refuse()
 
-        if (options.onCompacted) {
+          let pins: readonly PinnedItem[]
           try {
-            await options.onCompacted({
-              compacted: true,
-              strategyVersion: MODEL_COMPACTION_STRATEGY_VERSION,
-              inputTokens,
-              keptMessages: governed.length + kept.length,
-              droppedMessages: prefix.length,
-              throughSequence: last.sequence,
-              sourceDigest: digestMessages(prefix),
-              summary,
-              viewTokens,
-              pinnedDigest: createHash('sha256')
-                .update(canonicalizeJson(pins))
-                .digest('hex'),
-              model: written.model,
-              usage,
-              fits: true,
-              messages: view
-            })
+            pins = await options.pinned(call.turn)
           } catch {
-            return stop(
-              'INSUFFICIENT_EVIDENCE',
-              'Context compaction could not be recorded; the model call was not started.'
-            )
+            return refuse()
           }
+          if (!validPins(pins)) return refuse()
+          if (call.turn.signal.aborted) return next()
+
+          const budgetCap =
+            call.request.budget.maxCostUsd * MODEL_COMPACTION_COST_SHARE
+          const cap = Math.min(budgetCap, options.maxCostUsd ?? Infinity)
+          const request = excerpt(prefix)
+          if (
+            !(cap > 0) ||
+            estimateContextTokens(request) >
+              (options.maxCompactionInputTokens ?? Infinity)
+          )
+            return refuse()
+
+          let spent = 0
+          let summary: string | null = null
+          let written: ModelResult | null = null
+          const usage = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+          for (
+            let attempt = 0;
+            attempt < MODEL_COMPACTION_ATTEMPTS && summary === null;
+            attempt += 1
+          ) {
+            const gate = call.turn.budget.beginModelRequest()
+            if (gate) return gate
+            let result: ModelResult
+            try {
+              result = await model.complete({
+                messages: request,
+                context: call.request.context,
+                budget: call.request.budget,
+                correlationId: call.request.correlationId,
+                purpose: 'COMPACTION',
+                signal: call.turn.signal
+              })
+            } catch (error) {
+              if (call.turn.signal.aborted) return next()
+              // only a failure the port itself calls retryable earns the second
+              // request: an uncertain settlement (C02 `internal_error`), a policy
+              // or budget refusal or a window refusal would be repeated or paid
+              // for twice
+              if (
+                (error as { retryable?: unknown } | null)?.retryable !== true
+              ) {
+                return refuse()
+              }
+              continue
+            }
+            if (call.turn.signal.aborted) return next()
+            const accounted = call.turn.budget.recordModelResult({
+              inputTokens: result.inputTokens,
+              outputTokens: result.outputTokens,
+              costUsd: result.costUsd
+            })
+            if (accounted) return accounted
+            spent += result.costUsd
+            usage.inputTokens += result.inputTokens
+            usage.outputTokens += result.outputTokens
+            usage.costUsd = spent
+            if (!Number.isFinite(spent) || spent > cap) return refuse()
+            const text =
+              typeof result.text === 'string' ? result.text.trim() : ''
+            if (
+              text.length > 0 &&
+              text.length <= COMPACTION_SUMMARY_MAX_CHARS
+            ) {
+              summary = text
+              written = result
+            }
+          }
+          if (summary === null || written === null) return refuse()
+
+          const last = prefix[prefix.length - 1] as CompactableMessage
+          const view: CompactableMessage[] = [
+            ...governed,
+            ...(pins.length > 0
+              ? [
+                  {
+                    sequence: last.sequence,
+                    role: 'user' as const,
+                    content: renderPinned(pins)
+                  }
+                ]
+              : []),
+            {
+              sequence: last.sequence,
+              role: 'user',
+              content: `[contexto compactado] ${COMPACTION_SUMMARY_FRAME} ${summary}`
+            },
+            ...kept
+          ]
+          const viewTokens = estimateContextTokens(view)
+          if (viewTokens > options.maxInputTokens) return refuse()
+          // No await separates the last cancellation check (right after the
+          // compaction result) from the record below, so a cancelled turn has
+          // already left through `next()` and records nothing (SPEC 0290 §3.5).
+
+          if (options.onCompacted) {
+            try {
+              await options.onCompacted({
+                compacted: true,
+                strategyVersion: MODEL_COMPACTION_STRATEGY_VERSION,
+                inputTokens,
+                keptMessages: governed.length + kept.length,
+                droppedMessages: prefix.length,
+                throughSequence: last.sequence,
+                sourceDigest: digestMessages(prefix),
+                summary,
+                viewTokens,
+                pinnedDigest: createHash('sha256')
+                  .update(canonicalizeJson(pins))
+                  .digest('hex'),
+                model: written.model,
+                usage,
+                fits: true,
+                messages: view
+              })
+            } catch {
+              return stop(
+                'INSUFFICIENT_EVIDENCE',
+                'Context compaction could not be recorded; the model call was not started.'
+              )
+            }
+          }
+          ;(call.request as { messages: readonly ModelMessage[] }).messages =
+            view.map(({ role, content }) => ({ role, content }))
+          return next()
         }
-        ;(call.request as { messages: readonly ModelMessage[] }).messages =
-          view.map(({ role, content }) => ({ role, content }))
-        return next()
-      })
+      ctx.on('model/before-call', handler(false))
+      ctx.on('model/overflow', handler(true))
     }
   }
 }

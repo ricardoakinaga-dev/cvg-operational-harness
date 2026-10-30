@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { canonicalizeJson } from '@cvg/harness-contracts'
+import { canonicalizeJson, estimateInputTokens } from '@cvg/harness-contracts'
 import type { ModelMessage, SessionEventStore } from '@cvg/harness-contracts'
 import type { KernelPlugin } from './kernel/types.ts'
 import { stop } from './kernel/types.ts'
@@ -66,15 +66,11 @@ export interface ContextCompactionResult {
   readonly messages: readonly CompactableMessage[]
 }
 
-/** Fixed heuristic (~4 chars per token); decides the trigger only. */
+/** The estimator shared with the model gateway (SPEC 0290 D5); trigger and fit only. */
 export function estimateContextTokens(
   messages: readonly { readonly content: string }[]
 ): number {
-  let tokens = 0
-  for (const message of messages) {
-    tokens += Math.ceil(message.content.length / 4)
-  }
-  return tokens
+  return estimateInputTokens(messages.map((message) => message.content))
 }
 
 /** Canonical digest of the messages a summary was derived from. */

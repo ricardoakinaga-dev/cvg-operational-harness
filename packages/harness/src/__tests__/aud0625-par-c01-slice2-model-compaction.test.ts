@@ -5,6 +5,7 @@ import type {
   ModelRequest,
   ModelResult
 } from '@cvg/harness-contracts'
+import { estimateInputTokens } from '@cvg/harness-contracts'
 import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
 import {
   MODEL_COMPACTION_STRATEGY_VERSION,
@@ -482,10 +483,7 @@ describe('PAR-C01 slice 2: refusal when nothing fits', () => {
     const probe = build({ options: { maxCompactionInputTokens: 100_000 } })
     await probe.kernel.execute(probe.input)
     const call = probe.compactionCalls[0]!
-    const tokens = call.messages.reduce(
-      (n, m) => n + Math.ceil(m.content.length / 4),
-      0
-    )
+    const tokens = estimateInputTokens(call.messages.map((m) => m.content))
     const t = build({ options: { maxCompactionInputTokens: tokens } })
     expect((await t.kernel.execute(t.input)).stopReason).toBe('COMPLETED')
   })

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { DataClassification } from '@cvg/shared'
+import { estimateInputTokens, type DataClassification } from '@cvg/shared'
 import {
   ModelGatewayRequestSchema,
   type ModelGatewayEvent,
@@ -318,7 +318,8 @@ export class ModelGateway {
     ) {
       throw new ModelGatewayError(
         'invalid_request',
-        `Request does not fit the context window of profile ${profile.name}`
+        `Request does not fit the context window of profile ${profile.name}`,
+        { reason: 'context_window' }
       )
     }
 
@@ -862,14 +863,11 @@ function conservativeUsage(
  * one). An estimate for pressure and the window check, never a measurement.
  */
 function projectInputTokens(input: ModelInput): number {
-  const bytes =
-    Buffer.byteLength(input.system ?? '', 'utf8') +
-    input.messages.reduce(
-      (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
-      0
-    )
-  const framed = input.messages.length + (input.system ? 1 : 0)
-  return Math.ceil(bytes / 4) + 4 * framed
+  // the system prompt counts as one framed part, as the shared estimator does
+  return estimateInputTokens([
+    ...(input.system ? [input.system] : []),
+    ...input.messages.map((message) => message.content)
+  ])
 }
 
 function completionDetail(

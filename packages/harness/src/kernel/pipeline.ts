@@ -35,6 +35,7 @@ export const CANCELLED_RESPONSE = 'Execution was cancelled by the caller.'
 export type GatePoint =
   | 'turn/before-step'
   | 'model/before-call'
+  | 'model/overflow'
   | 'tool/pre-execute'
 
 /** A fresh turn: identity, budget view and the linked cancel signal. */
@@ -69,6 +70,15 @@ function snapshot<T>(value: T): T {
   } catch {
     return value
   }
+}
+
+/** The additive SPEC 0290 D4 signal on a gateway refusal; the code is unchanged. */
+function isContextWindowError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { reason?: unknown }).reason === 'context_window'
+  )
 }
 
 function errorMessage(error: unknown): string {
@@ -627,39 +637,61 @@ export async function runModelCall(
   const gate = await runGate(host, 'model/before-call', { turn, request: full })
   if (gate.kind === 'stop') return { kind: 'stopped', gate }
   if (turn.signal.aborted) return { kind: 'cancelled' }
-  // I6: log the request as it will be sent, after every control adjusted it.
-  const { signal: _signal, ...effective } = full
-  void _signal
-  const logged = await appendLog(host, {
-    type: 'model/request',
-    correlationId: turn.input.correlationId,
-    request: snapshot(effective)
-  })
-  if (logged) return { kind: 'stopped', gate: logged }
-  try {
-    const outcome = await race(turn, () => host.get('model').complete(full))
-    if (outcome === DEADLINE || outcome === CANCELLED) {
-      controller.abort()
-      return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
-    }
-    const unrecorded = await appendLog(host, {
-      type: 'model/result',
+  // SPEC 0290 §3.4: the model port may report that the request does not fit
+  // the context window. The turn gets exactly one more request, and only when
+  // a `model/overflow` control changed what is sent.
+  let overflowRetried = false
+  for (;;) {
+    // I6: log the request as it will be sent, after every control adjusted it.
+    const { signal: _signal, ...effective } = full
+    void _signal
+    const logged = await appendLog(host, {
+      type: 'model/request',
       correlationId: turn.input.correlationId,
-      provider: outcome.provider,
-      inputTokens: outcome.inputTokens,
-      outputTokens: outcome.outputTokens
+      request: snapshot(effective)
     })
-    if (unrecorded) {
-      return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+    if (logged) return { kind: 'stopped', gate: logged }
+    try {
+      const outcome = await race(turn, () => host.get('model').complete(full))
+      if (outcome === DEADLINE || outcome === CANCELLED) {
+        controller.abort()
+        return { kind: outcome === DEADLINE ? 'deadline' : 'cancelled' }
+      }
+      const unrecorded = await appendLog(host, {
+        type: 'model/result',
+        correlationId: turn.input.correlationId,
+        provider: outcome.provider,
+        inputTokens: outcome.inputTokens,
+        outputTokens: outcome.outputTokens
+      })
+      if (unrecorded) {
+        return { kind: 'unrecorded', result: outcome, gate: unrecorded }
+      }
+      const accounted = turn.budget.recordModelResult({
+        inputTokens: outcome.inputTokens,
+        outputTokens: outcome.outputTokens,
+        costUsd: outcome.costUsd
+      })
+      if (accounted) return { kind: 'stopped', gate: accounted }
+      return { kind: 'completed', result: outcome }
+    } catch (error) {
+      if (overflowRetried || !isContextWindowError(error)) {
+        return { kind: 'failed', error: errorMessage(error) }
+      }
+      overflowRetried = true
+      const sent = full.messages
+      const adjusted = await runGate(host, 'model/overflow', {
+        turn,
+        request: full
+      })
+      if (adjusted.kind === 'stop') return { kind: 'stopped', gate: adjusted }
+      if (turn.signal.aborted) return { kind: 'cancelled' }
+      // nothing compacted: the original error is the outcome
+      if (full.messages === sent) {
+        return { kind: 'failed', error: errorMessage(error) }
+      }
+      const slot = turn.budget.beginModelRequest()
+      if (slot) return { kind: 'stopped', gate: slot }
     }
-    const accounted = turn.budget.recordModelResult({
-      inputTokens: outcome.inputTokens,
-      outputTokens: outcome.outputTokens,
-      costUsd: outcome.costUsd
-    })
-    if (accounted) return { kind: 'stopped', gate: accounted }
-    return { kind: 'completed', result: outcome }
-  } catch (error) {
-    return { kind: 'failed', error: errorMessage(error) }
   }
 }

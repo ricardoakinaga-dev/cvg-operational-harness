@@ -31,9 +31,8 @@ import {
  * PAR-C01 / SPEC 0290 phase 1 (RED). Model compaction under pressure must keep
  * what governs the turn, never promote history to a system message, retry once
  * after an overflow, refuse when nothing fits, and leave nothing behind when
- * the turn is cancelled. The `it.fails` cases describe the target and fail on
- * the current heuristic compaction (PDSH-025); the controls pass before and
- * after the BUILD. Synthetic data only.
+ * the turn is cancelled. Written RED in phase 1 as `it.fails` against the
+ * heuristic compaction (PDSH-025); flipped to `it` across BUILD slices 1-3. Synthetic data only.
  */
 
 /** A marker placed after the first 60 characters, where the heuristic excerpt cuts. */
@@ -280,26 +279,16 @@ describe('PAR-C01 target: pressure, overflow and refusal', () => {
     expect(purposes).toContain('COMPACTION')
   })
 
-  it.fails(
-    'an overflow reported by the model port is compacted and retried once',
-    async () => {
-      let calls = 0
-      const { kernel, input } = runtime({
-        maxInputTokens: 100_000,
-        instructions: ['instrução longa '.repeat(60)],
-        complete: async (request) => {
-          calls += 1
-          const size = request.messages.reduce(
-            (n, m) => n + m.content.length,
-            0
-          )
-          if (size > 400) {
-            throw Object.assign(new Error('does not fit the context window'), {
-              reason: 'context_window'
-            })
-          }
+  it('an overflow reported by the model port is compacted and retried once', async () => {
+    const mainSizes: number[] = []
+    const { kernel, input } = runtime({
+      maxInputTokens: 100_000,
+      pinned: [],
+      before: [olderTurns],
+      complete: async (request) => {
+        if (request.purpose === 'COMPACTION') {
           return {
-            text: 'resposta sintética',
+            text: 'resumo sintético',
             provider: 'synthetic',
             model: 'synthetic-v1',
             inputTokens: 1,
@@ -307,12 +296,28 @@ describe('PAR-C01 target: pressure, overflow and refusal', () => {
             costUsd: 0
           }
         }
-      })
-      const result = await kernel.execute(input)
-      expect(result.stopReason).toBe('COMPLETED')
-      expect(calls).toBe(2)
-    }
-  )
+        const size = request.messages.reduce((n, m) => n + m.content.length, 0)
+        mainSizes.push(size)
+        if (size > 400) {
+          throw Object.assign(new Error('does not fit the context window'), {
+            reason: 'context_window'
+          })
+        }
+        return {
+          text: 'resposta sintética',
+          provider: 'synthetic',
+          model: 'synthetic-v1',
+          inputTokens: 1,
+          outputTokens: 1,
+          costUsd: 0
+        }
+      }
+    })
+    const result = await kernel.execute(input)
+    expect(result.stopReason).toBe('COMPLETED')
+    expect(mainSizes).toHaveLength(2)
+    expect(mainSizes[1]!).toBeLessThan(mainSizes[0]!)
+  })
 
   it('refuses before the model when even the compacted view does not fit', async () => {
     const { kernel, input, captured } = runtime({
