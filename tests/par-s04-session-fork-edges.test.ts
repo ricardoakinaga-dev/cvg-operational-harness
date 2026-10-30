@@ -5,7 +5,7 @@ import type { SessionEvent, SessionEventAppend } from '@cvg/harness-contracts'
 import {
   SESSION_FORK_MAX_DEPTH,
   SessionForkRefusedError,
-  SessionLogUnanalyzableError,
+  SessionPersistenceCorruptionError,
   analyzeSessionLog,
   materializeSessionEvent,
   planSessionFork,
@@ -49,7 +49,7 @@ describe('PAR-S04 slice 1: analyzeSessionLog edges', () => {
   it('refuses a log whose sequences have a gap or do not start at 1', () => {
     n = 1
     expect(() => analyzeSessionLog(done('c1'))).toThrow(
-      SessionLogUnanalyzableError
+      SessionPersistenceCorruptionError
     )
     n = 0
     const log = done('c1')
@@ -59,7 +59,7 @@ describe('PAR-S04 slice 1: analyzeSessionLog edges', () => {
         log[1]!,
         ev('turn/start', 'c2', { correlationId: 'c2' }, 4)
       ])
-    ).toThrow(SessionLogUnanalyzableError)
+    ).toThrow(SessionPersistenceCorruptionError)
   })
   it('refuses interleaved turns, since no prefix cut would be honest', () => {
     n = 0
@@ -68,7 +68,9 @@ describe('PAR-S04 slice 1: analyzeSessionLog edges', () => {
       ev('turn/start', 'b', { correlationId: 'b' }),
       ev('turn/end', 'a', { correlationId: 'a', stopReason: 'COMPLETED' })
     ]
-    expect(() => analyzeSessionLog(log)).toThrow(SessionLogUnanalyzableError)
+    expect(() => analyzeSessionLog(log)).toThrow(
+      SessionPersistenceCorruptionError
+    )
   })
   it('refuses a turn with two turn/end events', () => {
     n = 0
@@ -76,7 +78,9 @@ describe('PAR-S04 slice 1: analyzeSessionLog edges', () => {
       ...done('a'),
       ev('turn/end', 'a', { correlationId: 'a', stopReason: 'COMPLETED' })
     ]
-    expect(() => analyzeSessionLog(log)).toThrow(SessionLogUnanalyzableError)
+    expect(() => analyzeSessionLog(log)).toThrow(
+      SessionPersistenceCorruptionError
+    )
   })
   it('pairs results with calls per tool in order and keeps unpaired calls uncertain', () => {
     n = 0

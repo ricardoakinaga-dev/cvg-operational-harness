@@ -16,6 +16,8 @@ M=[
 ('M11 digest unordered',"prefix\n        .map(","[...prefix].reverse()\n        .map("),
 ('M12 first open turn',"[...turns].reverse().find(","[...turns].find("),
 ('M13 gap allowed',"if (e.sequence !== previous + 1)","if (e.sequence <= previous)"),
+('M14 interleave allowed',"if (closed.has(e.correlationId)) unanalyzable('turns are interleaved')",""),
+('M15 double turn/end allowed',"if (ends.length > 1) unanalyzable('a turn has more than one turn/end')",""),
 ]
 out=[]
 for name,a,b in M:

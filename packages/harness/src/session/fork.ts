@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { SessionEvent, SessionEventAppend } from '@cvg/harness-contracts'
 import { sessionEventInputDigest } from './events.ts'
-import { SessionPersistenceError } from './persistence.ts'
+import {
+  SessionPersistenceCorruptionError,
+  SessionPersistenceError
+} from './persistence.ts'
 
 /** SPEC 0287 §3-§4: pure analysis of a session log and planning of a fork. No IO, no clock. */
 export const SESSION_FORK_MAX_DEPTH = 16
@@ -23,8 +26,6 @@ export class SessionForkRefusedError extends SessionPersistenceError {
     super(`Session fork refused: ${code}`, sessionId)
   }
 }
-/** The log cannot be grouped into turns without guessing, so nothing is concluded from it. */
-export class SessionLogUnanalyzableError extends SessionPersistenceError {}
 
 export interface TurnReport {
   readonly correlationId: string
@@ -51,8 +52,9 @@ const UNCERTAIN_OUTCOMES: ReadonlySet<unknown> = new Set([
   'confirm_failed'
 ])
 
+/** A log that cannot be grouped into turns without guessing is a corrupt log (review of slice 1). */
 function unanalyzable(reason: string): never {
-  throw new SessionLogUnanalyzableError(
+  throw new SessionPersistenceCorruptionError(
     `Session log is not analyzable: ${reason}`
   )
 }

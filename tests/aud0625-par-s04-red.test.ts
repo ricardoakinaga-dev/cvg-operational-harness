@@ -339,6 +339,6 @@ describe('PAR-S04 phase 1: the public surface', () => {
     expect(typeof api.analyzeSessionLog).toBe('function')
     expect(typeof api.planSessionFork).toBe('function')
     expect(typeof api.SessionForkRefusedError).toBe('function')
-    expect(typeof api.SessionLogUnanalyzableError).toBe('function')
+    expect(typeof api.SessionPersistenceCorruptionError).toBe('function')
   })
 })

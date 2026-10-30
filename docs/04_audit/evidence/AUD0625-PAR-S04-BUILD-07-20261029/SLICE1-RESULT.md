@@ -4,13 +4,13 @@ Task `AUD0625-PAR-S04-BUILD-07-20261029` (Claude Sonnet 5.5, sessão 07). Autori
 
 ## Entregue
 
-- `packages/harness/src/session/fork.ts` (exportado por `session/index.ts`): `analyzeSessionLog`, `planSessionFork`, `sessionForkSourceDigest`, `SessionForkRefusedError` (6 códigos fechados), `SessionLogUnanalyzableError`, `SESSION_FORK_MAX_DEPTH = 16`. Puro: sem IO, sem relógio, não muta a entrada.
+- `packages/harness/src/session/fork.ts` (exportado por `session/index.ts`): `analyzeSessionLog`, `planSessionFork`, `sessionForkSourceDigest`, `SessionForkRefusedError` (6 códigos fechados), `SESSION_FORK_MAX_DEPTH = 16`. Puro: sem IO, sem relógio, não muta a entrada.
 - Testes: os 25 do RED viraram verdes sem enfraquecer asserção (`tests/aud0625-par-s04-red.test.ts`) e 15 casos de borda novos (`tests/par-s04-session-fork-edges.test.ts`).
 
 ## Decisões de implementação que a SPEC deixava abertas
 
 - Par `tool/call` ↔ `tool/result`: o resultado não carrega `operationKey`; casa-se por `toolId`, em ordem (FIFO) dentro do turno. Resultado sem chamada é ignorado; chamada sem resultado é incerta.
-- Log não analisável (fail-closed, `SessionLogUnanalyzableError`): sequências que não são contíguas a partir de 1, turnos intercalados, mais de um `turn/end` no mesmo turno.
+- Log não analisável (fail-closed, `SessionPersistenceCorruptionError`, já aprovada; a classe própria `SessionLogUnanalyzableError` foi removida na revisão do DF por não estar no recibo 23): sequências que não são contíguas a partir de 1, turnos intercalados, mais de um `turn/end` no mesmo turno.
 - Grupo só de `context/compacted` (correlationId próprio) é um marcador atômico `completed`.
 - `openTurn` = o turno aberto mais recente (os anteriores continuam em `turns`).
 - Profundidade: `sourceLineage` opcional; sem ele a origem conta como profundidade 0.
