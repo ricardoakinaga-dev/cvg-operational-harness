@@ -100,6 +100,55 @@ async function run(r: Request): Promise<unknown> {
         )
       return {}
     }
+    case 'seedTurns': {
+      // PAR-S04: a source of `turns` completed turns (message/user, turn/start, turn/end, message/assistant).
+      const session = String(r.session)
+      const handle = await svc.create(header(session))
+      handles.set(name, handle)
+      const events: SessionEvent[] = []
+      const add = (type: string, correlationId: string, payload: object) =>
+        events.push(
+          materializeSessionEvent(
+            {
+              tenantId: config.tenant,
+              sessionId: session,
+              formatVersion: 1,
+              eventId: `${session}-e${events.length + 1}`,
+              timestamp: '2026-10-29T00:00:00.000Z',
+              correlationId,
+              traceId: `trace-${correlationId}`,
+              type,
+              payload
+            } as never,
+            events.length + 1
+          )
+        )
+      for (let t = 1; t <= Number(r.turns); t++) {
+        const c = `t${t}`
+        add('message/user', c, { text: `ask ${c}` })
+        add('turn/start', c, { correlationId: c })
+        add('turn/end', c, { correlationId: c, stopReason: 'COMPLETED' })
+        add('message/assistant', c, { text: `answer ${c}` })
+      }
+      if (r.crashed) {
+        // A turn the process never finished: asked, started, called a tool, no turn/end.
+        add('message/user', 'tc', { text: 'ask tc' })
+        add('turn/start', 'tc', { correlationId: 'tc' })
+        add('tool/call', 'tc', {
+          correlationId: 'tc',
+          toolId: 'tool-a',
+          operationKey: 'op-tc',
+          input: {}
+        })
+      }
+      await handle.append(events)
+      return { events: events.length }
+    }
+    case 'fork': {
+      const handle = await svc.fork(String(r.source), header(String(r.session)))
+      handles.set(name, handle)
+      return { cut: handle.inheritedEventCount }
+    }
     case 'flush':
       await handles.get(name)!.flush()
       return {}
