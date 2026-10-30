@@ -10,6 +10,7 @@ import type {
   ModelLocation,
   ModelProvider,
   ProviderRequest,
+  ProviderUsage,
   ProviderResult
 } from '../contracts.ts'
 import { ModelProviderError } from '../errors.ts'
@@ -20,6 +21,15 @@ import {
   readBoundedText
 } from './http-errors.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
+import {
+  DEFAULT_MAX_STREAM_EVENT_BYTES,
+  DEFAULT_MAX_STREAM_EVENTS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  readStreamFrames,
+  streamLimit,
+  type StreamLimits
+} from '../stream-reader.ts'
+import type { ProviderStreamEvent } from '../stream.ts'
 
 export const DEFAULT_MAX_RESPONSE_BYTES = 256 * 1024
 
@@ -42,7 +52,31 @@ export interface OpenAICompatibleProviderOptions {
   allowPrivateNetworks?: boolean
   /** AUD19-007 — injectable DNS for the composed egress guard (tests). */
   dnsLookup?: EgressDns['lookup']
+  /** SPEC 0284 §6.3 stream ceilings (internal stream only). */
+  maxStreamEvents?: number
+  maxStreamEventBytes?: number
+  streamIdleTimeoutMs?: number
 }
+
+const OpenAIStreamChunkSchema = z.object({
+  choices: z
+    .array(
+      z.object({
+        delta: z
+          .object({ content: z.string().nullable().optional() })
+          .optional(),
+        finish_reason: z.string().nullable().optional()
+      })
+    )
+    .optional(),
+  usage: z
+    .object({
+      prompt_tokens: z.number().int().nonnegative().optional(),
+      completion_tokens: z.number().int().nonnegative().optional()
+    })
+    .nullable()
+    .optional()
+})
 
 const OpenAIResponseSchema = z.object({
   choices: z
@@ -76,6 +110,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
   readonly #apiKey?: string
   readonly #fetch: FetchLike
   readonly #maxResponseBytes: number
+  readonly #streamLimits: StreamLimits
   readonly #allowedHosts: string[]
   readonly #allowHttp: boolean
   readonly #allowPrivateNetworks: boolean
@@ -122,6 +157,27 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.#fetch = options.fetchImpl ?? (globalThis.fetch as FetchLike)
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+    this.#streamLimits = {
+      maxBytes: this.#maxResponseBytes,
+      maxEvents: streamLimit(
+        options.id,
+        'maxStreamEvents',
+        options.maxStreamEvents,
+        DEFAULT_MAX_STREAM_EVENTS
+      ),
+      maxEventBytes: streamLimit(
+        options.id,
+        'maxStreamEventBytes',
+        options.maxStreamEventBytes,
+        DEFAULT_MAX_STREAM_EVENT_BYTES
+      ),
+      idleTimeoutMs: streamLimit(
+        options.id,
+        'streamIdleTimeoutMs',
+        options.streamIdleTimeoutMs,
+        DEFAULT_STREAM_IDLE_TIMEOUT_MS
+      )
+    }
     this.#allowedHosts = [new URL(baseUrl).hostname.toLowerCase()]
     this.#allowHttp = allowHttp
     this.#allowPrivateNetworks = allowPrivateNetworks
@@ -129,7 +185,10 @@ export class OpenAICompatibleProvider implements ModelProvider {
     this.#boundFetch = options.fetchImpl ? undefined : fetchWithResolvedAddress
   }
 
-  async execute(request: ProviderRequest): Promise<ProviderResult> {
+  async #post(
+    request: ProviderRequest,
+    stream: boolean
+  ): Promise<{ response: Response; signal: AbortSignal }> {
     const bindingError = verifyPromptBinding(request)
     if (bindingError !== undefined) {
       throw new ModelProviderError(this.id, 'invalid_request', bindingError)
@@ -147,8 +206,9 @@ export class OpenAICompatibleProvider implements ModelProvider {
       messages,
       temperature: request.temperature,
       max_tokens: request.maxTokens,
-      stream: false
+      stream
     }
+    if (stream) body.stream_options = { include_usage: true }
     if (request.structuredSchemaName) {
       body.response_format = { type: 'json_object' }
     }
@@ -176,6 +236,7 @@ export class OpenAICompatibleProvider implements ModelProvider {
           signal,
           // The bound transport cuts the body at the ceiling (SPEC 0248).
           maxResponseBytes: this.#maxResponseBytes,
+          ...(stream ? { responseMode: 'stream' } : {}),
           redirect: 'manual'
         },
         {
@@ -203,7 +264,124 @@ export class OpenAICompatibleProvider implements ModelProvider {
       await response.body?.cancel().catch(() => undefined)
       throw providerHttpError(this.id, response.status)
     }
+    return { response, signal }
+  }
 
+  /**
+   * SPEC 0284 §6.1: the OpenAI-compatible SSE stream as internal events.
+   * Usage and the finish event are emitted once, at the end of the stream, so
+   * that nothing follows `finish`.
+   */
+  async *executeStream(
+    request: ProviderRequest
+  ): AsyncGenerator<ProviderStreamEvent> {
+    const { response, signal } = await this.#post(request, true)
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!/text\/event-stream/i.test(contentType)) {
+      await response.body?.cancel().catch(() => undefined)
+      throw new ModelProviderError(
+        this.id,
+        'malformed_response',
+        'Provider did not answer with an event stream'
+      )
+    }
+    let finishReason: string | undefined
+    let usage: ProviderUsage | undefined
+    let done = false
+    for await (const payload of readStreamFrames(
+      this.id,
+      response,
+      'sse',
+      this.#streamLimits,
+      signal
+    )) {
+      if (done) {
+        throw new ModelProviderError(
+          this.id,
+          'malformed_response',
+          'Provider stream continued after [DONE]'
+        )
+      }
+      if (payload.trim() === '[DONE]') {
+        done = true
+        continue
+      }
+      let json: unknown
+      try {
+        json = JSON.parse(payload)
+      } catch {
+        throw new ModelProviderError(
+          this.id,
+          'malformed_response',
+          'Provider stream event was not valid JSON'
+        )
+      }
+      const chunk = OpenAIStreamChunkSchema.safeParse(json)
+      if (!chunk.success) {
+        throw new ModelProviderError(
+          this.id,
+          'malformed_response',
+          'Provider stream event did not match the expected contract'
+        )
+      }
+      const choice = chunk.data.choices?.[0]
+      const text = choice?.delta?.content ?? ''
+      if (text !== '') {
+        if (finishReason !== undefined) {
+          throw new ModelProviderError(
+            this.id,
+            'malformed_response',
+            'Provider stream sent text after its finish reason'
+          )
+        }
+        yield { type: 'delta', text }
+      }
+      if (choice?.finish_reason) {
+        if (finishReason !== undefined) {
+          throw new ModelProviderError(
+            this.id,
+            'malformed_response',
+            'Provider stream finished twice'
+          )
+        }
+        finishReason = choice.finish_reason
+      }
+      const reported = chunk.data.usage
+      if (
+        reported?.prompt_tokens !== undefined &&
+        reported.completion_tokens !== undefined
+      ) {
+        if (usage !== undefined) {
+          throw new ModelProviderError(
+            this.id,
+            'malformed_response',
+            'Provider stream reported usage twice'
+          )
+        }
+        usage = {
+          inputTokens: reported.prompt_tokens,
+          outputTokens: reported.completion_tokens
+        }
+      }
+    }
+    if (finishReason === undefined) {
+      // A terminal marker without a finish reason is a protocol violation;
+      // an ended body without either is a cut connection.
+      throw new ModelProviderError(
+        this.id,
+        done ? 'malformed_response' : 'connection',
+        done
+          ? 'Provider stream ended without a finish reason'
+          : 'Provider stream ended before its finish'
+      )
+    }
+    // SPEC 0267 §3.3: absent counters stay absent (unknown, never zero).
+    if (usage !== undefined) yield { type: 'usage', usage }
+    yield { type: 'finish', reason: finishReason }
+  }
+
+  async execute(request: ProviderRequest): Promise<ProviderResult> {
+    const { response, signal } = await this.#post(request, false)
     const rawBody = await readBoundedText(
       this.id,
       response,

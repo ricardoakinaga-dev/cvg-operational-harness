@@ -10,6 +10,7 @@ import {
   type ModelInput,
   type PromptBinding,
   type ModelResult,
+  type ProviderRequest,
   type ProviderResult,
   type ProviderUsage,
   type UsageStatus,
@@ -42,6 +43,7 @@ import {
 } from './prompt-registry.ts'
 import { ModelRouter, type ModelRoutingOptions } from './router.ts'
 import { renderGovernedInput } from './prompt-binding.ts'
+import { assembleProviderStream, type StreamProgress } from './stream.ts'
 
 export interface ModelGatewayOptions {
   providers: ModelProvider[]
@@ -115,6 +117,19 @@ export class ModelGateway {
   constructor(options: ModelGatewayOptions) {
     for (const provider of options.providers) {
       this.#providers.set(provider.id, provider)
+    }
+    // SPEC 0285 D3: a declared window must be a positive safe integer.
+    for (const profile of Object.values(options.profiles)) {
+      const window = profile?.contextWindow
+      if (
+        window !== undefined &&
+        !(Number.isSafeInteger(window) && window > 0)
+      ) {
+        throw new ModelGatewayError(
+          'invalid_request',
+          `Profile ${profile?.name} has an invalid contextWindow`
+        )
+      }
     }
     this.#router = new ModelRouter(options.profiles, options.routing ?? {})
     this.#prompts = options.prompts
@@ -270,8 +285,29 @@ export class ModelGateway {
         `Provider ${profile.providerId} is not registered`
       )
     }
+    // SPEC 0284 T-2: a streaming profile never falls back to `execute`.
+    if (profile.streaming === true && provider.executeStream === undefined) {
+      throw new ModelGatewayError(
+        'invalid_request',
+        `Provider ${provider.id} has no stream path for a streaming profile`
+      )
+    }
     // F13: an aborted caller never reserves budget nor reaches a provider.
     throwIfCancelled(externalSignal)
+    // SPEC 0285 D2/D3: the request size is projected once, before any
+    // reservation; a declared window that it overflows refuses here, with no
+    // provider call, no charge and no fallback (the request is the problem).
+    const projectedInputTokens = projectInputTokens(rendered.input)
+    if (
+      profile.contextWindow !== undefined &&
+      projectedInputTokens + (request.maxTokens ?? profile.maxTokens) >
+        profile.contextWindow
+    ) {
+      throw new ModelGatewayError(
+        'invalid_request',
+        `Request does not fit the context window of profile ${profile.name}`
+      )
+    }
 
     const estimatedCost = request.estimatedCostUsd ?? profile.estimatedCostUsd
     // F14: the restrictive combination of the request and profile ceilings
@@ -333,6 +369,8 @@ export class ModelGateway {
     // The reservation covers the first accounted attempt only; every later
     // executed attempt is charged in full (SPEC 0267 §3.3, no refunds).
     let reservationSettled = false
+    // SPEC 0285 (review P2): a settlement store that failed stops retries.
+    let settlementFailed = false
 
     while (attempt < attemptsAllowed) {
       attempt += 1
@@ -355,6 +393,7 @@ export class ModelGateway {
       let accounted:
         | { usage: ProviderUsage; costUsd: number; status: UsageStatus }
         | undefined
+      const progress: StreamProgress = { outputSeen: false }
 
       this.#emit({
         type: 'model.call.started',
@@ -364,11 +403,12 @@ export class ModelGateway {
         providerId: provider.id,
         model: profile.model,
         profile: profile.name,
-        attempt
+        attempt,
+        projectedInputTokens
       })
 
       try {
-        const providerResult = await provider.execute({
+        const providerRequest = {
           requestId: request.requestId,
           tenantId: request.tenantId,
           correlationId: request.correlationId,
@@ -384,7 +424,16 @@ export class ModelGateway {
           signal,
           timeoutMs,
           ...(request.metadata ? { metadata: request.metadata } : {})
-        })
+        }
+        const providerResult: ProviderResult = profile.streaming
+          ? await this.#runStream(
+              provider,
+              providerRequest,
+              signal,
+              externalSignal,
+              progress
+            )
+          : await provider.execute(providerRequest)
 
         // SPEC 0267 §3.3: usage is validated and accounted before the output
         // is parsed, so a rejected output still costs what it consumed.
@@ -417,15 +466,23 @@ export class ModelGateway {
         } else {
           this.#meter?.record(usage)
         }
+        // SPEC 0285 (review P2): the attempt is accounted before the fallible
+        // settlement port, so a store failure never charges it a second time
+        // and the terminal event still carries what was measured.
+        accounted = { usage, costUsd, status: usageStatus }
         if (this.#budget) {
-          this.#budget.settle({
-            reservedKeys,
-            estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
-            actualCostUsd: costUsd
-          })
+          try {
+            this.#budget.settle({
+              reservedKeys,
+              estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
+              actualCostUsd: costUsd
+            })
+          } catch (error) {
+            settlementFailed = true
+            throw error
+          }
         }
         reservationSettled = true
-        accounted = { usage, costUsd, status: usageStatus }
 
         const output = this.#parseOutput(providerResult, structuredOutput)
         this.#circuit.onSuccess(circuitKey)
@@ -473,45 +530,42 @@ export class ModelGateway {
             ? new ModelGatewayError('cancelled', 'Model call was cancelled')
             : toGatewayError(error, provider.id)
         lastError = gatewayError
+        // SPEC 0284 §7.3: a stream that produced output and then failed or
+        // was cancelled consumed an unknown amount. It is charged the
+        // conservative bound, never zero and never a partial count.
+        if (profile.streaming && progress.outputSeen && !accounted) {
+          const usage = conservativeUsage(
+            rendered.input,
+            request.maxTokens ?? profile.maxTokens
+          )
+          const costUsd = Math.max(
+            estimatedCost,
+            this.#computeCost(profile, usage)
+          )
+          this.#meter?.recordUnreported()
+          accounted = { usage, costUsd, status: 'unreported' }
+          if (this.#budget) {
+            try {
+              this.#budget.settle({
+                reservedKeys,
+                estimatedCostUsd: reservationSettled ? 0 : estimatedCost,
+                actualCostUsd: costUsd
+              })
+              reservationSettled = true
+            } catch {
+              // The attempt is already counted; the terminal event below must
+              // still be emitted, and no further attempt may spend unsettled.
+              settlementFailed = true
+            }
+          } else {
+            reservationSettled = true
+          }
+        }
         if (this.#countsAgainstCircuit(gatewayError)) {
           this.#circuit.onFailure(circuitKey)
         }
-        const canRetry = gatewayError.retryable && attempt < attemptsAllowed
-        if (canRetry) {
-          const delayMs = computeRetryDelayMs({
-            attempt,
-            policy: this.#retry,
-            random: this.#random
-          })
-          this.#emit({
-            type: 'model.retry.scheduled',
-            requestId: request.requestId,
-            tenantId: request.tenantId,
-            correlationId: request.correlationId,
-            providerId: provider.id,
-            model: profile.model,
-            profile: profile.name,
-            attempt: attempt + 1,
-            delayMs,
-            code: gatewayError.code
-          })
-          await this.#backoff(delayMs, externalSignal)
-          if (externalSignal?.aborted) {
-            this.#emit({
-              type: 'model.call.failed',
-              requestId: request.requestId,
-              tenantId: request.tenantId,
-              correlationId: request.correlationId,
-              providerId: provider.id,
-              model: profile.model,
-              profile: profile.name,
-              attempt,
-              code: 'cancelled'
-            })
-            throw new ModelGatewayError('cancelled', 'Model call was cancelled')
-          }
-          continue
-        }
+        // SPEC 0285 D1: every started attempt ends in exactly one terminal
+        // event, a retried one included, carrying what it was charged.
         this.#emit({
           type: 'model.call.failed',
           requestId: request.requestId,
@@ -534,6 +588,58 @@ export class ModelGateway {
               }
             : {})
         })
+        const canRetry =
+          !settlementFailed &&
+          gatewayError.retryable &&
+          attempt < attemptsAllowed
+        if (canRetry) {
+          const delayMs = computeRetryDelayMs({
+            attempt,
+            policy: this.#retry,
+            random: this.#random
+          })
+          this.#emit({
+            type: 'model.retry.scheduled',
+            requestId: request.requestId,
+            tenantId: request.tenantId,
+            correlationId: request.correlationId,
+            providerId: provider.id,
+            model: profile.model,
+            profile: profile.name,
+            attempt: attempt + 1,
+            delayMs,
+            code: gatewayError.code
+          })
+          await this.#backoff(delayMs, externalSignal)
+          if (externalSignal?.aborted) {
+            // SPEC 0285 T-1: the attempt the backoff waited for never
+            // started; it is closed as such and carries no usage.
+            this.#emit({
+              type: 'model.call.failed',
+              requestId: request.requestId,
+              tenantId: request.tenantId,
+              correlationId: request.correlationId,
+              providerId: provider.id,
+              model: profile.model,
+              profile: profile.name,
+              attempt: attempt + 1,
+              code: 'cancelled',
+              detail: 'not_started'
+            })
+            throw new ModelGatewayError('cancelled', 'Model call was cancelled')
+          }
+          continue
+        }
+        // SPEC 0285 (review R2 P2): an attempt whose cost could not be settled
+        // stops the whole request, fallback included; its terminal event above
+        // already carries the cause and the usage.
+        if (settlementFailed) {
+          throw new ModelGatewayError(
+            'internal_error',
+            'Model call stopped: its cost could not be settled',
+            { retryable: false }
+          )
+        }
         throw gatewayError
       } finally {
         clearTimeout(timeoutHandle)
@@ -561,6 +667,27 @@ export class ModelGateway {
       await Promise.race([this.#sleep(ms), aborted])
     } finally {
       signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  async #runStream(
+    provider: ModelProvider,
+    providerRequest: ProviderRequest,
+    signal: AbortSignal,
+    externalSignal: AbortSignal | undefined,
+    progress: StreamProgress
+  ): Promise<ProviderResult> {
+    const outcome = await assembleProviderStream(
+      provider.executeStream!(providerRequest),
+      { signal, externalSignal, progress }
+    )
+    return {
+      text: outcome.text,
+      ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+      providerId: provider.id,
+      model: providerRequest.model,
+      externalCall: provider.location === 'external',
+      finishReason: outcome.finishReason
     }
   }
 
@@ -704,6 +831,22 @@ function conservativeUsage(
       0
     )
   return { inputTokens: bytes, outputTokens: maxTokens }
+}
+
+/**
+ * SPEC 0285 D2: fixed-density projection of the request size, 4 UTF-8 bytes
+ * per token plus 4 tokens of framing per message (the system prompt counts as
+ * one). An estimate for pressure and the window check, never a measurement.
+ */
+function projectInputTokens(input: ModelInput): number {
+  const bytes =
+    Buffer.byteLength(input.system ?? '', 'utf8') +
+    input.messages.reduce(
+      (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
+      0
+    )
+  const framed = input.messages.length + (input.system ? 1 : 0)
+  return Math.ceil(bytes / 4) + 4 * framed
 }
 
 function completionDetail(

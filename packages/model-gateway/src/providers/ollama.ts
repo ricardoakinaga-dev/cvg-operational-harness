@@ -9,7 +9,8 @@ import type { EgressDns } from '@cvg/shared'
 import type {
   ModelProvider,
   ProviderRequest,
-  ProviderResult
+  ProviderResult,
+  ProviderUsage
 } from '../contracts.ts'
 import { ModelProviderError } from '../errors.ts'
 import { verifyPromptBinding } from '../prompt-binding.ts'
@@ -19,6 +20,15 @@ import {
   readBoundedText
 } from './http-errors.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
+import {
+  DEFAULT_MAX_STREAM_EVENT_BYTES,
+  DEFAULT_MAX_STREAM_EVENTS,
+  DEFAULT_STREAM_IDLE_TIMEOUT_MS,
+  readStreamFrames,
+  streamLimit,
+  type StreamLimits
+} from '../stream-reader.ts'
+import type { ProviderStreamEvent } from '../stream.ts'
 import {
   DEFAULT_MAX_RESPONSE_BYTES,
   combineTimeoutSignal,
@@ -40,6 +50,10 @@ export interface OllamaProviderOptions {
   allowPrivateNetworks?: boolean
   /** AUD19-007 — injectable DNS for the composed egress guard (tests). */
   dnsLookup?: EgressDns['lookup']
+  /** SPEC 0284 §6.3 stream ceilings (internal stream only). */
+  maxStreamEvents?: number
+  maxStreamEventBytes?: number
+  streamIdleTimeoutMs?: number
 }
 
 const OllamaResponseSchema = z.object({
@@ -48,6 +62,10 @@ const OllamaResponseSchema = z.object({
   prompt_eval_count: z.number().int().nonnegative().optional(),
   eval_count: z.number().int().nonnegative().optional(),
   done: z.boolean().optional()
+})
+
+const OllamaStreamLineSchema = OllamaResponseSchema.extend({
+  done_reason: z.string().optional()
 })
 
 /**
@@ -63,6 +81,7 @@ export class OllamaProvider implements ModelProvider {
   readonly #apiKey?: string
   readonly #fetch: FetchLike
   readonly #maxResponseBytes: number
+  readonly #streamLimits: StreamLimits
   readonly #allowedHosts: string[]
   readonly #allowHttp: boolean
   readonly #allowPrivateNetworks: boolean
@@ -99,6 +118,28 @@ export class OllamaProvider implements ModelProvider {
     this.#fetch = options.fetchImpl ?? (globalThis.fetch as FetchLike)
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+    const providerId = options.id ?? 'ollama'
+    this.#streamLimits = {
+      maxBytes: this.#maxResponseBytes,
+      maxEvents: streamLimit(
+        providerId,
+        'maxStreamEvents',
+        options.maxStreamEvents,
+        DEFAULT_MAX_STREAM_EVENTS
+      ),
+      maxEventBytes: streamLimit(
+        providerId,
+        'maxStreamEventBytes',
+        options.maxStreamEventBytes,
+        DEFAULT_MAX_STREAM_EVENT_BYTES
+      ),
+      idleTimeoutMs: streamLimit(
+        providerId,
+        'streamIdleTimeoutMs',
+        options.streamIdleTimeoutMs,
+        DEFAULT_STREAM_IDLE_TIMEOUT_MS
+      )
+    }
     this.#allowedHosts = [parsedBaseUrl.hostname.toLowerCase()]
     this.#allowHttp = allowHttp
     this.#allowPrivateNetworks = allowPrivateNetworks
@@ -106,7 +147,10 @@ export class OllamaProvider implements ModelProvider {
     this.#boundFetch = options.fetchImpl ? undefined : fetchWithResolvedAddress
   }
 
-  async execute(request: ProviderRequest): Promise<ProviderResult> {
+  async #post(
+    request: ProviderRequest,
+    stream: boolean
+  ): Promise<{ response: Response; signal: AbortSignal }> {
     const bindingError = verifyPromptBinding(request)
     if (bindingError !== undefined) {
       throw new ModelProviderError(this.id, 'invalid_request', bindingError)
@@ -122,7 +166,7 @@ export class OllamaProvider implements ModelProvider {
     const body: Record<string, unknown> = {
       model: this.#model,
       messages,
-      stream: false,
+      stream,
       options: {
         temperature: request.temperature,
         num_predict: request.maxTokens
@@ -155,6 +199,7 @@ export class OllamaProvider implements ModelProvider {
           signal,
           // The bound transport cuts the body at the ceiling (SPEC 0248).
           maxResponseBytes: this.#maxResponseBytes,
+          ...(stream ? { responseMode: 'stream' } : {}),
           redirect: 'manual'
         },
         {
@@ -182,7 +227,80 @@ export class OllamaProvider implements ModelProvider {
       await response.body?.cancel().catch(() => undefined)
       throw providerHttpError(this.id, response.status)
     }
+    return { response, signal }
+  }
 
+  /**
+   * SPEC 0284 §6.2: the NDJSON stream as internal events. Usage and the finish
+   * event are emitted once, at the end, so that nothing follows `finish`.
+   */
+  async *executeStream(
+    request: ProviderRequest
+  ): AsyncGenerator<ProviderStreamEvent> {
+    const { response, signal } = await this.#post(request, true)
+    let finishReason: string | undefined
+    let usage: ProviderUsage | undefined
+    for await (const line of readStreamFrames(
+      this.id,
+      response,
+      'ndjson',
+      this.#streamLimits,
+      signal
+    )) {
+      if (finishReason !== undefined) {
+        throw new ModelProviderError(
+          this.id,
+          'malformed_response',
+          'Ollama stream continued after done'
+        )
+      }
+      let json: unknown
+      try {
+        json = JSON.parse(line)
+      } catch {
+        throw new ModelProviderError(
+          this.id,
+          'malformed_response',
+          'Ollama stream line was not valid JSON'
+        )
+      }
+      const parsed = OllamaStreamLineSchema.safeParse(json)
+      if (!parsed.success) {
+        throw new ModelProviderError(
+          this.id,
+          'malformed_response',
+          'Ollama stream line did not match the expected contract'
+        )
+      }
+      const text = parsed.data.message?.content ?? parsed.data.response ?? ''
+      if (text !== '') yield { type: 'delta', text }
+      if (parsed.data.done === true) {
+        finishReason = parsed.data.done_reason ?? 'stop'
+        // SPEC 0267 §3.3: absent counters stay absent (unknown, never zero).
+        if (
+          parsed.data.prompt_eval_count !== undefined &&
+          parsed.data.eval_count !== undefined
+        ) {
+          usage = {
+            inputTokens: parsed.data.prompt_eval_count,
+            outputTokens: parsed.data.eval_count
+          }
+        }
+      }
+    }
+    if (finishReason === undefined) {
+      throw new ModelProviderError(
+        this.id,
+        'connection',
+        'Ollama stream ended before done'
+      )
+    }
+    if (usage !== undefined) yield { type: 'usage', usage }
+    yield { type: 'finish', reason: finishReason }
+  }
+
+  async execute(request: ProviderRequest): Promise<ProviderResult> {
+    const { response, signal } = await this.#post(request, false)
     const rawBody = await readBoundedText(
       this.id,
       response,
