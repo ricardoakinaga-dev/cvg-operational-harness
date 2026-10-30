@@ -136,7 +136,6 @@ describe('canonicalizeCompleteJson: values', () => {
     expect(code(() => canonicalizeCompleteJson({ [Symbol('k')]: 1 }))).toBe(
       'INVALID_JSON'
     )
-    // eslint-disable-next-line no-sparse-arrays
     expect(code(() => canonicalizeCompleteJson([1, , 3]))).toBe('INVALID_JSON')
     const extra = [1] as unknown as Record<string, unknown>
     extra.x = 2
