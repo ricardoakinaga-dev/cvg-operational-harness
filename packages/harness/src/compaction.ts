@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { canonicalizeJson, estimateInputTokens } from '@cvg/harness-contracts'
 import type { ModelMessage, SessionEventStore } from '@cvg/harness-contracts'
-import type { KernelPlugin } from './kernel/types.ts'
+import type { KernelPlugin, TurnState } from './kernel/types.ts'
 import { stop } from './kernel/types.ts'
 
 /**
@@ -170,6 +170,47 @@ export function compactConversation(
   }
 }
 
+/**
+ * SPEC 0290c: the request messages carry no position in the session log, so the
+ * host maps each one (by its index in `request.messages`) to the sequence of the
+ * log event it came from, or `undefined` when no event backs it (for example the
+ * governed instruction). The value is never inferred from the message text.
+ */
+export type LogSequenceOf = (
+  index: number,
+  turn: TurnState
+) => number | undefined | Promise<number | undefined>
+
+/**
+ * `throughSequence` of `context/compacted` is the log sequence of the last
+ * summarised message (SPEC 0202: a reference to an immutable prefix). Returns
+ * `null` (the caller refuses) when the mapping is not strictly increasing over
+ * the mapped messages, holds anything but a positive safe integer, throws, or
+ * maps none of the summarised messages: a summary never claims more of the log
+ * than it covers.
+ */
+export async function resolveLogThrough(
+  logSequenceOf: LogSequenceOf,
+  turn: TurnState,
+  total: number,
+  summarised: ReadonlySet<number>
+): Promise<number | null> {
+  let previous = 0
+  let through = 0
+  try {
+    for (let index = 0; index < total; index += 1) {
+      const value = await logSequenceOf(index, turn)
+      if (value === undefined) continue
+      if (!Number.isSafeInteger(value) || value <= previous) return null
+      previous = value
+      if (summarised.has(index)) through = value
+    }
+  } catch {
+    return null
+  }
+  return through > 0 ? through : null
+}
+
 export interface CompactionControlOptions extends ContextCompactionOptions {
   /**
    * Audit boundary: the host records `context/compacted` here (for example
@@ -179,6 +220,14 @@ export interface CompactionControlOptions extends ContextCompactionOptions {
   readonly onCompacted?: (
     result: ContextCompactionResult
   ) => void | Promise<void>
+  /**
+   * SPEC 0290c: maps each request message to its session-log sequence. When
+   * present, the recorded `throughSequence` is the log sequence of the last
+   * summarised message; when absent the legacy value (the message position in
+   * the request) is kept for compatibility and must be read as "valor
+   * registrado".
+   */
+  readonly logSequenceOf?: LogSequenceOf
 }
 
 export function createCompactionControl(
@@ -209,9 +258,31 @@ export function createCompactionControl(
         // SPEC 0290 §3.5: a cancelled turn leaves no `context/compacted`;
         // the pipeline then ends the turn as cancelled without a request.
         if (call.turn.signal.aborted) return next()
+        let recorded: ContextCompactionResult = result
+        if (options.onCompacted && options.logSequenceOf) {
+          const history = messages.filter((m) => m.role !== 'system')
+          const through = await resolveLogThrough(
+            options.logSequenceOf,
+            call.turn,
+            messages.length,
+            new Set(
+              history
+                .slice(0, result.droppedMessages)
+                .map((m) => m.sequence - 1)
+            )
+          )
+          if (through === null) {
+            return stop(
+              'INSUFFICIENT_EVIDENCE',
+              'Context compaction could not be tied to the session log; the model call was not started.'
+            )
+          }
+          recorded = { ...result, throughSequence: through }
+          if (call.turn.signal.aborted) return next()
+        }
         if (options.onCompacted) {
           try {
-            await options.onCompacted(result)
+            await options.onCompacted(recorded)
           } catch {
             return stop(
               'INSUFFICIENT_EVIDENCE',
