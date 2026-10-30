@@ -174,3 +174,133 @@ describe('PAR-S05 RED witnesses (fail until the BUILD)', () => {
     }
   )
 })
+
+// R1 (review F01-F05): behaviour witnesses at the SDK. They fail today with `method_not_found`
+// and become positive assertions in the BUILD; the semantic pairs of the SPEC (cursor, window,
+// ambiguity) need the code and are listed in SPEC 0295 section 7.
+class QueryError extends Error {
+  constructor(readonly code: 'not_found' | 'unavailable') {
+    super(code)
+  }
+}
+const countingPort = (
+  handlers: { list?: () => unknown; trace?: () => unknown } = {}
+) => {
+  const calls: string[] = []
+  return {
+    calls,
+    port: {
+      list: async (input: unknown) => {
+        calls.push(`list:${JSON.stringify(input)}`)
+        return (
+          handlers.list?.() ?? {
+            items: [],
+            nextCursor: null,
+            examined: 0,
+            skippedUnadopted: 0
+          }
+        )
+      },
+      trace: async () => {
+        calls.push('trace')
+        return handlers.trace?.()
+      }
+    }
+  }
+}
+
+describe('PAR-S05 R1 behaviour witnesses (fail until the BUILD)', () => {
+  it.fails(
+    'RED-5: a foreign and a missing trace root answer identically with session_not_found',
+    async () => {
+      const { port } = countingPort({
+        trace: () => {
+          throw new QueryError('not_found')
+        }
+      })
+      const s = server(store(), { sessionQuery: port })
+      const foreign = await call(s, 'session.trace', { approvalId: 'foreign' })
+      const missing = await call(s, 'session.trace', { approvalId: 'missing' })
+      expect(foreign.error?.code).toBe(SDK_ERROR_CODES.session_not_found)
+      expect(JSON.stringify(foreign.error)).toBe(JSON.stringify(missing.error))
+    }
+  )
+
+  it.fails(
+    'RED-6: a failing root source is an internal error, never not_found nor an empty trace',
+    async () => {
+      const { port } = countingPort({
+        trace: () => {
+          throw new QueryError('unavailable')
+        }
+      })
+      const res = await call(
+        server(store(), { sessionQuery: port }),
+        'session.trace',
+        {
+          approvalId: 'a1'
+        }
+      )
+      expect(res.error?.code).toBe(SDK_ERROR_CODES.internal_error)
+    }
+  )
+
+  it.fails(
+    'RED-7: an inverted date filter is invalid_params and never reaches the port',
+    async () => {
+      const { port, calls } = countingPort()
+      const res = await call(
+        server(store(), { sessionQuery: port }),
+        'session.list',
+        {
+          filter: { createdAfter: 20, createdBefore: 10 }
+        }
+      )
+      expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
+      expect(calls).toEqual([])
+    }
+  )
+
+  it.fails(
+    'RED-8: a cursor over 512 characters is invalid_params and never reaches the port',
+    async () => {
+      const { port, calls } = countingPort()
+      const res = await call(
+        server(store(), { sessionQuery: port }),
+        'session.list',
+        {
+          cursor: 'a'.repeat(513)
+        }
+      )
+      expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
+      expect(calls).toEqual([])
+    }
+  )
+
+  it.fails(
+    'RED-9: limit 101 is invalid_params; an absent limit reaches the port as 50',
+    async () => {
+      const { port, calls } = countingPort()
+      const s = server(store(), { sessionQuery: port })
+      expect((await call(s, 'session.list', { limit: 101 })).error?.code).toBe(
+        SDK_ERROR_CODES.invalid_params
+      )
+      expect(calls).toEqual([])
+      await call(s, 'session.list', {})
+      expect(calls[0]).toContain('"limit":50')
+    }
+  )
+
+  it.fails(
+    'RED-10: a trace needs exactly one root: both or none is invalid_params',
+    async () => {
+      const { port, calls } = countingPort()
+      const s = server(store(), { sessionQuery: port })
+      for (const params of [{}, { approvalId: 'a', operationKey: 'k' }])
+        expect((await call(s, 'session.trace', params)).error?.code).toBe(
+          SDK_ERROR_CODES.invalid_params
+        )
+      expect(calls).toEqual([])
+    }
+  )
+})
