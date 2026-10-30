@@ -19,6 +19,8 @@ import type {
   TurnState
 } from './kernel/types.ts'
 import { stop } from './kernel/types.ts'
+import type { SpillComposition } from './spill/composition.ts'
+import { pruneToolMessages } from './spill/prune.ts'
 
 /**
  * SPEC 0290 (PAR-C01): compaction by a model call, with items the host pins.
@@ -75,6 +77,12 @@ export interface ModelCompactionOptions {
    * gateway window check refuses an oversized request and the turn is refused.
    */
   readonly maxCompactionInputTokens?: number
+  /**
+   * SPEC 0293 §3.4: when set, tool messages of the prefix above the spill threshold are
+   * sent to the summariser as a preview block with a locator instead of in full. Absent:
+   * the prefix is sent as it is.
+   */
+  readonly spill?: SpillComposition
   /** Configured cost cap; the effective cap is min(this, 10% of the turn). */
   readonly maxCostUsd?: number
   readonly onCompacted?: (
@@ -195,7 +203,21 @@ export function createModelCompactionControl(
           const budgetCap =
             call.request.budget.maxCostUsd * MODEL_COMPACTION_COST_SHARE
           const cap = Math.min(budgetCap, options.maxCostUsd ?? Infinity)
-          const request = excerpt(prefix)
+          // SPEC 0293 §3.4: what the summariser receives (and what the digest covers)
+          const sent = options.spill
+            ? await pruneToolMessages(
+                prefix,
+                {
+                  tenantId: call.turn.input.tenantId,
+                  sessionId: call.turn.input.sessionId,
+                  executionId: call.turn.input.executionId ?? 'unbound',
+                  signal: call.turn.signal
+                },
+                options.spill
+              )
+            : prefix
+          if (call.turn.signal.aborted) return next()
+          const request = excerpt(sent)
           if (
             !(cap > 0) ||
             estimateContextTokens(request) >
@@ -295,7 +317,7 @@ export function createModelCompactionControl(
                 keptMessages: governed.length + kept.length,
                 droppedMessages: prefix.length,
                 throughSequence: loggedThrough as number,
-                sourceDigest: digestMessages(prefix),
+                sourceDigest: digestMessages(sent),
                 summary,
                 viewTokens,
                 pinnedDigest: createHash('sha256')

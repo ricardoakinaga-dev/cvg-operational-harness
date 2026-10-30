@@ -31,6 +31,8 @@ export interface PrepareToolOutputInput {
   readonly marker?: (content: string) => string
   /** The house `spill.read` result: shown whole, never stored again, never pruned (SPEC 0293 I11). */
   readonly inlineAlways?: boolean
+  /** Leave the expiry out of the block, for text that must not change when an object is replaced. */
+  readonly hideExpiry?: boolean
 }
 
 export interface PreparedToolOutput {
@@ -80,7 +82,7 @@ export async function prepareToolOutput(
       wrote: false
     }
   }
-  let stored: { locator: string; expiresAt: string } | undefined
+  let stored: { locator: string; expiresAt?: string } | undefined
   let uncertain = false
   if (eligible(input, bytes)) {
     for (let attempt = 0; attempt < 2 && stored === undefined; attempt += 1) {
@@ -96,7 +98,10 @@ export async function prepareToolOutput(
           content: text,
           ...(input.signal ? { signal: input.signal } : {})
         })
-        stored = { locator: receipt.locator, expiresAt: receipt.expiresAt }
+        stored =
+          input.hideExpiry === true
+            ? { locator: receipt.locator }
+            : { locator: receipt.locator, expiresAt: receipt.expiresAt }
         uncertain = false
       } catch (error) {
         uncertain = error instanceof SpillCommitUnknown
@@ -125,9 +130,7 @@ export async function prepareToolOutput(
       bytes,
       sha256,
       stored: stored !== undefined,
-      ...(stored
-        ? { locator: stored.locator, expiresAt: stored.expiresAt }
-        : {})
+      ...(stored ?? {})
     },
     wrote: stored !== undefined
   }

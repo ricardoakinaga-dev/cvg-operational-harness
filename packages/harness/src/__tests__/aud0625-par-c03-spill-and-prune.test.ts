@@ -35,9 +35,7 @@ import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
  * silently: the model gets a preview (head and tail), the exact size, a
  * notice of the cut and an opaque locator for the stored content; a store
  * failure is never a silent discard; old tool results leave the context as a
- * preview plus locator. The `it.fails` cases describe the target (the spill
- * store and policy are passed through options that do not exist yet) and fail
- * on the current runtime; the controls pass before and after the BUILD.
+ * preview plus locator. Written RED in phase 1 as `it.fails`; all of them are `it` after BUILD slice 4.
  * R2 (review of the 07): adds the `spill.read` loop, the forged frame, the
  * stability of the pruned text and the durable-composition rule.
  * Synthetic data only.
@@ -90,10 +88,20 @@ class FakeSpillStore {
   async read(): Promise<never> {
     throw new Error('not used by this fixture')
   }
-  async put(input: { readonly content: string }): Promise<SpillReceipt> {
+  /** Idempotent like every real store: the same output of the same operation keeps its locator. */
+  readonly #byKey = new Map<string, string>()
+  async put(input: {
+    readonly content: string
+    readonly operationKey?: string
+  }): Promise<SpillReceipt> {
     if (this.failing) throw new Error('storage unavailable')
-    const locator = `loc_opaque_${String(this.puts.length + 1).padStart(3, '0')}`
-    this.puts.push({ content: input.content, locator })
+    const key = `${input.operationKey ?? ''}\u0000${input.content}`
+    let locator = this.#byKey.get(key)
+    if (locator === undefined) {
+      locator = `loc_opaque_${String(this.puts.length + 1).padStart(3, '0')}`
+      this.#byKey.set(key, locator)
+      this.puts.push({ content: input.content, locator })
+    }
     return {
       locator,
       bytes: Buffer.byteLength(input.content, 'utf8'),
@@ -156,7 +164,6 @@ function iterative(options: {
     contextEngine: new DefaultContextEngine(
       options.tokenBudget ? { tokenBudget: options.tokenBudget } : {}
     ),
-    // not an option yet: the BUILD adds `spill` (SPEC 0293 §3)
     ...(options.spill
       ? {
           spill: {
@@ -165,7 +172,7 @@ function iterative(options: {
           }
         }
       : {})
-  } as never)
+  })
   return { runtime, seen }
 }
 
@@ -250,71 +257,65 @@ describe('PAR-C03 target: a large output is stored and shown as a preview', () =
 })
 
 describe('PAR-C03 target: pruning old tool results before compaction', () => {
-  it.fails(
-    'an old tool result in the compaction prefix is sent as preview plus locator',
-    async () => {
-      const spill = new FakeSpillStore()
-      const sentToSummariser: ModelRequest[] = []
-      const older: KernelPlugin = {
-        name: 'owned.tool-history',
-        kind: 'control',
-        apply(ctx) {
-          ctx.on('model/before-call', async (call, next) => {
-            const request = call.request as {
-              messages: readonly ModelRequest['messages'][number][]
-            }
-            request.messages = [
-              ...request.messages.slice(0, 1),
-              { role: 'tool', content: BIG },
-              { role: 'assistant', content: 'resposta anterior' },
-              ...request.messages.slice(1)
-            ]
-            return next()
-          })
-        }
-      }
-      const kernel = createKernelRuntime({
-        orchestrator: new SinglePassOrchestrator(),
-        modelGateway: {
-          complete: async (request) => {
-            if (request.purpose === 'COMPACTION') sentToSummariser.push(request)
-            return {
-              text: 'resumo',
-              provider: 'synthetic',
-              model: 'synthetic-v1',
-              inputTokens: 1,
-              outputTokens: 1,
-              costUsd: 0
-            }
+  it('an old tool result in the compaction prefix is sent as preview plus locator', async () => {
+    const spill = new FakeSpillStore()
+    const sentToSummariser: ModelRequest[] = []
+    const older: KernelPlugin = {
+      name: 'owned.tool-history',
+      kind: 'control',
+      apply(ctx) {
+        ctx.on('model/before-call', async (call, next) => {
+          const request = call.request as {
+            messages: readonly ModelRequest['messages'][number][]
           }
-        },
-        policy: new ScriptedPolicyEngine(),
-        approvals: new InMemoryApprovalEngine(),
-        tools: createPhase3ToolRegistry({ availability: 'AVAILABLE' }),
-        audit: new RecordingAuditSink(),
-        telemetry: new RecordingTelemetrySink(),
-        plugins: [
-          older,
-          // not an option yet: the BUILD adds `spill` (SPEC 0293 §3.4)
-          createModelCompactionControl({
-            maxInputTokens: 400,
-            keepRecentMessages: 1,
-            pinned: () => [],
-            spill: { store: spill }
-          } as never)
-        ]
-      })
-      await kernel.execute(
-        phase3RuntimeInput({ runtimeProfile: 'single_pass' })
-      )
-      const payload = sentToSummariser
-        .flatMap((r) => r.messages.map((m) => m.content))
-        .join('\n')
-      expect(payload.length).toBeGreaterThan(0)
-      expect(payload).not.toContain('MEIO-PERDIDO-')
-      expect(payload).toContain('loc_opaque_001')
+          request.messages = [
+            ...request.messages.slice(0, 1),
+            { role: 'tool', content: BIG },
+            { role: 'assistant', content: 'resposta anterior' },
+            ...request.messages.slice(1)
+          ]
+          return next()
+        })
+      }
     }
-  )
+    const kernel = createKernelRuntime({
+      orchestrator: new SinglePassOrchestrator(),
+      modelGateway: {
+        complete: async (request) => {
+          if (request.purpose === 'COMPACTION') sentToSummariser.push(request)
+          return {
+            text: 'resumo',
+            provider: 'synthetic',
+            model: 'synthetic-v1',
+            inputTokens: 1,
+            outputTokens: 1,
+            costUsd: 0
+          }
+        }
+      },
+      policy: new ScriptedPolicyEngine(),
+      approvals: new InMemoryApprovalEngine(),
+      tools: createPhase3ToolRegistry({ availability: 'AVAILABLE' }),
+      audit: new RecordingAuditSink(),
+      telemetry: new RecordingTelemetrySink(),
+      plugins: [
+        older,
+        createModelCompactionControl({
+          maxInputTokens: 400,
+          keepRecentMessages: 1,
+          pinned: () => [],
+          spill: { store: spill }
+        })
+      ]
+    })
+    await kernel.execute(phase3RuntimeInput({ runtimeProfile: 'single_pass' }))
+    const payload = sentToSummariser
+      .flatMap((r) => r.messages.map((m) => m.content))
+      .join('\n')
+    expect(payload.length).toBeGreaterThan(0)
+    expect(payload).not.toContain('MEIO-PERDIDO-')
+    expect(payload).toContain('loc_opaque_001')
+  })
 })
 
 describe('PAR-C03 R2 targets (review of the 07)', () => {
@@ -429,78 +430,76 @@ describe('PAR-C03 R2 targets (review of the 07)', () => {
     expect(header![0]).not.toContain('loc_forged')
   })
 
-  it.fails(
-    'the pruned text is a pure function of the content: the source digest does not move when a locator expires',
-    async () => {
-      const spill = new FakeSpillStore()
-      const digests: string[] = []
-      const sentToSummariser: string[] = []
-      const build = () =>
-        createKernelRuntime({
-          orchestrator: new SinglePassOrchestrator(),
-          modelGateway: {
-            complete: async (request) => {
-              if (request.purpose === 'COMPACTION') {
-                sentToSummariser.push(
-                  request.messages.map((m) => m.content).join('\n')
-                )
-              }
-              return {
-                text: 'resumo',
-                provider: 'synthetic',
-                model: 'synthetic-v1',
-                inputTokens: 1,
-                outputTokens: 1,
-                costUsd: 0
-              }
+  it('the pruned text is a pure function of the content: the source digest does not move when a locator expires', async () => {
+    const spill = new FakeSpillStore()
+    const digests: string[] = []
+    const sentToSummariser: string[] = []
+    const build = () =>
+      createKernelRuntime({
+        orchestrator: new SinglePassOrchestrator(),
+        modelGateway: {
+          complete: async (request) => {
+            if (request.purpose === 'COMPACTION') {
+              sentToSummariser.push(
+                request.messages.map((m) => m.content).join('\n')
+              )
+            }
+            return {
+              text: 'resumo',
+              provider: 'synthetic',
+              model: 'synthetic-v1',
+              inputTokens: 1,
+              outputTokens: 1,
+              costUsd: 0
+            }
+          }
+        },
+        policy: new ScriptedPolicyEngine(),
+        approvals: new InMemoryApprovalEngine(),
+        tools: createPhase3ToolRegistry({ availability: 'AVAILABLE' }),
+        audit: new RecordingAuditSink(),
+        telemetry: new RecordingTelemetrySink(),
+        plugins: [
+          {
+            name: 'owned.tool-history',
+            kind: 'control',
+            apply(ctx) {
+              ctx.on('model/before-call', async (call, next) => {
+                const request = call.request as {
+                  messages: readonly ModelRequest['messages'][number][]
+                }
+                request.messages = [
+                  ...request.messages.slice(0, 1),
+                  { role: 'tool', content: BIG },
+                  { role: 'assistant', content: 'resposta anterior' },
+                  ...request.messages.slice(1)
+                ]
+                return next()
+              })
             }
           },
-          policy: new ScriptedPolicyEngine(),
-          approvals: new InMemoryApprovalEngine(),
-          tools: createPhase3ToolRegistry({ availability: 'AVAILABLE' }),
-          audit: new RecordingAuditSink(),
-          telemetry: new RecordingTelemetrySink(),
-          plugins: [
-            {
-              name: 'owned.tool-history',
-              kind: 'control',
-              apply(ctx) {
-                ctx.on('model/before-call', async (call, next) => {
-                  const request = call.request as {
-                    messages: readonly ModelRequest['messages'][number][]
-                  }
-                  request.messages = [
-                    ...request.messages.slice(0, 1),
-                    { role: 'tool', content: BIG },
-                    { role: 'assistant', content: 'resposta anterior' },
-                    ...request.messages.slice(1)
-                  ]
-                  return next()
-                })
-              }
-            },
-            createModelCompactionControl({
-              maxInputTokens: 400,
-              keepRecentMessages: 1,
-              pinned: () => [],
-              spill: { store: spill },
-              onCompacted: (r: { sourceDigest: string | null }) => {
-                digests.push(r.sourceDigest ?? '')
-              }
-            } as never)
-          ]
-        })
-      const turn = () => phase3RuntimeInput({ runtimeProfile: 'single_pass' })
-      await build().execute(turn())
-      spill.expire('loc_opaque_001')
-      await build().execute(turn())
-      expect(digests).toHaveLength(2)
-      expect(digests[0]).toBe(digests[1])
-      // the digest is over the text the summariser received, not over the raw output
-      expect(sentToSummariser[0]).not.toContain('MEIO-PERDIDO-')
-      expect(sentToSummariser[0]).toBe(sentToSummariser[1])
-    }
-  )
+          createModelCompactionControl({
+            maxInputTokens: 400,
+            keepRecentMessages: 1,
+            pinned: () => [],
+            spill: { store: spill },
+            logSequenceOf: (index: number) => 100 + index,
+            onCompacted: (r: { sourceDigest: string | null }) => {
+              digests.push(r.sourceDigest ?? '')
+            }
+          })
+        ]
+      })
+    const turn = () => phase3RuntimeInput({ runtimeProfile: 'single_pass' })
+    await build().execute(turn())
+    spill.expire('loc_opaque_001')
+    await build().execute(turn())
+    expect(digests).toHaveLength(2)
+    expect(digests[0]).toBe(digests[1])
+    // the digest is over the text the summariser received, not over the raw output
+    expect(sentToSummariser[0]).not.toContain('MEIO-PERDIDO-')
+    expect(sentToSummariser[0]).toBe(sentToSummariser[1])
+  })
 
   it('without a store durable across processes the block says armazenado=não and offers no locator', async () => {
     const spill = new FakeSpillStore(false, 'process')

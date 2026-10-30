@@ -75,6 +75,24 @@ export function newBlockMarker(
   }
 }
 
+/**
+ * A marker that is a function of the scope and of the content (SPEC 0293 I13): the
+ * same message gets the same block on every pass, so the digest the compaction
+ * records does not move. The content cannot carry it ahead of time, because the
+ * marker is derived from the hash of that very content.
+ */
+export function deterministicBlockMarker(
+  content: string,
+  scope: string,
+  hash: (text: string) => string = sha256Hex
+): string {
+  const digest = hash(content)
+  for (let counter = 0; ; counter += 1) {
+    const marker = hash(`${scope}\u0000${digest}\u0000${counter}`).slice(0, 16)
+    if (!content.includes(marker)) return marker
+  }
+}
+
 export interface PreviewBlockInput {
   readonly toolId: string
   readonly text: string
