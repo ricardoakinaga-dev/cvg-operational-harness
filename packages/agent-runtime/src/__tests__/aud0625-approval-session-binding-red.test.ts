@@ -288,4 +288,21 @@ describe('SPEC 0291 phase 1: RED witnesses of the proposed rule', () => {
       expect(harness.toolExecutor).not.toHaveBeenCalled()
     }
   )
+  it.fails(
+    'an approval bound to a durable execution (executionRef) is not executable by a library turn, in any conversation (I2-c)',
+    async () => {
+      const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+      const approvalId = await askAndApprove(harness)
+      harness.store.update(TENANT, approvalId, 'APPROVED', (current) => ({
+        ...current,
+        executionRef: 'exec_durable_1'
+      }))
+      const result = await harness.runtime.runTurn(
+        turnInput({ ...asked, approvalId })
+      )
+      expect(result.outcome).toBe('denied')
+      expect(result.reason).toBe('origin_mismatch')
+      expect(harness.toolExecutor).not.toHaveBeenCalled()
+    }
+  )
 })
