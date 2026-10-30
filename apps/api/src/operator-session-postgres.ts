@@ -3,7 +3,9 @@ import { guardPostgresPoolErrors } from '@cvg/persistence'
 import { OperatorIdentitySchema, type OperatorIdentity } from '@cvg/shared'
 import { Pool, type QueryResultRow } from 'pg'
 import {
+  assertPrincipalRevision,
   createOpaqueOperatorSessionId,
+  type OperatorSessionCreateInput,
   type OperatorSessionRecord,
   type OperatorSessionStore
 } from './operator-session.ts'
@@ -16,7 +18,18 @@ type SessionRow = QueryResultRow & {
   tenant_id: string
   operator_id: string
   role: string
+  /** `bigint` arrives as a string: it is validated, never rounded. */
+  principal_revision: string | number
   expires_at: Date | string
+}
+
+/** SPEC 0262 §6.2: a PG bigint is accepted only as an exact safe integer >= 1. */
+function parsePrincipalRevision(value: unknown): number {
+  if (typeof value === 'number') return assertPrincipalRevision(value)
+  if (typeof value !== 'string' || !/^[1-9][0-9]{0,15}$/.test(value)) {
+    throw new Error('Operator session principal revision is invalid')
+  }
+  return assertPrincipalRevision(Number(value))
 }
 
 function requireAuthSchemaName(value: string): string {
@@ -31,10 +44,11 @@ function digestSessionId(sessionId: string): Buffer | null {
   return createHash('sha256').update(sessionId, 'utf8').digest()
 }
 
-function validatedInput(input: {
-  identity: OperatorIdentity
+function validatedInput(input: OperatorSessionCreateInput): {
+  identity: OperatorIdentity & { tenantId: string }
   expiresAt: number
-}): { identity: OperatorIdentity & { tenantId: string }; expiresAt: number } {
+  principalRevision: number
+} {
   const identity = OperatorIdentitySchema.parse(input.identity)
   const now = Date.now()
   if (!identity.tenantId) {
@@ -49,7 +63,8 @@ function validatedInput(input: {
   }
   return {
     identity: { ...identity, tenantId: identity.tenantId },
-    expiresAt: input.expiresAt
+    expiresAt: input.expiresAt,
+    principalRevision: assertPrincipalRevision(input.principalRevision)
   }
 }
 
@@ -74,32 +89,32 @@ export class PostgresOperatorSessionStore implements OperatorSessionStore {
     return this.pool.query<T>(text, values)
   }
 
-  async create(input: {
-    identity: OperatorIdentity
-    expiresAt: number
-  }): Promise<OperatorSessionRecord> {
-    const { identity, expiresAt } = validatedInput(input)
+  async create(
+    input: OperatorSessionCreateInput
+  ): Promise<OperatorSessionRecord> {
+    const { identity, expiresAt, principalRevision } = validatedInput(input)
     const sessionId = createOpaqueOperatorSessionId()
     const digest = digestSessionId(sessionId)
     if (!digest) throw new Error('Generated operator session is invalid')
     await this.query(
-      `SELECT ${this.schema}.operator_session_create($1,$2,$3,$4,$5)`,
+      `SELECT ${this.schema}.operator_session_create_v2($1,$2,$3,$4,$5,$6)`,
       [
         digest,
         identity.tenantId,
         identity.operatorId,
         identity.role,
+        principalRevision,
         new Date(expiresAt)
       ]
     )
-    return { sessionId, identity, expiresAt }
+    return { sessionId, identity, expiresAt, principalRevision }
   }
 
   async get(sessionId: string): Promise<OperatorSessionRecord | null> {
     const digest = digestSessionId(sessionId)
     if (!digest) return null
     const result = await this.query<SessionRow>(
-      `SELECT * FROM ${this.schema}.operator_session_get($1)`,
+      `SELECT * FROM ${this.schema}.operator_session_get_v2($1)`,
       [digest]
     )
     const row = result.rows[0]
@@ -113,38 +128,44 @@ export class PostgresOperatorSessionStore implements OperatorSessionStore {
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
       return null
     }
-    return { sessionId, identity, expiresAt }
+    return {
+      sessionId,
+      identity,
+      expiresAt,
+      principalRevision: parsePrincipalRevision(row.principal_revision)
+    }
   }
 
   async replace(
     previousSessionId: string,
-    input: { identity: OperatorIdentity; expiresAt: number }
+    input: OperatorSessionCreateInput
   ): Promise<OperatorSessionRecord> {
     const previousDigest = digestSessionId(previousSessionId)
     if (!previousDigest) throw new Error('Previous operator session is invalid')
-    const { identity, expiresAt } = validatedInput(input)
+    const { identity, expiresAt, principalRevision } = validatedInput(input)
     const sessionId = createOpaqueOperatorSessionId()
     const nextDigest = digestSessionId(sessionId)
     if (!nextDigest) throw new Error('Generated operator session is invalid')
     await this.query(
-      `SELECT ${this.schema}.operator_session_replace($1,$2,$3,$4,$5,$6)`,
+      `SELECT ${this.schema}.operator_session_replace_v2($1,$2,$3,$4,$5,$6,$7)`,
       [
         previousDigest,
         nextDigest,
         identity.tenantId,
         identity.operatorId,
         identity.role,
+        principalRevision,
         new Date(expiresAt)
       ]
     )
-    return { sessionId, identity, expiresAt }
+    return { sessionId, identity, expiresAt, principalRevision }
   }
 
   async switchIdentity(
     previousSessionId: string,
-    input: { identity: OperatorIdentity; expiresAt: number }
+    input: OperatorSessionCreateInput
   ): Promise<OperatorSessionRecord> {
-    const { identity, expiresAt } = validatedInput(input)
+    const { identity, expiresAt, principalRevision } = validatedInput(input)
     const sessionId = createOpaqueOperatorSessionId()
     const digest = digestSessionId(sessionId)
     if (!digest) throw new Error('Generated operator session is invalid')
@@ -167,18 +188,19 @@ export class PostgresOperatorSessionStore implements OperatorSessionStore {
         )
       }
       await client.query(
-        `SELECT ${this.schema}.operator_session_create($1,$2,$3,$4,$5)`,
+        `SELECT ${this.schema}.operator_session_create_v2($1,$2,$3,$4,$5,$6)`,
         [
           digest,
           identity.tenantId,
           identity.operatorId,
           identity.role,
+          principalRevision,
           new Date(expiresAt)
         ]
       )
       await client.query('COMMIT')
       failed = false
-      return { sessionId, identity, expiresAt }
+      return { sessionId, identity, expiresAt, principalRevision }
     } finally {
       if (failed) await client.query('ROLLBACK').catch(() => undefined)
       client.release(failed)

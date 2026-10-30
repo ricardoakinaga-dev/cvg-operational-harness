@@ -1,0 +1,117 @@
+# Revisão independente F18 (SPEC 0280) — fatia 2 do Codex (sessão 07, 29/10/2026)
+
+Commit revisado: `3dc36726d77c717a58a2aa2097628fd767f46798` (branch
+`codex/aud0625-f18-build-20261029`, base `02c1002a3`, sobre a fatia 1 `66ad2137e`),
+em cópia detached própria, Node 22.23.2, `--maxWorkers=2`, sem PostgreSQL. Sintético.
+SPEC 0280 `8e15a9d3…`, recibo human-decisions-11.
+
+## Veredito: APPROVE_WITH_FINDINGS (nenhum P1; 2 P2 que recomendo corrigir antes do merge na `main`; P3 de teste)
+
+O objetivo central da SPEC está cumprido: nenhuma extensão alcança o estado privilegiado, as
+projeções não devolvem o original, e as quatro relaxações R1–R4 estão fechadas. Os dois P2 abaixo são
+**regressões de integridade** que o desenho da projeção introduz no caminho de **retorno** dos hooks,
+não furos de autoridade.
+
+## Verificado
+
+- **(a) Nenhum caminho de extensão alcança o estado privilegiado.**
+  - `hook-authority.ts` não é exportado: `package.json` só exporta `.`, e o índice público não lista
+    `coreHook`, `isCoreHook`, `hookState`, `hookValue`, `observation`, `waterfall` nem `reconcile*`
+    (probe A1).
+  - `kind: 'control'` sozinho não credencia: `isCoreHook` exige a função no `WeakSet` privado. O mutante
+    "toda função de control é credenciada" (R8) morre.
+  - As fábricas `approvalsControl` etc. **são públicas**, então uma extensão consegue levantar a função
+    credenciada. Probes A2/A3: embrulhada por um control sem credencial, ou registrada como capability,
+    ela só recebe a projeção congelada e **falha fechada** (corpo 0). A função credenciada só reexecuta a
+    lógica original; não entrega estado a quem a levantou. Sem novo `ctx.get`.
+  - Limite herdado da SPEC §1: plugins JS são código confiável do host; `ctx.get` continua expondo os
+    serviços que o host forneceu ao kernel (não é novo).
+- **(b) Projeções sem fallback de clone.** `observation` copia só descritores de dados, devolve o marcador
+  `{opaque:true}` para função, classe, getter, Proxy que lança, `bigint`, `symbol`, `TypedArray`, ciclo,
+  profundidade >16 e >4096 nós; nunca o original (mutantes R4, R10, R11, R13, R14, R15 morrem). `__proto__`
+  de JSON vira propriedade de dado em objeto sem protótipo, sem poluição (probe B2).
+- **(c) Reconciliação (F18-A a H).** Gate `stop` é pegajoso (R1), falha/incerteza de ferramenta é pegajosa
+  (R2), `next` duplicado, tardio ou ausente é recusado (R5, R6, R7), o `throw` após delegação não esconde o
+  efeito (R18), o ledger registra o fato físico (R20, o ponto do CTL-W02) e a continuação inválida impede o
+  despacho (R21). `COMPLETED` forjado como gate é recusado (R27).
+- **(d) Testes migrados.** `aud0597`/`pdsh-031-slice2d` só ganharam a credencial `coreHook` nos duplos que
+  simulam controles centrais. Os `Reflect.*` do arquivo RED trocam atribuição por operação que não lança
+  no objeto congelado, mantendo a asserção. **CTL-W02** passou de "o ledger grava `not_started`" para
+  "o ledger grava o fato físico `succeeded` e a duração observada": isso **endurece** (implementa o D2) e o
+  mutante R20 (ledger registra o desfecho alegado) o mata. Não há `it.fails` ativo (só em comentário).
+- **(f) Catálogos.** `scripts/skip-catalog.json`, `scripts/mutation-manifest.json` e o lockfile não estão no
+  diff; nenhum arquivo tocado está catalogado (conferido por busca nos três manifestos);
+  `skip:governance` PASS, `certification/skip-inventory.json` restaurado.
+- **Gates.** `typecheck` 0, eslint dos caminhos tocados 0, prettier OK. Meu conjunto de consumidores
+  (`packages/harness`, `tests/aud0625*`, `tests/conformance`, `tests/architecture`, consumidores públicos,
+  `packages/conversation`, `packages/sdk`, três testes do worker): **70 arquivos, 1041 testes passam, 1
+  skip** (o do Codex: 761 em 47 arquivos, outra seleção). `packages/agent-runtime` (os controles
+  `governed-budget`/`governed-pause` não credenciados só leem e continuam funcionando): 22 arquivos, 320
+  passam.
+
+## Achados
+
+### P2-1 — um hook de post-execute declara `failed` sobre um efeito que ocorreu, sem `unknown_effect`
+`reconcileOutcome` aceita `kind:'failed'` (status `FAILED`/`REJECTED`) vindo de uma extensão depois que o
+corpo teve sucesso (`hook-authority.ts`, ramo `value.kind === 'failed'`). Probe C1: o corpo roda, o
+ledger registra `started`→`succeeded` e o approval é `complete`, mas o resultado final é `TOOL_FAILURE`
+com `toolResult.status = 'FAILED'` e a resposta "Tool execution failed.", **sem** o prefixo
+`unknown_effect`. Uma falha definitiva afirma "o efeito não ocorreu"; um planejador ou operador que leia
+isso pode repetir uma ação já executada. A SPEC D2 pede "não reescrever … para fingir que o efeito não
+ocorreu" e §4 "violação depois de efeito: … sinalizar evidência/settlement incerto".
+Correção sugerida: depois de `before.kind === 'succeeded'`, mapear `failed`/`rejected` alegados para
+`threw` (`unknown_effect: <motivo>`) ou `confirm_failed`, mantendo o motivo; e um teste (post hook
+devolve `failed` após sucesso → resposta com `unknown_effect`, approval `complete`, ledger `succeeded`).
+
+### P2-2 — um hook que apenas copia o desfecho troca uma saída grande por `{opaque:true}`
+O marcador de projeção volta como se fosse dado. Probe E1: um `tool/post-execute` que faz
+`return { ...outcome }` (cópia rasa, "não alterei nada") sobre uma saída de 5000 itens (>4096 nós) deixa o
+turno `COMPLETED` com `toolResult.output === {"opaque":true}`; o mesmo hook devolvendo o próprio
+`outcome` preserva o original (E2, pelo atalho `proposed === exposed`). Efeito: perda **silenciosa** do
+resultado real do efeito. Vale para qualquer valor acima dos limites (nós, profundidade 16, instâncias de
+classe como `Date`) que passe por um hook que reconstrói o objeto.
+Correção sugerida: em `reconcileOutcome`/`reconcileTurn`, tratar o marcador `OPAQUE` na devolução como
+"sem alteração desse campo" (restaurar o subtrecho do original por caminho) ou recusar a transformação
+(`invalidOutcome`); e um teste com saída acima do limite e hook que copia.
+
+### P3 — lacunas de teste (mutantes sobreviventes)
+Dos 30 mutantes meus, 29 aplicaram (R28 casa duas linhas e não aplicou): **18 mortos** e **11
+sobreviventes**. R3, R12 e R29 são **equivalentes** (guarda redundante com a seguinte; `signal` projetado
+já sai opaco; atalho de identidade com o mesmo resultado). Os **oito** restantes são lacunas reais dos
+testes do Codex; sete morrem com os testes que proponho em `proofs/review-probes.test.ts.txt`
+(`PROPOSED tests`, que passam em `3dc36726d`, `mutations-proposed-tests.json`):
+
+| Mutante | O que nenhum teste afirma | Teste proposto |
+|---|---|---|
+| R16 | `kind:'succeeded'` com `status` diferente de `SUCCEEDED` é recusado (SPEC §4, "kind/status inconsistente") | P-R16 |
+| R17 | wrapper que alega `not_started` depois do corpo **não** libera nem falha o approval (com a alegação `operator_paused` o `release` devolveria um approval de uso único após o efeito: duplicação). O CTL-W02 não pega porque a falha de settlement mascara o desfecho | P-R17 |
+| R19 | `next` duplicado em hook de **gate** é violação (hoje só o caso de `tool/execute` é coberto) | P-R19 |
+| R22, R24, R26 | guardas, `post-execute` e `turn/end` recebem projeção congelada, sem `grant`/`approval`/`sandboxHandle` (só o `pre-execute`/`execute` é afirmado) | P-R22/24/26 |
+| R25 | falha de auditoria num turno **já bloqueado** não some atrás do motivo do bloqueio (D2, padrão `unrecordedBlock`) | P-R25 |
+| R23 | o ponto `beforeDispatch` do loop iterativo recebe projeção | **sem teste proposto**: exige o runtime iterativo |
+
+Outros P3:
+1. **Sinal congelado.** `turnView.signal` é `{aborted}` de **um instante** (probe D1: depois de um abort,
+   o observador ainda lê `aborted === false`). O corpo mantém o sinal real, então não há perda de
+   autoridade, mas uma extensão de timeout/retry que consulte `call.turn.signal.aborted` decide com dado
+   velho. Sugestão: getter somente-leitura sobre o sinal real.
+2. **Referência compartilhada vira opaca.** `seen` nunca é desmarcado, então `{a: x, b: x}` projeta `b`
+   como `{opaque:true}` (probe B1). Seguro, mas observador perde informação; sugestão: marcar só a pilha do
+   caminho.
+3. **P3-1 da fatia 1 continua:** `tests/aud0625-f18-approval-admission.test.ts` ainda usa
+   `host.listeners('tool/execute')[0]`; buscar o ouvinte pelo nome do plugin. Os P3-2 e P3-3 foram
+   atendidos (todos os casos são `it`; o estado privado impede a mutação das flags).
+4. **Migração silenciosa.** Um control de terceiros que antes reescrevia `call.request` agora recebe um
+   objeto congelado e falha fechado (sem corpo); está de acordo com D3, mas vale uma linha no guia de
+   extensões.
+
+## Reprodução
+Cópia detached do commit; mutações com `proofs/mutate-review.py` (fonte restaurada por `git checkout`
+depois de cada uma; `git status` limpo); probes em `proofs/review-probes.test.ts.txt` (copiar para
+`tests/` para rodar; os que começam com `PROBE-` lançam de propósito para imprimir o valor observado).
+Saídas: `proofs/mutations-review.json`, `proofs/mutations-proposed-tests.json`,
+`proofs/baseline-consumers.txt`.
+
+## Limites
+Sem PostgreSQL, sem suíte global, sem CI remoto. Não revisei o desempenho da projeção (cópia a cada hook)
+nem o runtime iterativo além do ponto `beforeDispatch` e da bateria já existente. Não é aceite de produção.

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { OperatorIdentity } from '@cvg/shared'
+import type { CaseAuthorityPort, CaseReadSnapshot } from '@cvg/persistence'
 import { buildServer } from '../server.ts'
+import {
+  provisionPrincipal,
+  SYNTHETIC_AUTHORITY_VERSION
+} from './case-authorization-fixtures.ts'
 import {
   createTrustedOperatorIdentityResolver,
   createTrustedOperatorIdentityToken
@@ -20,6 +25,55 @@ const identity = {
   tenantId: 'tenant_00000000-0000-4000-8000-000000000505'
 }
 
+/**
+ * SPEC 0262 §3: a trusted session is bound to the current principal, so every
+ * server of this suite composes the principal authority and the principals of
+ * the identities its tokens carry (the same port a verified adapter uses).
+ */
+const PRINCIPALS = [
+  {
+    operatorId: identity.operatorId,
+    role: 'Supervisor',
+    tenantId: identity.tenantId
+  },
+  {
+    operatorId: 'operator.rem21.session.next',
+    role: 'Supervisor',
+    tenantId: identity.tenantId
+  },
+  {
+    operatorId: 'operator.rem21.admin',
+    role: 'Admin',
+    tenantId: identity.tenantId
+  },
+  {
+    operatorId: 'operator.rem21.operator',
+    role: 'Operator',
+    tenantId: identity.tenantId
+  }
+] as const
+
+async function buildTrusted(
+  options: Record<string, unknown>
+): Promise<
+  ReturnType<typeof buildServer> & { caseAuthority: CaseAuthorityPort }
+> {
+  const app = buildServer({
+    ...options,
+    casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
+  } as never) as unknown as ReturnType<typeof buildServer> & {
+    caseAuthority: CaseAuthorityPort
+  }
+  for (const principal of PRINCIPALS) {
+    await provisionPrincipal(app, {
+      tenantId: principal.tenantId as never,
+      operatorId: principal.operatorId,
+      role: principal.role
+    })
+  }
+  return app
+}
+
 // SPEC0251 (§6 adjustment c): /v1/tasks is case-scoped and answers 503 in
 // trusted mode without a principal authority, which would mask the cause each
 // probe verifies (session cookie, logout, rotation, missing session store).
@@ -33,11 +87,13 @@ function localSessionStore(): OperatorSessionStore {
     async create(input: {
       identity: OperatorIdentity
       expiresAt: number
+      principalRevision: number
     }): Promise<OperatorSessionRecord> {
       const record: OperatorSessionRecord = {
         sessionId: 'session_rem21_005_synthetic',
         identity: input.identity,
-        expiresAt: input.expiresAt
+        expiresAt: input.expiresAt,
+        principalRevision: input.principalRevision
       }
       records.set(record.sessionId, record)
       return record
@@ -69,7 +125,7 @@ describe('REM21-005 trusted operator session API', () => {
       () => now,
       120
     )
-    const app = buildServer({
+    const app = await buildTrusted({
       identityMode: 'trusted',
       operatorIdentityResolver: resolver,
       operatorSessionStore: localSessionStore()
@@ -134,7 +190,7 @@ describe('REM21-005 trusted operator session API', () => {
       secret: key,
       now: () => now
     })
-    const app = buildServer({
+    const app = await buildTrusted({
       identityMode: 'trusted',
       operatorIdentityResolver: resolver,
       operatorSessionStore: localSessionStore()
@@ -210,7 +266,7 @@ describe('REM21-005 trusted operator session API', () => {
       now: () => now
     })
     const claim = vi.fn(async () => false)
-    const app = buildServer({
+    const app = await buildTrusted({
       identityMode: 'trusted',
       operatorIdentityResolver: resolver,
       operatorSessionStore: localSessionStore(),
@@ -240,7 +296,7 @@ describe('REM21-005 trusted operator session API', () => {
       secret: key,
       now: () => now
     })
-    const app = buildServer({
+    const app = await buildTrusted({
       identityMode: 'trusted',
       operatorIdentityResolver: resolver,
       operatorSessionStore: createInMemoryOperatorSessionStore()
@@ -316,7 +372,7 @@ describe('REM21-005 trusted operator session API', () => {
       secret: key,
       now: () => now
     })
-    const adminApp = buildServer({
+    const adminApp = await buildTrusted({
       identityMode: 'trusted',
       operatorIdentityResolver: adminResolver,
       operatorSessionStore: localSessionStore()
@@ -348,7 +404,7 @@ describe('REM21-005 trusted operator session API', () => {
       secret: key,
       now: () => now
     })
-    const operatorApp = buildServer({
+    const operatorApp = await buildTrusted({
       identityMode: 'trusted',
       operatorIdentityResolver: operatorResolver,
       operatorSessionStore: localSessionStore()
@@ -383,5 +439,127 @@ describe('REM21-005 trusted operator session API', () => {
     })
     expect(forgedRole.statusCode).toBe(403)
     await operatorApp.close()
+  })
+
+  it('SPEC 0262 §3/§6.2: same revision rotates the family; a moved revision starts a new one and old cookies die', async () => {
+    const inner = createInMemoryOperatorSessionStore()
+    const calls = { replace: 0, switchIdentity: 0 }
+    let counter = 0
+    const store: OperatorSessionStore = {
+      create: (input) => inner.create(input),
+      get: (id) => inner.get(id),
+      revoke: (id) => inner.revoke(id),
+      async replace(previous, input) {
+        calls.replace += 1
+        await inner.revoke(previous)
+        return inner.create(input)
+      },
+      async switchIdentity(previous, input) {
+        calls.switchIdentity += 1
+        counter += 1
+        await inner.revoke(previous)
+        return inner.create(input)
+      }
+    }
+    const resolver = createTrustedOperatorIdentityResolver({
+      secret: key,
+      now: () => now
+    })
+    const app = await buildTrusted({
+      identityMode: 'trusted',
+      operatorIdentityResolver: resolver,
+      operatorSessionStore: store
+    })
+    const login = (cookie?: string) =>
+      app.inject({
+        method: 'GET',
+        url: '/v1/session',
+        headers: {
+          ...(cookie ? { cookie } : {}),
+          'x-cvg-operator-token': createTrustedOperatorIdentityToken(
+            identity,
+            key,
+            () => now,
+            120
+          )
+        }
+      })
+    const cookieOf = (response: { headers: Record<string, unknown> }) =>
+      String(response.headers['set-cookie']).split(';', 1)[0]!
+    const first = await login()
+    expect(first.statusCode).toBe(200)
+    const a = cookieOf(first)
+    const second = await login(a)
+    expect(second.statusCode).toBe(200)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 0 })
+    const b = cookieOf(second)
+    const caseAuthority = (
+      app as unknown as { caseAuthority: CaseAuthorityPort }
+    ).caseAuthority
+    // A principal that moves between the session boundary and the handler
+    // (after the hook's read) is never a rotation of the old family.
+    const spy = vi
+      .spyOn(caseAuthority, 'readSnapshot')
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const result = await (
+          Object.getPrototypeOf(caseAuthority).readSnapshot as (
+            ...a: unknown[]
+          ) => Promise<unknown>
+        ).apply(caseAuthority, args)
+        const row = await caseAuthority.readSnapshot(
+          identity.tenantId as never,
+          (snapshot: CaseReadSnapshot) =>
+            snapshot.principal(identity.operatorId)
+        )
+        await provisionPrincipal(
+          { caseAuthority },
+          {
+            tenantId: identity.tenantId as never,
+            operatorId: identity.operatorId,
+            role: 'Supervisor',
+            expectedRevision: row!.revision
+          }
+        )
+        return result as never
+      })
+    const racing = await login(b)
+    spy.mockRestore()
+    expect(racing.statusCode).toBe(200)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 1 })
+    const racingCookie = cookieOf(racing)
+    // The principal moves (re-registered under a new matrix version).
+    const current = await caseAuthority.readSnapshot(
+      identity.tenantId as never,
+      (snapshot: CaseReadSnapshot) => snapshot.principal(identity.operatorId)
+    )
+    await provisionPrincipal(
+      { caseAuthority },
+      {
+        tenantId: identity.tenantId as never,
+        operatorId: identity.operatorId,
+        role: 'Supervisor',
+        expectedRevision: current!.revision
+      }
+    )
+    // The cookie issued under the older revision is refused at the request.
+    const stale = await app.inject({
+      method: 'GET',
+      url: PROTECTED_PROBE,
+      headers: { cookie: racingCookie }
+    })
+    expect(stale.statusCode).toBe(401)
+    expect(String(stale.headers['set-cookie'])).toContain('Max-Age=0')
+    // A new bootstrap on the moved revision is a new family, never a rotation.
+    const third = await login(racingCookie)
+    expect(third.statusCode).toBe(200)
+    expect(calls).toEqual({ replace: 1, switchIdentity: 2 })
+    expect(counter).toBe(2)
+    const fresh = await app.inject({
+      method: 'GET',
+      url: PROTECTED_PROBE,
+      headers: { cookie: cookieOf(third) }
+    })
+    expect(fresh.statusCode).toBe(200)
+    await app.close()
   })
 })

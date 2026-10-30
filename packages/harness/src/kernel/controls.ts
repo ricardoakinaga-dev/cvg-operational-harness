@@ -1,3 +1,4 @@
+import { coreHook } from './hook-authority.ts'
 import type {
   ApprovalEngine,
   ApprovalExecutionRequest,
@@ -175,26 +176,32 @@ export function budgetControl(): KernelPlugin {
         begin: (input, startedAt) => new DurationBudget(input, startedAt)
       }
       ctx.provide('budget', service)
-      ctx.on('model/before-call', async (call, next) => {
-        // The single budget gate (I11 / PDSH-004) is beginModelRequest in
-        // kernel/pipeline.ts; this hook only re-checks the duration window.
-        if (call.turn.budget.remainingMs() <= 0) {
-          return stop(
-            'MAX_DURATION',
-            'Duration budget exhausted before model execution.'
-          )
-        }
-        return next()
-      })
-      ctx.on('tool/pre-execute', async (call, next) => {
-        if (call.turn.budget.remainingMs() <= 0) {
-          return stop(
-            'MAX_DURATION',
-            'Duration budget exhausted before policy evaluation.'
-          )
-        }
-        return next()
-      })
+      ctx.on(
+        'model/before-call',
+        coreHook('model/before-call', async (call, next) => {
+          // The single budget gate (I11 / PDSH-004) is beginModelRequest in
+          // kernel/pipeline.ts; this hook only re-checks the duration window.
+          if (call.turn.budget.remainingMs() <= 0) {
+            return stop(
+              'MAX_DURATION',
+              'Duration budget exhausted before model execution.'
+            )
+          }
+          return next()
+        })
+      )
+      ctx.on(
+        'tool/pre-execute',
+        coreHook('tool/pre-execute', async (call, next) => {
+          if (call.turn.budget.remainingMs() <= 0) {
+            return stop(
+              'MAX_DURATION',
+              'Duration budget exhausted before policy evaluation.'
+            )
+          }
+          return next()
+        })
+      )
     }
   }
 }
@@ -229,12 +236,15 @@ export function pauseControl(
     provides: ['pause'],
     apply(ctx) {
       ctx.provide('pause', pause)
-      ctx.on('turn/before-step', async (turn, next) =>
-        (await pause.isPaused(turn.input.tenantId))
-          ? stop('HUMAN_TAKEOVER', PAUSED_RESPONSE, {
-              cause: 'operator_paused'
-            })
-          : next()
+      ctx.on(
+        'turn/before-step',
+        coreHook('turn/before-step', async (turn, next) =>
+          (await pause.isPaused(turn.input.tenantId))
+            ? stop('HUMAN_TAKEOVER', PAUSED_RESPONSE, {
+                cause: 'operator_paused'
+              })
+            : next()
+        )
       )
       // Guards run again after the loop's checkpoint and after the approval
       // reservation, so a pause acknowledged in those windows still blocks the
@@ -352,59 +362,62 @@ export function policyControl(policy: PolicyEngine): KernelPlugin {
     requires: ['budget'],
     apply(ctx) {
       ctx.provide('policy', policy)
-      ctx.on('tool/pre-execute', async (call, next) => {
-        const { turn, tool, invocation } = call
-        let decision
-        try {
-          const decisionOrDeadline = await turn.budget.withDeadline(() =>
-            policy.evaluate({
-              tenantId: turn.input.tenantId,
-              agentId: turn.input.agent.id,
-              action: 'tool.execute',
-              tool,
-              invocation,
-              correlationId: turn.input.correlationId
-            })
-          )
-          if (decisionOrDeadline === DEADLINE) {
-            return stop(
-              'MAX_DURATION',
-              'Duration budget exhausted during policy evaluation.'
+      ctx.on(
+        'tool/pre-execute',
+        coreHook('tool/pre-execute', async (call, next) => {
+          const { turn, tool, invocation } = call
+          let decision
+          try {
+            const decisionOrDeadline = await turn.budget.withDeadline(() =>
+              policy.evaluate({
+                tenantId: turn.input.tenantId,
+                agentId: turn.input.agent.id,
+                action: 'tool.execute',
+                tool,
+                invocation,
+                correlationId: turn.input.correlationId
+              })
             )
-          }
-          decision = decisionOrDeadline
-          turn.metadata.policy = decision.outcome
-          call.policyDecision = decision
-        } catch (error) {
-          return stop(
-            'INSUFFICIENT_EVIDENCE',
-            `Policy evaluation failed: ${errorMessage(error)}.`,
-            { cause: 'policy_failed' }
-          )
-        }
-        switch (decision.outcome) {
-          case 'DENY':
-            return stop('POLICY_DENIED', decision.reason, {
-              cause: 'policy_denied'
-            })
-          case 'HANDOFF':
-            return stop('HUMAN_TAKEOVER', decision.reason, {
-              cause: 'policy_handoff'
-            })
-          case 'REQUIRE_APPROVAL':
-            call.needsApproval = true
-            break
-          case 'ALLOW':
-            break
-          default:
+            if (decisionOrDeadline === DEADLINE) {
+              return stop(
+                'MAX_DURATION',
+                'Duration budget exhausted during policy evaluation.'
+              )
+            }
+            decision = decisionOrDeadline
+            turn.metadata.policy = decision.outcome
+            call.policyDecision = decision
+          } catch (error) {
             return stop(
               'INSUFFICIENT_EVIDENCE',
-              'Policy returned an unsupported decision.',
-              { cause: 'policy_unsupported' }
+              `Policy evaluation failed: ${errorMessage(error)}.`,
+              { cause: 'policy_failed' }
             )
-        }
-        return next()
-      })
+          }
+          switch (decision.outcome) {
+            case 'DENY':
+              return stop('POLICY_DENIED', decision.reason, {
+                cause: 'policy_denied'
+              })
+            case 'HANDOFF':
+              return stop('HUMAN_TAKEOVER', decision.reason, {
+                cause: 'policy_handoff'
+              })
+            case 'REQUIRE_APPROVAL':
+              call.needsApproval = true
+              break
+            case 'ALLOW':
+              break
+            default:
+              return stop(
+                'INSUFFICIENT_EVIDENCE',
+                'Policy returned an unsupported decision.',
+                { cause: 'policy_unsupported' }
+              )
+          }
+          return next()
+        })
+      )
     }
   }
 }
@@ -431,20 +444,50 @@ export function approvalsControl(
     requires: ['budget', 'policy'],
     apply(ctx) {
       ctx.provide('approvals', approvals)
-      ctx.on('tool/pre-execute', async (call, next) => {
-        if (!call.needsApproval && !call.tool.requiresApproval) return next()
-        const gate = await decide(call)
-        return gate ?? next()
-      })
+      ctx.on(
+        'tool/pre-execute',
+        coreHook('tool/pre-execute', async (call, next) => {
+          if (!requiresGrant(call)) return next()
+          const gate = await decide(call)
+          return gate ?? next()
+        })
+      )
       // The reservation happens around dispatch, after every control and the
       // loop's own bookkeeping (iterative checkpoint) ran, and before the body.
-      ctx.on('tool/execute', async (call, next) => {
-        if (!call.grant) return next()
-        const gate = await reserve(call, call.grant)
-        return gate ? { kind: 'not_started', gate } : next()
-      })
-      ctx.on('tool/post-execute', (call, outcome) => settle(call, outcome))
+      ctx.on(
+        'tool/execute',
+        coreHook('tool/execute', async (call, next) => {
+          if (!call.grant) {
+            return requiresGrant(call)
+              ? {
+                  kind: 'not_started',
+                  gate: stop(
+                    'INSUFFICIENT_EVIDENCE',
+                    'Approved execution requires a bound single-use grant before dispatch.',
+                    { cause: 'approval_unbound' }
+                  )
+                }
+              : next()
+          }
+          const gate = await reserve(call, call.grant)
+          return gate ? { kind: 'not_started', gate } : next()
+        })
+      )
+      ctx.on(
+        'tool/post-execute',
+        coreHook('tool/post-execute', (call, outcome) => settle(call, outcome))
+      )
     }
+  }
+
+  // Defense in depth: the final dispatch control must not infer approval
+  // absence from a missing grant. Each independent requirement stays binding.
+  function requiresGrant(call: ToolCallState): boolean {
+    return (
+      call.tool.requiresApproval ||
+      call.needsApproval ||
+      call.policyDecision?.outcome === 'REQUIRE_APPROVAL'
+    )
   }
 
   /** Asks once; a missing, failing or unsupported answer never proceeds (I4). */
@@ -699,37 +742,41 @@ export function auditControl(
     requires: ['budget'],
     apply(ctx) {
       ctx.provide('audit', audit)
-      ctx.on('turn/end', async (turn, result) => {
-        try {
-          const window = Math.max(turn.budget.remainingMs(), AUDIT_GRACE_MS)
-          const recorded = await turn.budget.withDeadline(
-            () =>
-              audit.append({
-                actor: turn.input.agent.id,
-                agent: turn.input.agent.id,
-                tenant: turn.input.tenantId,
-                action,
-                policy: turn.metadata.policy,
-                approval: turn.metadata.approval,
-                tool: turn.metadata.tool,
-                result: result.stopReason,
-                timestamp: new Date().toISOString(),
-                traceId: turn.input.traceId,
-                correlationId: turn.input.correlationId
-              }),
-            window
-          )
-          if (recorded === DEADLINE) throw new Error('audit deadline exceeded')
-          return result
-        } catch {
-          return {
-            ...result,
-            response:
-              'Execution could not be completed because audit recording failed.',
-            stopReason: 'INSUFFICIENT_EVIDENCE'
+      ctx.on(
+        'turn/end',
+        coreHook('turn/end', async (turn, result) => {
+          try {
+            const window = Math.max(turn.budget.remainingMs(), AUDIT_GRACE_MS)
+            const recorded = await turn.budget.withDeadline(
+              () =>
+                audit.append({
+                  actor: turn.input.agent.id,
+                  agent: turn.input.agent.id,
+                  tenant: turn.input.tenantId,
+                  action,
+                  policy: turn.metadata.policy,
+                  approval: turn.metadata.approval,
+                  tool: turn.metadata.tool,
+                  result: result.stopReason,
+                  timestamp: new Date().toISOString(),
+                  traceId: turn.input.traceId,
+                  correlationId: turn.input.correlationId
+                }),
+              window
+            )
+            if (recorded === DEADLINE)
+              throw new Error('audit deadline exceeded')
+            return result
+          } catch {
+            return {
+              ...result,
+              response:
+                'Execution could not be completed because audit recording failed.',
+              stopReason: 'INSUFFICIENT_EVIDENCE'
+            }
           }
-        }
-      })
+        })
+      )
     }
   }
 }

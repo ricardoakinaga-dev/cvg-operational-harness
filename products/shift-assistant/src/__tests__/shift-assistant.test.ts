@@ -84,7 +84,7 @@ const THOR: Organized = {
       nome: 'Thor',
       leito: '3',
       especie: 'canino',
-      evolucao: 'Vomitou 2 vezes, piora clínica',
+      evolucao: 'Vomitou duas vezes, piora clínica',
       exames_pedidos: ['hemograma', 'bioquímico'],
       condutas: []
     }
@@ -261,7 +261,7 @@ describe('ShiftAssistant', () => {
     ).toBe(true)
     const [reply] = env.waha.textsTo(ANA)
     expect(reply).toContain('Thor · ID não informado · canino · leito 3')
-    expect(reply).toContain('Evolução: Vomitou 2 vezes, piora clínica')
+    expect(reply).toContain('Evolução: Vomitou duas vezes, piora clínica')
     expect(reply).toContain(
       'Exames solicitados: hemograma; bioquímico (lançar na comanda)'
     )

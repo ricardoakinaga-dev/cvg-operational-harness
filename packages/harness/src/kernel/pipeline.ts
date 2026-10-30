@@ -1,3 +1,11 @@
+import {
+  hookState,
+  hookValue,
+  observation,
+  reconcileGate,
+  reconcileOutcome,
+  waterfall
+} from './hook-authority.ts'
 import { isAbsolute } from 'node:path'
 import type {
   ModelRequest,
@@ -17,6 +25,7 @@ import {
   type KernelLogEvent,
   type KernelStop,
   type ToolCallState,
+  type ToolCallView,
   type ToolOutcome,
   type TurnBudget,
   type TurnState
@@ -71,6 +80,10 @@ function snapshot<T>(value: T): T {
   }
 }
 
+function durationOf(outcome: ToolOutcome | undefined): number {
+  return outcome && 'durationMs' in outcome ? outcome.durationMs : 0
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'unknown failure'
 }
@@ -82,6 +95,7 @@ export function runGate<S>(
   state: S
 ): Promise<KernelGate> {
   const listeners = host.listeners(point) as unknown as readonly {
+    readonly kind: string
     readonly plugin: string
     readonly fn: (
       state: S,
@@ -91,14 +105,18 @@ export function runGate<S>(
   const run = (index: number): Promise<KernelGate> => {
     const entry = listeners[index]
     if (!entry) return Promise.resolve(PROCEED)
-    return entry
-      .fn(state, () => run(index + 1))
-      .catch((error: unknown) =>
+    return waterfall(
+      entry,
+      state,
+      () => run(index + 1),
+      (reason) =>
         stop(
           'INSUFFICIENT_EVIDENCE',
-          `${entry.plugin} failed at ${point}: ${errorMessage(error)}.`
-        )
-      )
+          `${entry.plugin} failed at ${point}: ${reason}.`
+        ),
+      reconcileGate,
+      (value) => value.kind === 'proceed'
+    )
   }
   return run(0)
 }
@@ -192,7 +210,9 @@ export async function runGuards(
   for (const guard of host.guards()) {
     let verdict: GuardVerdict
     try {
-      verdict = await guard(call)
+      verdict = await guard(
+        hookState({ kind: 'observer', plugin: 'guard', fn: guard }, call)
+      )
     } catch (error) {
       verdict = `A guard failed: ${errorMessage(error)}.`
     }
@@ -254,7 +274,7 @@ export interface ToolPipelineHooks {
    * effect; the iterative loop persists its checkpoint here.
    */
   readonly beforeDispatch?: (
-    call: ToolCallState
+    call: ToolCallView
   ) => Promise<KernelStop | undefined>
 }
 
@@ -307,7 +327,12 @@ export async function runToolCall(
 
   let hooked: KernelStop | undefined
   try {
-    hooked = await hooks.beforeDispatch?.(call)
+    hooked = await hooks.beforeDispatch?.(
+      hookState(
+        { kind: 'observer', plugin: 'checkpoint', fn: hooks.beforeDispatch },
+        call
+      )
+    )
   } catch (error) {
     // The loop's own checkpoint failed: the logged call is still closed once
     // and the original failure reaches the loop unchanged (AUD-0598 R03).
@@ -470,7 +495,9 @@ async function dispatch(
     operationKey: call.invocation.operationKey
   }
   let started = false
-  const terminal = async (): Promise<ToolOutcome> => {
+  let continuationFault = false
+  let physical: ToolOutcome | undefined
+  const executeBody = async (): Promise<ToolOutcome> => {
     if (turn.budget.remainingMs() <= 0) {
       return {
         kind: 'not_started',
@@ -484,6 +511,14 @@ async function dispatch(
     // a pause or a cancellation still prevents the effect (F01/F02).
     const blocked = await revalidate(host, call)
     if (blocked) return { kind: 'not_started', gate: blocked }
+    if (continuationFault)
+      return {
+        kind: 'not_started',
+        gate: stop(
+          'INSUFFICIENT_EVIDENCE',
+          'Internal continuation invalidated before dispatch.'
+        )
+      }
     try {
       await host.get('effects').started(ref)
     } catch (error) {
@@ -531,40 +566,64 @@ async function dispatch(
       }
     }
   }
+  const terminal = async (): Promise<ToolOutcome> => {
+    const value = await executeBody()
+    if (started) physical = value
+    return value
+  }
   const listeners = host.listeners('tool/execute')
   const run = (index: number): Promise<ToolOutcome> => {
     const entry = listeners[index]
     if (!entry) return terminal()
-    return entry
-      .fn(call, () => run(index + 1))
-      .catch(
-        (error: unknown): ToolOutcome =>
-          started
-            ? {
-                kind: 'threw',
-                error: `${entry.plugin} failed: ${errorMessage(error)}`,
-                durationMs: 0
-              }
-            : {
-                kind: 'not_started',
-                gate: stop(
-                  'INSUFFICIENT_EVIDENCE',
-                  `${entry.plugin} failed before dispatch: ${errorMessage(error)}.`
-                )
-              }
-      )
+    const failure = (reason: string): ToolOutcome => {
+      continuationFault = true
+      return started
+        ? {
+            kind: 'threw',
+            error: `${entry.plugin} failed: ${reason}`,
+            durationMs: durationOf(physical)
+          }
+        : {
+            kind: 'not_started',
+            gate: stop(
+              'INSUFFICIENT_EVIDENCE',
+              `${entry.plugin} failed before dispatch: ${reason}.`
+            )
+          }
+    }
+    return waterfall(
+      entry,
+      call,
+      () => run(index + 1),
+      failure,
+      (before, proposed, exposed) => {
+        if (before) return reconcileOutcome(before, proposed, exposed)
+        const value = observation(proposed) as ToolOutcome | undefined
+        if (value?.kind === 'not_started') {
+          const gate = reconcileGate(undefined, value.gate)
+          return gate.kind === 'stop'
+            ? { kind: 'not_started', gate }
+            : failure('Invalid not-started gate.')
+        }
+        if (value?.kind === 'succeeded' && value.result?.status === 'SUCCEEDED')
+          return value
+        return failure('Invalid result before dispatch.')
+      },
+      (value) => value.kind === 'succeeded'
+    )
   }
   const outcome = await run(0)
-  if (started) {
+  // `physical` is assigned exactly when the body was started.
+  if (physical) {
     try {
-      await host.get('effects').finished(ref, outcome.kind)
+      await host.get('effects').finished(ref, physical.kind)
     } catch {
       // The body already ran. A missing settlement is uncertain, never a
       // successful effect or permission to retry the body/ledger.
       return {
         kind: 'threw',
         error: 'unknown_effect: effect_settlement_failed',
-        durationMs: 'durationMs' in outcome ? outcome.durationMs : 0
+        durationMs: durationOf(outcome)
       }
     }
   }
@@ -579,7 +638,9 @@ async function postExecute(
   let current = outcome
   for (const entry of host.listeners('tool/post-execute')) {
     try {
-      current = await entry.fn(call, current)
+      const exposed = hookValue(entry, current)
+      const proposed = await entry.fn(hookState(entry, call), exposed)
+      current = reconcileOutcome(current, proposed, exposed)
     } catch (error) {
       // I7: a failing settlement after an effect never reads as success.
       if (current.kind === 'succeeded') {

@@ -12,7 +12,8 @@ import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import {
   AuditRepository,
   TaskRepository,
-  type InMemoryDatabase
+  type InMemoryDatabase,
+  type PostgresQueryable
 } from '@cvg/persistence'
 import type {
   AppointmentDraftRecord,
@@ -126,6 +127,15 @@ export type MaybePromise<T> = T | Promise<T>
  * implementation answers synchronously; the PostgreSQL one answers with
  * promises. Callers await either shape.
  */
+/**
+ * SPEC 0262: optional case-authorization hook of a journey task. The
+ * PostgreSQL adapter runs it inside the creation transaction; the in-memory
+ * repository ignores it (the API runs the whole write in the authority queue).
+ */
+export interface JourneyTaskAuthorization {
+  readonly authorize?: (client: PostgresQueryable) => Promise<void>
+}
+
 export interface JourneyRepositoryPort {
   searchOwnerByPhone(
     rawTenantId: TenantId,
@@ -155,7 +165,10 @@ export interface JourneyRepositoryPort {
   listAppointmentDrafts(
     rawTenantId: TenantId
   ): MaybePromise<AppointmentDraftRecord[]>
-  createJourneyTask(input: CreateJourneyTaskInput): MaybePromise<TaskRecord>
+  createJourneyTask(
+    input: CreateJourneyTaskInput,
+    options?: JourneyTaskAuthorization
+  ): MaybePromise<TaskRecord>
   recordHandoff(input: RecordHandoffInput): MaybePromise<void>
 }
 

@@ -182,7 +182,7 @@ describe('own production session bootstrap', () => {
     )
     expect(client.query.mock.calls.map(([query]) => query.text)).toEqual([
       'BEGIN READ ONLY; SET LOCAL statement_timeout = 1000',
-      'SELECT * FROM "auth".operator_session_get($1)',
+      'SELECT * FROM "auth".operator_session_get_v2($1)',
       'COMMIT'
     ])
     for (const [query] of client.query.mock.calls)

@@ -9,6 +9,7 @@ import {
   type ApprovalConsumption,
   type ApprovalDecisionInput,
   type ApprovalEngineOptions,
+  type ApprovalEvent,
   type ApprovalRecord,
   type ApprovalRequestInput,
   type ApprovalReserveInput,
@@ -36,6 +37,18 @@ export interface PostgresApprovalAuthorityOptions {
    */
   clock?: () => Date
 }
+
+export type DecisionPhaseResult =
+  | {
+      readonly outcome: 'OK'
+      readonly record: ApprovalRecord
+      readonly events: readonly ApprovalEvent[]
+    }
+  | {
+      readonly outcome: 'COMMIT_EXPIRED'
+      readonly error: ApprovalError
+      readonly events: readonly ApprovalEvent[]
+    }
 
 export interface RuntimeApprovalRow extends QueryResultRow {
   tenant_id: string
@@ -89,7 +102,7 @@ export interface RuntimeApprovalRow extends QueryResultRow {
   updated_at: Date | string
 }
 
-interface LoadedApproval {
+export interface LoadedApproval {
   record: ApprovalRecord
   revision: number
 }
@@ -370,6 +383,32 @@ function recordValues(record: ApprovalRecord): unknown[] {
 
 function cloneRecord(record: ApprovalRecord): ApprovalRecord {
   return structuredClone(record)
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, nested: unknown) =>
+    nested && typeof nested === 'object' && !Array.isArray(nested)
+      ? Object.fromEntries(
+          Object.entries(nested as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
+        )
+      : nested
+  )
+}
+
+/** SPEC 0262 §4.3: only `status` and `expiredAt` may differ. */
+function onlyExpiryChanged(
+  before: ApprovalRecord,
+  after: ApprovalRecord
+): boolean {
+  const strip = (record: ApprovalRecord): unknown => {
+    const copy: Record<string, unknown> = { ...record }
+    delete copy.status
+    delete copy.expiredAt
+    return copy
+  }
+  return stableJson(strip(before)) === stableJson(strip(after))
 }
 
 function recordsEquivalent(
@@ -672,6 +711,112 @@ export class PostgresApprovalAuthority implements ApprovalAuthority {
       )
       return result.rows.map(mapRuntimeApprovalRow)
     })
+  }
+
+  /**
+   * SPEC 0262 §4.2: the approval row, locked `FOR UPDATE` in the caller's
+   * transaction (after the execution row).
+   */
+  async lockInTransaction(
+    client: PostgresPoolClient,
+    tenantId: string,
+    approvalId: string
+  ): Promise<LoadedApproval | undefined> {
+    return this.#selectForUpdate(client, tenantId, approvalId)
+  }
+
+  /**
+   * SPEC 0262 §4.3 — the new decision phase, computed on a detached store
+   * seeded with the locked row. No SQL runs while the engine computes.
+   *
+   * - OK: the final state is persisted with one compare-and-set.
+   * - COMMIT_EXPIRED: ONLY when the engine raised `expired` for a
+   *   REQUESTED/PENDING record, the final status is EXPIRED and nothing but
+   *   `status`/`expiredAt` changed in the step that threw. The intermediate
+   *   submit is discarded; only the expiry is persisted, and the original
+   *   error is handed back so the owner rethrows it AFTER the commit.
+   * - anything else rethrows, so the owning transaction rolls back.
+   *
+   * Engine events are collected, never emitted here; the owner publishes them
+   * after the commit is acknowledged.
+   */
+  async applyDecisionPhaseInTransaction(
+    client: PostgresPoolClient,
+    loaded: LoadedApproval,
+    plan: {
+      readonly submitOperatorId?: string
+      readonly verdict: 'APPROVED' | 'REJECTED'
+      readonly input: ApprovalDecisionInput
+    }
+  ): Promise<DecisionPhaseResult> {
+    const tenantId = loaded.record.tenantId
+    const approvalId = loaded.record.approvalId
+    const events: ApprovalEvent[] = []
+    const store = new InMemoryApprovalStore()
+    store.insert(cloneRecord(loaded.record))
+    const engine = new ApprovalEngine({
+      ...this.#engineOptions,
+      store,
+      onEvent: (event) => {
+        events.push(event)
+      }
+    })
+    const startedFrom = loaded.record.status
+    let beforeStep = cloneRecord(loaded.record)
+    try {
+      if (plan.submitOperatorId !== undefined) {
+        engine.submit(tenantId, approvalId, plan.submitOperatorId)
+        beforeStep = cloneRecord(store.get(tenantId, approvalId)!)
+      }
+      const current = store.get(tenantId, approvalId)!
+      if (current.status === 'PENDING') {
+        if (plan.verdict === 'APPROVED') {
+          engine.approve(tenantId, approvalId, plan.input)
+        } else {
+          engine.reject(tenantId, approvalId, plan.input)
+        }
+      }
+    } catch (error) {
+      const final = store.get(tenantId, approvalId)
+      if (
+        error instanceof ApprovalError &&
+        error.code === 'expired' &&
+        (startedFrom === 'REQUESTED' || startedFrom === 'PENDING') &&
+        final !== undefined &&
+        final.status === 'EXPIRED' &&
+        onlyExpiryChanged(beforeStep, final)
+      ) {
+        const expired: ApprovalRecord = {
+          ...cloneRecord(loaded.record),
+          status: 'EXPIRED',
+          ...(final.expiredAt !== undefined
+            ? { expiredAt: final.expiredAt }
+            : {})
+        }
+        if (!(await this.#compareAndSet(client, loaded, expired))) {
+          throw new DomainError(
+            'conflict',
+            `Approval ${approvalId} compare-and-set failed`
+          )
+        }
+        return {
+          outcome: 'COMMIT_EXPIRED',
+          error,
+          events: events.filter((event) => event.type === 'approval.expired')
+        }
+      }
+      throw error
+    }
+    const decided = store.get(tenantId, approvalId)!
+    if (!recordsEquivalent(loaded.record, decided)) {
+      if (!(await this.#compareAndSet(client, loaded, decided))) {
+        throw new DomainError(
+          'conflict',
+          `Approval ${approvalId} compare-and-set failed`
+        )
+      }
+    }
+    return { outcome: 'OK', record: decided, events }
   }
 
   #createEngine(store: InMemoryApprovalStore): ApprovalEngine {

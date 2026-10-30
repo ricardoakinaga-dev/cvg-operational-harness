@@ -103,6 +103,8 @@ import {
   InMemoryApiCreation,
   InMemoryDatabase,
   PostgresApiCreation,
+  PostgresRuntimeApprovalDecision,
+  PostgresAuthorizedWrites,
   type ApiCreationPort,
   OutboxRepository,
   PostgresApprovalAuthority,
@@ -169,6 +171,16 @@ import {
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
+import {
+  installOperatorPrincipalGuard,
+  recordRegisteredRoutes
+} from './operator-principal-guard.ts'
+import type { RegisteredRoute } from './operator-route-class.ts'
+import {
+  assertSessionBinding,
+  readCurrentPrincipal,
+  SessionBindingError
+} from './operator-session-binding.ts'
 import type { OidcTransport } from './oidc-authority.ts'
 import {
   parseOperatorLoginConfig,
@@ -190,6 +202,7 @@ import {
   mapCaseMutationError,
   presentExecutionForCaller,
   registerCaseAuthorizationRoutes,
+  runAuthorizedCaseMutation,
   resolveCaseReadScope,
   submitExecutionWithCase,
   toSafeCaseError,
@@ -449,6 +462,16 @@ export function buildServer(options: BuildServerOptions = {}) {
   const operationalApprovalAuthority =
     options.operationalApprovalAuthority ??
     createOperationalApprovalAuthority(options.persistence)
+  const runtimeApprovalDecision =
+    options.persistence?.kind === 'postgres-pool' &&
+    operationalApprovalAuthority instanceof PostgresApprovalAuthority &&
+    operationalExecution instanceof PostgresOperationalExecutionStore
+      ? new PostgresRuntimeApprovalDecision(
+          options.persistence.pool,
+          operationalApprovalAuthority,
+          operationalExecution
+        )
+      : null
   const operationalApprovals = new DurableApprovalEngineAdapter(
     operationalApprovalAuthority
   )
@@ -543,6 +566,10 @@ export function buildServer(options: BuildServerOptions = {}) {
       caseAuthority
     }
   )
+  // SPEC 0262 §5: the registered inventory (method + template) and its class.
+  const routeRegistry: RegisteredRoute[] = []
+  recordRegisteredRoutes(app, routeRegistry)
+  Object.assign(app, { operatorRouteInventory: routeRegistry })
   app.setErrorHandler((error, _request, reply) => {
     const failure = classifyHttpRequestError(error)
     reply.code(failure.statusCode)
@@ -585,14 +612,38 @@ export function buildServer(options: BuildServerOptions = {}) {
       consoleOrigin: options.operatorLogin.consoleOrigin
     })
   }
+  // SPEC 0262: the principal rules shared by the session binding and the case policy.
+  const principalPolicy = {
+    identityMode,
+    authorityVersion:
+      options.operatorLogin?.authorityVersion ??
+      options.casePrincipalAuthority?.authorityVersion ??
+      null
+  }
   if (identityMode === 'trusted' && options.operatorSessionStore) {
     installOperatorSessionHook({
       app,
       cookiePolicy: operatorCookiePolicy,
       operatorSessionStore: options.operatorSessionStore,
+      caseAuthority,
+      principalPolicy,
       sessionIdentityByHeaders,
       sessionRecordByHeaders,
       sessionStoreFailureByHeaders
+    })
+  }
+  if (identityMode === 'trusted') {
+    installOperatorPrincipalGuard({
+      app,
+      caseAuthority,
+      principalPolicy,
+      cookiePolicy: operatorCookiePolicy,
+      resolveIdentity: (headers) => {
+        if (!operatorIdentityResolver) throw new Error('no resolver')
+        return operatorIdentityResolver(headers)
+      },
+      sessionRecordByHeaders,
+      registry: routeRegistry
     })
   }
   app.addHook('onRequest', async (request) => {
@@ -817,15 +868,38 @@ export function buildServer(options: BuildServerOptions = {}) {
   })
   // SPEC0176: one dependency bag for the case readers, the registry and the
   // execution projection used by mutation responses.
+  /**
+   * SPEC 0262: a PostgreSQL authority only hands its lock hook to the
+   * PostgreSQL writers; any other pairing would commit the write without the
+   * authorization unit, so it is refused before any write.
+   */
+  const assertRuntimeApprovalDecisionComposition = (): void => {
+    if (
+      caseAuthority instanceof PostgresCaseAuthority &&
+      !runtimeApprovalDecision
+    ) {
+      throw new DomainError(
+        'configuration_error',
+        'Runtime approval decisions are not available in this persistence composition'
+      )
+    }
+  }
+
+  const assertAuthorizedWriteComposition = (): void => {
+    if (
+      caseAuthority instanceof PostgresCaseAuthority &&
+      !(persistence.authorizedWrites instanceof PostgresAuthorizedWrites)
+    ) {
+      throw new DomainError(
+        'configuration_error',
+        'Authorized writes are not available in this persistence composition'
+      )
+    }
+  }
+
   const caseRouteDeps: CaseRouteDependencies = {
     caseAuthority,
-    principalPolicy: {
-      identityMode,
-      authorityVersion:
-        options.operatorLogin?.authorityVersion ??
-        options.casePrincipalAuthority?.authorityVersion ??
-        null
-    },
+    principalPolicy,
     operationalExecution,
     ...(options.executionSteps
       ? { executionSteps: options.executionSteps }
@@ -978,11 +1052,32 @@ export function buildServer(options: BuildServerOptions = {}) {
       }
       // Rotation keeps the session family (SPEC 0144, AUD-0601 F02): logout
       // with any digest of the lineage then revokes every successor.
+      // SPEC 0262 §3: the cookie binds the principal revision read now, from
+      // the data plane. A missing/inactive principal is a 401, an outage a 503.
+      let principalRevision: number
+      try {
+        principalRevision = (
+          await readCurrentPrincipal(caseAuthority, principalPolicy, identity)
+        ).revision
+      } catch (error) {
+        if (error instanceof SessionBindingError && error.status === 401) {
+          throw new DomainError(
+            'unauthorized',
+            'Operator principal is not current; sign in again'
+          )
+        }
+        throw new DomainError(
+          'configuration_error',
+          'Operator principal is unavailable'
+        )
+      }
       const sameOperator =
         existing !== undefined &&
         existing.identity.tenantId === identity.tenantId &&
         existing.identity.operatorId === identity.operatorId &&
-        existing.identity.role === identity.role
+        existing.identity.role === identity.role &&
+        // A moved revision is a new family (switchIdentity), never a rotation.
+        existing.principalRevision === principalRevision
       const rotate =
         sameOperator && options.operatorSessionStore.replace !== undefined
       // Any other presented cookie — another identity, or a rotated/stale
@@ -994,7 +1089,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         operatorCookiePolicy
       )
       const retireLineage = !rotate && presentedSessionId !== null
-      const next = { identity, expiresAt: Number(claims.exp) * 1000 }
+      const next = {
+        identity,
+        expiresAt: Number(claims.exp) * 1000,
+        principalRevision
+      }
       const store = options.operatorSessionStore
       let record: OperatorSessionRecord
       try {
@@ -1015,6 +1114,29 @@ export function buildServer(options: BuildServerOptions = {}) {
         return fail(
           'configuration_error',
           'Operator session store is unavailable',
+          correlationId
+        )
+      }
+      // SPEC 0262 §6.2: re-read the principal before Set-Cookie; a moved
+      // revision retires the family just created and no cookie is emitted.
+      try {
+        await assertSessionBinding(caseAuthority, principalPolicy, record)
+      } catch (error) {
+        try {
+          await store.revoke(record.sessionId)
+        } catch {
+          // The family without a disclosed token is retained; no cookie.
+        }
+        if (error instanceof SessionBindingError && error.status === 401) {
+          throw new DomainError(
+            'unauthorized',
+            'Operator principal is not current; sign in again'
+          )
+        }
+        reply.code(503)
+        return fail(
+          'configuration_error',
+          'Operator principal is unavailable',
           correlationId
         )
       }
@@ -1370,165 +1492,199 @@ export function buildServer(options: BuildServerOptions = {}) {
           kind: 'execution',
           executionId: params.executionId
         })
-        const execution = await operationalExecution.get(
-          tenantId,
-          params.executionId
-        )
-        if (!execution) {
-          throw new DomainError('not_found', 'Execution not found')
-        }
-        if (execution.approvalId !== params.approvalId) {
-          throw new DomainError('not_found', 'Approval not found')
-        }
-        let approval = await operationalApprovalAuthority.get(
-          tenantId,
-          params.approvalId
-        )
-        if (
-          approval.executionRef !== execution.id ||
-          approval.agentId !== execution.request.runtime.agent.id ||
-          approval.agentVersion !== execution.request.runtime.agent.version ||
-          approval.correlationId !== execution.request.runtime.correlationId
-        ) {
-          throw new DomainError('not_found', 'Approval not found')
-        }
         const decision = body.decision
         const decisionReason = body.note
         const decisionActorType =
           identity.role === 'Supervisor' ? ('Supervisor' as const) : 'Approver'
-        if (
-          execution.state !== 'WAITING_APPROVAL' &&
-          (approval.status === 'PENDING' || approval.status === 'REQUESTED')
-        ) {
-          throw new DomainError(
-            'conflict',
-            'Execution is no longer waiting for this approval decision'
-          )
-        }
-        if (
-          execution.state === 'WAITING_APPROVAL' &&
-          ['RESERVED', 'EXECUTING', 'EXECUTED'].includes(approval.status)
-        ) {
-          throw new DomainError(
-            'conflict',
-            'Approval has already entered effect execution'
-          )
-        }
-        if (approval.status === 'REQUESTED') {
-          try {
-            approval = await operationalApprovalAuthority.submit(
-              tenantId,
-              approval.approvalId,
-              approval.operatorId
-            )
-          } catch (error) {
-            const refreshed = await operationalApprovalAuthority.get(
-              tenantId,
-              approval.approvalId
-            )
-            if (refreshed.status === 'REQUESTED') throw error
-            approval = refreshed
-          }
-        }
-        if (decision === 'APPROVED') {
-          if (approval.status === 'PENDING') {
-            approval = await operationalApprovalAuthority.approve(
-              tenantId,
-              approval.approvalId,
-              {
-                approverId: identity.operatorId,
-                decisionActorType,
-                decisionCorrelationId: correlationId,
-                commandKey,
-                ...(decisionReason !== undefined
-                  ? { reason: decisionReason }
-                  : {})
-              }
-            )
-          } else if (
-            !['APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED'].includes(
-              approval.status
-            )
-          ) {
-            throw new DomainError(
-              'conflict',
-              'Approval is not available for approval'
-            )
-          }
-        } else if (approval.status === 'PENDING') {
-          approval = await operationalApprovalAuthority.reject(
-            tenantId,
-            approval.approvalId,
-            {
-              approverId: identity.operatorId,
-              decisionActorType,
-              decisionCorrelationId: correlationId,
-              commandKey,
-              ...(decisionReason !== undefined
-                ? { reason: decisionReason }
-                : {})
-            }
-          )
-        } else if (approval.status !== 'REJECTED') {
-          throw new DomainError(
-            'conflict',
-            'Approval is not available for rejection'
-          )
-        }
-
-        const decisionActorId = approval.approverId
-        const persistedDecisionActorType = approval.decisionActorType
-        const persistedDecisionCorrelation = approval.decisionCorrelationId
-        const persistedDecisionCommandKey = approval.decisionCommandKey
-        if (
-          !decisionActorId ||
-          !persistedDecisionActorType ||
-          !persistedDecisionCorrelation ||
-          !persistedDecisionCommandKey
-        ) {
-          throw new DomainError(
-            'conflict',
-            'Approval decision causality is incomplete'
-          )
-        }
-
-        const resolved = await operationalExecution.resolveApproval({
+        assertRuntimeApprovalDecisionComposition()
+        const executionId = params.executionId
+        const approvalId = params.approvalId
+        // SPEC 0262: the case policy and the whole decision share one unit
+        // (PostgreSQL: one transaction; memory: the authority queue).
+        const { approval, resolved } = await runAuthorizedCaseMutation(
+          caseRouteDeps,
+          identity,
           tenantId,
-          executionId: execution.id,
-          approvalId: approval.approvalId,
-          actorId: decisionActorId,
-          decision,
-          ...(approval.decisionReason !== undefined
-            ? { reason: approval.decisionReason }
-            : {})
-        })
-        // AUD19-003: the decision audit event is appended unconditionally.
-        // `audit.append` deduplicates `approval_decision` by
-        // (tenant, approvalId, decision), so retries after a crash between
-        // resume and audit converge on exactly one event instead of losing
-        // it (previous code gated on the stale pre-resolve state) or
-        // duplicating it.
-        await audit.append(
-          {
-            type: 'approval_decision',
-            actorType: persistedDecisionActorType,
-            actorId: decisionActorId,
-            correlationId: persistedDecisionCorrelation,
-            policyVersion: approval.policyVersion,
-            payload: {
+          { kind: 'execution', executionId: executionId },
+          async (unit) => {
+            if (runtimeApprovalDecision && unit.authorizeOnClient) {
+              const result = await runtimeApprovalDecision.decide(
+                {
+                  tenantId,
+                  executionId: executionId,
+                  approvalId: approvalId,
+                  verdict: decision,
+                  actorId: identity.operatorId,
+                  decisionActorType,
+                  correlationId,
+                  commandKey,
+                  ...(decisionReason !== undefined
+                    ? { reason: decisionReason }
+                    : {})
+                },
+                { authorize: unit.authorizeOnClient }
+              )
+              return { approval: result.approval, resolved: result.execution }
+            }
+            const execution = await operationalExecution.get(
+              tenantId,
+              executionId
+            )
+            if (!execution) {
+              throw new DomainError('not_found', 'Execution not found')
+            }
+            if (execution.approvalId !== approvalId) {
+              throw new DomainError('not_found', 'Approval not found')
+            }
+            let approval = await operationalApprovalAuthority.get(
+              tenantId,
+              approvalId
+            )
+            if (
+              approval.executionRef !== execution.id ||
+              approval.agentId !== execution.request.runtime.agent.id ||
+              approval.agentVersion !==
+                execution.request.runtime.agent.version ||
+              approval.correlationId !== execution.request.runtime.correlationId
+            ) {
+              throw new DomainError('not_found', 'Approval not found')
+            }
+            if (
+              execution.state !== 'WAITING_APPROVAL' &&
+              (approval.status === 'PENDING' || approval.status === 'REQUESTED')
+            ) {
+              throw new DomainError(
+                'conflict',
+                'Execution is no longer waiting for this approval decision'
+              )
+            }
+            if (
+              execution.state === 'WAITING_APPROVAL' &&
+              ['RESERVED', 'EXECUTING', 'EXECUTED'].includes(approval.status)
+            ) {
+              throw new DomainError(
+                'conflict',
+                'Approval has already entered effect execution'
+              )
+            }
+            if (approval.status === 'REQUESTED') {
+              try {
+                approval = await operationalApprovalAuthority.submit(
+                  tenantId,
+                  approval.approvalId,
+                  approval.operatorId
+                )
+              } catch (error) {
+                const refreshed = await operationalApprovalAuthority.get(
+                  tenantId,
+                  approval.approvalId
+                )
+                if (refreshed.status === 'REQUESTED') throw error
+                approval = refreshed
+              }
+            }
+            if (decision === 'APPROVED') {
+              if (approval.status === 'PENDING') {
+                approval = await operationalApprovalAuthority.approve(
+                  tenantId,
+                  approval.approvalId,
+                  {
+                    approverId: identity.operatorId,
+                    decisionActorType,
+                    decisionCorrelationId: correlationId,
+                    commandKey,
+                    ...(decisionReason !== undefined
+                      ? { reason: decisionReason }
+                      : {})
+                  }
+                )
+              } else if (
+                !['APPROVED', 'RESERVED', 'EXECUTING', 'EXECUTED'].includes(
+                  approval.status
+                )
+              ) {
+                throw new DomainError(
+                  'conflict',
+                  'Approval is not available for approval'
+                )
+              }
+            } else if (approval.status === 'PENDING') {
+              approval = await operationalApprovalAuthority.reject(
+                tenantId,
+                approval.approvalId,
+                {
+                  approverId: identity.operatorId,
+                  decisionActorType,
+                  decisionCorrelationId: correlationId,
+                  commandKey,
+                  ...(decisionReason !== undefined
+                    ? { reason: decisionReason }
+                    : {})
+                }
+              )
+            } else if (approval.status !== 'REJECTED') {
+              throw new DomainError(
+                'conflict',
+                'Approval is not available for rejection'
+              )
+            }
+
+            const decisionActorId = approval.approverId
+            const persistedDecisionActorType = approval.decisionActorType
+            const persistedDecisionCorrelation = approval.decisionCorrelationId
+            const persistedDecisionCommandKey = approval.decisionCommandKey
+            if (
+              !decisionActorId ||
+              !persistedDecisionActorType ||
+              !persistedDecisionCorrelation ||
+              !persistedDecisionCommandKey
+            ) {
+              throw new DomainError(
+                'conflict',
+                'Approval decision causality is incomplete'
+              )
+            }
+
+            const resolved = await operationalExecution.resolveApproval({
               tenantId,
               executionId: execution.id,
               approvalId: approval.approvalId,
-              decision: decision.toLowerCase(),
-              reason: approval.decisionReason ?? null,
-              previousState: execution.state,
-              nextState: resolved.state,
-              payloadHash: approval.payloadHash,
-              commandKey: persistedDecisionCommandKey,
-              operationKey: approval.operationKey ?? null
-            }
-          },
-          tenantId
+              actorId: decisionActorId,
+              decision,
+              ...(approval.decisionReason !== undefined
+                ? { reason: approval.decisionReason }
+                : {})
+            })
+            // AUD19-003: the decision audit event is appended unconditionally.
+            // `audit.append` deduplicates `approval_decision` by
+            // (tenant, approvalId, decision), so retries after a crash between
+            // resume and audit converge on exactly one event instead of losing
+            // it (previous code gated on the stale pre-resolve state) or
+            // duplicating it.
+            await audit.append(
+              {
+                type: 'approval_decision',
+                actorType: persistedDecisionActorType,
+                actorId: decisionActorId,
+                correlationId: persistedDecisionCorrelation,
+                policyVersion: approval.policyVersion,
+                payload: {
+                  tenantId,
+                  executionId: execution.id,
+                  approvalId: approval.approvalId,
+                  decision: decision.toLowerCase(),
+                  reason: approval.decisionReason ?? null,
+                  previousState: execution.state,
+                  nextState: resolved.state,
+                  payloadHash: approval.payloadHash,
+                  commandKey: persistedDecisionCommandKey,
+                  operationKey: approval.operationKey ?? null
+                }
+              },
+              tenantId
+            )
+            return { approval, resolved }
+          }
         )
         reply
           .code(decision === 'APPROVED' ? 202 : 200)
@@ -1854,6 +2010,18 @@ export function buildServer(options: BuildServerOptions = {}) {
         kind: 'core_session',
         sessionId
       }),
+    // SPEC 0262: the case policy and the journey task share one unit.
+    runAuthorizedTaskWrite: (identity, tenantId, sessionId, write) =>
+      runAuthorizedCaseMutation(
+        caseRouteDeps,
+        identity,
+        tenantId,
+        { kind: 'core_session', sessionId },
+        (unit) =>
+          write(
+            unit.authorizeOnClient ? { authorize: unit.authorizeOnClient } : {}
+          )
+      ),
     toSafeTaskError: toSafeRouteError
   })
 
@@ -1876,22 +2044,45 @@ export function buildServer(options: BuildServerOptions = {}) {
         })
       }
       // SPEC 0257: resource, creation audit and receipt commit together.
-      if (!persistence.apiCreation) {
+      if (
+        !persistence.apiCreation ||
+        // SPEC 0262: a PostgreSQL authority only hands its lock hook to the
+        // PostgreSQL creation port; any other pairing would commit the write
+        // without the authorization unit, so it is refused before any write.
+        (caseAuthority instanceof PostgresCaseAuthority &&
+          !(persistence.apiCreation instanceof PostgresApiCreation))
+      ) {
         throw new DomainError(
           'configuration_error',
           'Atomic creation is not available in this persistence composition'
         )
       }
-      const created = await persistence.apiCreation.createTaskWithAudit(
-        {
-          actor: identity
-            ? { actorType: identity.role, actorId: identity.operatorId }
-            : { actorType: 'System', actorId: 'api' },
-          correlationId,
-          task: input
-        },
-        tenantId
-      )
+      const taskCommand = {
+        actor: identity
+          ? { actorType: identity.role, actorId: identity.operatorId }
+          : { actorType: 'System' as const, actorId: 'api' },
+        correlationId,
+        task: input
+      }
+      const taskCreation = persistence.apiCreation
+      // SPEC 0262: with an authenticated identity the case policy runs in the
+      // same unit as the write (locks held to COMMIT / authority queue).
+      const created = identity
+        ? await runAuthorizedCaseMutation(
+            caseRouteDeps,
+            identity,
+            tenantId,
+            { kind: 'core_session', sessionId: input.sessionId },
+            async (unit) =>
+              taskCreation.createTaskWithAudit(
+                taskCommand,
+                tenantId,
+                unit.authorizeOnClient
+                  ? { authorize: unit.authorizeOnClient }
+                  : undefined
+              )
+          )
+        : await taskCreation.createTaskWithAudit(taskCommand, tenantId)
       const task = created.resource
       emitRuntimeLog({
         event: 'task.created',
@@ -1967,18 +2158,31 @@ export function buildServer(options: BuildServerOptions = {}) {
         kind: 'task',
         taskId: params.taskId
       })
+      assertAuthorizedWriteComposition()
+      const statusCommand = {
+        taskId: params.taskId,
+        status: status.data,
+        actorType: identity.role,
+        actorId: identity.operatorId,
+        correlationId
+      }
       // SPEC0250 §3.1 (AUD0621 F15/F16): one atomic port call validates the
       // transition against the committed status, writes it with a CAS and
       // records the audit event in the same unit; a failure changes nothing.
-      const updated = await tasks.transitionStatusWithAudit(
-        {
-          taskId: params.taskId,
-          status: status.data,
-          actorType: identity.role,
-          actorId: identity.operatorId,
-          correlationId
-        },
-        tenantId
+      // SPEC 0262: the case policy runs in that same unit.
+      const updated = await runAuthorizedCaseMutation(
+        caseRouteDeps,
+        identity,
+        tenantId,
+        { kind: 'task', taskId: params.taskId },
+        async (unit) =>
+          persistence.authorizedWrites && unit.authorizeOnClient
+            ? persistence.authorizedWrites.transitionTaskStatus(
+                statusCommand,
+                tenantId,
+                { authorize: unit.authorizeOnClient }
+              )
+            : tasks.transitionStatusWithAudit(statusCommand, tenantId)
       )
       emitRuntimeLog({
         event: 'task.status_changed',
@@ -2030,25 +2234,49 @@ export function buildServer(options: BuildServerOptions = {}) {
       const creationKey = readCreationKey(request.raw.rawHeaders)
       // SPEC 0257: resource, creation audit and receipt commit together; a
       // replay returns the same approval.
-      if (!persistence.apiCreation) {
+      if (
+        !persistence.apiCreation ||
+        // SPEC 0262: a PostgreSQL authority only hands its lock hook to the
+        // PostgreSQL creation port; any other pairing would commit the write
+        // without the authorization unit, so it is refused before any write.
+        (caseAuthority instanceof PostgresCaseAuthority &&
+          !(persistence.apiCreation instanceof PostgresApiCreation))
+      ) {
         throw new DomainError(
           'configuration_error',
           'Atomic creation is not available in this persistence composition'
         )
       }
-      const created = await persistence.apiCreation.createApprovalWithAudit(
-        {
-          actor: requester
-            ? { actorType: requester.role, actorId: requester.operatorId }
-            : identity
-              ? { actorType: identity.role, actorId: identity.operatorId }
-              : { actorType: 'System', actorId: 'api' },
-          correlationId,
-          idempotencyKey: creationKey,
-          request: requestedApproval
-        },
-        tenantId
-      )
+      const approvalCommand = {
+        actor: requester
+          ? { actorType: requester.role, actorId: requester.operatorId }
+          : identity
+            ? { actorType: identity.role, actorId: identity.operatorId }
+            : { actorType: 'System' as const, actorId: 'api' },
+        correlationId,
+        idempotencyKey: creationKey,
+        request: requestedApproval
+      }
+      const approvalCreation = persistence.apiCreation
+      const created = identity
+        ? await runAuthorizedCaseMutation(
+            caseRouteDeps,
+            identity,
+            tenantId,
+            { kind: 'core_session', sessionId: requestedApproval.sessionId },
+            async (unit) =>
+              approvalCreation.createApprovalWithAudit(
+                approvalCommand,
+                tenantId,
+                unit.authorizeOnClient
+                  ? { authorize: unit.authorizeOnClient }
+                  : undefined
+              )
+          )
+        : await approvalCreation.createApprovalWithAudit(
+            approvalCommand,
+            tenantId
+          )
       const approval = created.resource
       emitRuntimeLog({
         event: 'approval.created',
@@ -2093,16 +2321,32 @@ export function buildServer(options: BuildServerOptions = {}) {
           kind: 'approval_request',
           approvalRequestId: parsedBody.approvalRequestId
         })
-        const decided = await approvals.decideWithAudit(
+        assertAuthorizedWriteComposition()
+        const decision = {
+          approvalRequestId: parsedBody.approvalRequestId,
+          decision: parsedBody.decision,
+          operatorId: parsedBody.operatorId,
+          role: identity.role,
+          correlationId,
+          ...(parsedBody.note === undefined ? {} : { note: parsedBody.note })
+        }
+        // SPEC 0262: the case policy and the decision share one unit.
+        const decided = await runAuthorizedCaseMutation(
+          caseRouteDeps,
+          identity,
+          tenantId,
           {
-            approvalRequestId: parsedBody.approvalRequestId,
-            decision: parsedBody.decision,
-            operatorId: parsedBody.operatorId,
-            role: identity.role,
-            correlationId,
-            ...(parsedBody.note === undefined ? {} : { note: parsedBody.note })
+            kind: 'approval_request',
+            approvalRequestId: parsedBody.approvalRequestId
           },
-          tenantId
+          async (unit) =>
+            persistence.authorizedWrites && unit.authorizeOnClient
+              ? persistence.authorizedWrites.decideAttendanceApproval(
+                  decision,
+                  tenantId,
+                  { authorize: unit.authorizeOnClient }
+                )
+              : approvals.decideWithAudit(decision, tenantId)
         )
         const event =
           decided.status === 'assumed'
@@ -4968,6 +5212,8 @@ interface RuntimePersistence {
    * answer 503 before any write.
    */
   apiCreation: ApiCreationPort | null
+  /** SPEC 0262: task status and attendance decision in the authorization unit. */
+  authorizedWrites: PostgresAuthorizedWrites | null
   conversations:
     | ConversationRepository
     | PostgresRuntimeRepository
@@ -5255,6 +5501,10 @@ function createPersistence(
         config.kind === 'postgres-pool'
           ? new PostgresApiCreation(config.pool)
           : null,
+      authorizedWrites:
+        config.kind === 'postgres-pool'
+          ? new PostgresAuthorizedWrites(config.pool)
+          : null,
       tasks: {
         create: (
           input: Parameters<PostgresRuntimeRepository['createTask']>[0],
@@ -5328,6 +5578,7 @@ function createPersistence(
         : new JourneyRepository(db),
     conversations: new ConversationRepository(db),
     apiCreation: new InMemoryApiCreation(db),
+    authorizedWrites: null,
     tasks: new TaskRepository(db),
     approvals: new ApprovalRepository(db),
     audit: new AuditRepository(db)

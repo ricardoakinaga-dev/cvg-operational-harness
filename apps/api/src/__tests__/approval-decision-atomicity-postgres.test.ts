@@ -5,6 +5,7 @@
  * gate sets AUD19_PG_REQUIRED=1 and a missing database becomes a hard
  * failure instead of a silent skip.
  */
+import { randomUUID } from 'node:crypto'
 import { Client, Pool } from 'pg'
 import { describe, expect, it } from 'vitest'
 import {
@@ -146,6 +147,50 @@ async function waitingFixture(
     reason: 'waiting for PG atomicity proof'
   })
   return { executionId: accepted.record.id, approvalId: requested.approvalId }
+}
+
+/**
+ * Reproduces the state the pre-SPEC-0262 route could leave after a crash
+ * between the decision and the audit append (decision persisted, execution
+ * resolved, no `approval_decision` event). The route itself is now one
+ * transaction and can no longer produce it; legacy rows can still exist, so
+ * the worker recovery (SPEC 0272) is exercised on this state.
+ */
+async function leaveCrashedDecision(
+  store: PostgresOperationalExecutionStore,
+  authority: PostgresApprovalAuthority,
+  input: {
+    executionId: string
+    approvalId: string
+    commandKey: string
+    reason: string
+    approverId?: string
+    verdict?: 'approved' | 'rejected'
+  }
+) {
+  const approverId = input.approverId ?? 'approver.synthetic'
+  const verdict = input.verdict ?? 'approved'
+  await authority.submit(tenantA, input.approvalId, 'agent.atomic.pg.synthetic')
+  const decision = {
+    approverId,
+    decisionActorType: 'Approver' as const,
+    decisionCorrelationId: `corr_${randomUUID()}`,
+    commandKey: input.commandKey,
+    reason: input.reason
+  }
+  if (verdict === 'approved') {
+    await authority.approve(tenantA, input.approvalId, decision)
+  } else {
+    await authority.reject(tenantA, input.approvalId, decision)
+  }
+  await store.resolveApproval({
+    tenantId: tenantA,
+    executionId: input.executionId,
+    approvalId: input.approvalId,
+    actorId: approverId,
+    decision: verdict === 'approved' ? 'APPROVED' : 'REJECTED',
+    reason: input.reason
+  })
 }
 
 async function countDecisionEvents(
@@ -389,10 +434,10 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           `pg-crash-${Date.now()}`
         )
         let resolveCalls = 0
-        const realResolve = store.resolveApproval.bind(store)
+        const realResolve = store.resolveApprovalInTransaction.bind(store)
         const flakyStore = new Proxy(store, {
           get(target, property, receiver) {
-            if (property === 'resolveApproval') {
+            if (property === 'resolveApprovalInTransaction') {
               return async (...args: never[]) => {
                 resolveCalls += 1
                 if (resolveCalls === 1) {
@@ -406,8 +451,8 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
         })
         const app = buildServer({
           persistence: {
-            kind: 'postgres',
-            client: setup.pool as never
+            kind: 'postgres-pool',
+            pool: setup.pool as never
           },
           operationalExecution: flakyStore as never,
           operationalApprovalAuthority: authority as never
@@ -455,8 +500,8 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
         )
         const app = buildServer({
           persistence: {
-            kind: 'postgres',
-            client: setup.pool as never
+            kind: 'postgres-pool',
+            pool: setup.pool as never
           },
           operationalExecution: store as never,
           operationalApprovalAuthority: authority as never
@@ -491,12 +536,11 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
   )
 
   itWithPostgres(
-    'worker recovery preserves the decision envelope after audit failure',
+    'SPEC 0262: an audit failure rolls the whole decision back; the retry decides once',
     async () => {
       const setup = await setupDatabase()
-      const triggerName = `reject_audit_${Date.now()}`
+      const triggerName = `reject_audit_unit_${Date.now()}`
       const functionName = `${triggerName}_fn`
-      let triggerInstalled = false
       try {
         const store = new PostgresOperationalExecutionStore(
           setup.pool as unknown as PostgresPoolLike
@@ -507,7 +551,7 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
         const { executionId, approvalId } = await waitingFixture(
           store,
           authority,
-          `pg-causality-${Date.now()}`
+          `pg-unit-${Date.now()}`
         )
         await setup.pool.query(`
           CREATE FUNCTION ${functionName}() RETURNS trigger
@@ -525,25 +569,68 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
              BEFORE INSERT ON audit_events
              FOR EACH ROW EXECUTE FUNCTION ${functionName}()`
         )
-        triggerInstalled = true
-
         const app = buildServer({
-          persistence: {
-            kind: 'postgres',
-            client: setup.pool as never
-          },
+          persistence: { kind: 'postgres-pool', pool: setup.pool as never },
           operationalExecution: store as never,
           operationalApprovalAuthority: authority as never
         })
         await grantExecution(app, executionId)
+        const url = `/v1/executions/${executionId}/approvals/${approvalId}/decision`
+        const before = await authority.get(tenantA, approvalId)
         const first = await app.inject({
           method: 'POST',
-          url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,
-          headers: decisionHeaders('pg-causality-command-1'),
-          payload: { decision: 'approved', note: 'preserve this reason' }
+          url,
+          headers: decisionHeaders('pg-unit-command-1'),
+          payload: { decision: 'approved', note: 'unit reason' }
+        })
+        expect(first.statusCode).toBe(500)
+        // Nothing of the decision survived: approval, execution and audit.
+        const after = await authority.get(tenantA, approvalId)
+        expect(after.status).toBe(before.status)
+        expect(after.approverId).toBeUndefined()
+        expect((await store.get(tenantA, executionId))?.state).toBe(
+          'WAITING_APPROVAL'
+        )
+        expect(await countDecisionEvents(setup.pool, approvalId)).toBe(0)
+        await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
+        await setup.pool.query(`DROP FUNCTION ${functionName}()`)
+        const retry = await app.inject({
+          method: 'POST',
+          url,
+          headers: decisionHeaders('pg-unit-command-2'),
+          payload: { decision: 'approved', note: 'unit reason' }
         })
         await app.close()
-        expect(first.statusCode).toBe(500)
+        expect(retry.statusCode).toBe(202)
+        expect(await countDecisionEvents(setup.pool, approvalId)).toBe(1)
+      } finally {
+        await teardownDatabase(setup)
+      }
+    }
+  )
+
+  itWithPostgres(
+    'worker recovery preserves the decision envelope after audit failure',
+    async () => {
+      const setup = await setupDatabase()
+      try {
+        const store = new PostgresOperationalExecutionStore(
+          setup.pool as unknown as PostgresPoolLike
+        )
+        const authority = new PostgresApprovalAuthority(
+          setup.pool as unknown as PostgresPoolLike
+        )
+        const { executionId, approvalId } = await waitingFixture(
+          store,
+          authority,
+          `pg-causality-${Date.now()}`
+        )
+        await leaveCrashedDecision(store, authority, {
+          executionId,
+          approvalId,
+          commandKey: 'pg-causality-command-1',
+          reason: 'preserve this reason'
+        })
 
         const approved = await authority.get(tenantA, approvalId)
         expect(approved).toMatchObject({
@@ -556,10 +643,6 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
         expect(approved.decisionCorrelationId).toMatch(/^corr_/)
         expect((await store.get(tenantA, executionId))?.state).toBe('QUEUED')
         expect(await countDecisionEvents(setup.pool, approvalId)).toBe(0)
-
-        await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
-        await setup.pool.query(`DROP FUNCTION ${functionName}()`)
-        triggerInstalled = false
 
         const runtime = {
           approvalAuthority: authority,
@@ -601,14 +684,6 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
           }
         })
       } finally {
-        if (triggerInstalled) {
-          await setup.pool
-            .query(`DROP TRIGGER ${triggerName} ON audit_events`)
-            .catch(() => undefined)
-          await setup.pool
-            .query(`DROP FUNCTION ${functionName}()`)
-            .catch(() => undefined)
-        }
         await teardownDatabase(setup)
       }
     }
@@ -619,9 +694,6 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
       `AUD0625 F08: worker records the decision event after the approval advanced to ${advancedStatus} (SPEC 0272)`,
       async () => {
         const setup = await setupDatabase()
-        const triggerName = `reject_audit_f08_${Date.now()}`
-        const functionName = `${triggerName}_fn`
-        let triggerInstalled = false
         try {
           const store = new PostgresOperationalExecutionStore(
             setup.pool as unknown as PostgresPoolLike
@@ -634,43 +706,13 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
             authority,
             `pg-f08-${advancedStatus}-${Date.now()}`
           )
-          await setup.pool.query(`
-            CREATE FUNCTION ${functionName}() RETURNS trigger
-            LANGUAGE plpgsql AS $$
-            BEGIN
-              IF NEW.type = 'approval_decision' THEN
-                RAISE EXCEPTION 'injected approval audit failure';
-              END IF;
-              RETURN NEW;
-            END;
-            $$
-          `)
-          await setup.pool.query(
-            `CREATE TRIGGER ${triggerName}
-               BEFORE INSERT ON audit_events
-               FOR EACH ROW EXECUTE FUNCTION ${functionName}()`
-          )
-          triggerInstalled = true
-
-          const app = buildServer({
-            persistence: { kind: 'postgres', client: setup.pool as never },
-            operationalExecution: store as never,
-            operationalApprovalAuthority: authority as never
+          await leaveCrashedDecision(store, authority, {
+            executionId,
+            approvalId,
+            commandKey: 'pg-f08-command-1',
+            reason: 'f08 reason'
           })
-          await grantExecution(app, executionId)
-          const first = await app.inject({
-            method: 'POST',
-            url: `/v1/executions/${executionId}/approvals/${approvalId}/decision`,
-            headers: decisionHeaders('pg-f08-command-1'),
-            payload: { decision: 'approved', note: 'f08 reason' }
-          })
-          await app.close()
-          expect(first.statusCode).toBe(500)
           expect(await countDecisionEvents(setup.pool, approvalId)).toBe(0)
-
-          await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
-          await setup.pool.query(`DROP FUNCTION ${functionName}()`)
-          triggerInstalled = false
 
           // The execution advanced after the crash: the approval left APPROVED.
           await setup.pool.query(
@@ -726,14 +768,6 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
             observedApprovalStatus: advancedStatus
           })
         } finally {
-          if (triggerInstalled) {
-            await setup.pool
-              .query(`DROP TRIGGER ${triggerName} ON audit_events`)
-              .catch(() => undefined)
-            await setup.pool
-              .query(`DROP FUNCTION ${functionName}()`)
-              .catch(() => undefined)
-          }
           await teardownDatabase(setup)
         }
       }
@@ -770,63 +804,15 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
       )
       waiting.push({ tag, ...fixture })
     }
-    const triggerName = `reject_audit_f08_${Date.now()}`
-    await setup.pool.query(`
-      CREATE FUNCTION ${triggerName}_fn() RETURNS trigger
-      LANGUAGE plpgsql AS $$
-      BEGIN
-        IF NEW.type = 'approval_decision' THEN
-          RAISE EXCEPTION 'injected approval audit failure';
-        END IF;
-        RETURN NEW;
-      END;
-      $$
-    `)
-    await setup.pool.query(
-      `CREATE TRIGGER ${triggerName}
-         BEFORE INSERT ON audit_events
-         FOR EACH ROW EXECUTE FUNCTION ${triggerName}_fn()`
-    )
-    // The case authority lives in PostgreSQL: a second grant for the same
-    // principal hits a stale revision, so each execution gets its own approver.
-    for (const [index, item] of waiting.entries()) {
-      const operatorId = `approver.f08.${index}`
-      const app = buildServer({
-        persistence: { kind: 'postgres', client: setup.pool as never },
-        operationalExecution: store as never,
-        operationalApprovalAuthority: authority as never
+    for (const item of waiting) {
+      await leaveCrashedDecision(store, authority, {
+        executionId: item.executionId,
+        approvalId: item.approvalId,
+        commandKey: `pg-f08-${item.tag}-command`,
+        reason: 'f08 window',
+        verdict: decisionFor(item.tag)
       })
-      await app.caseAuthority.registerExecutionLink(
-        tenantA as never,
-        item.executionId,
-        {
-          kind: 'independent',
-          conversationId: 'conversation_atomic_pg_synthetic',
-          sessionId: 'session_atomic_pg_synthetic'
-        },
-        true
-      )
-      await grantCase(app, {
-        kind: 'independent_execution',
-        resourceId: item.executionId,
-        operatorId,
-        role: 'Approver',
-        tenantId: tenantA as never
-      })
-      const response = await app.inject({
-        method: 'POST',
-        url: `/v1/executions/${item.executionId}/approvals/${item.approvalId}/decision`,
-        headers: {
-          ...decisionHeaders(`pg-f08-${item.tag}-command`),
-          'x-operator-id': operatorId
-        },
-        payload: { decision: decisionFor(item.tag), note: 'f08 window' }
-      })
-      await app.close()
-      expect(response.statusCode).toBe(500)
     }
-    await setup.pool.query(`DROP TRIGGER ${triggerName} ON audit_events`)
-    await setup.pool.query(`DROP FUNCTION ${triggerName}_fn()`)
     return {
       items: waiting,
       runtime: {
@@ -1000,9 +986,28 @@ describe('approval decision causal atomicity on PostgreSQL (AUD19-003)', () => {
             setup.pool as unknown as PostgresPoolLike
           )
           const app = buildServer({
-            persistence: { kind: 'postgres', client: setup.pool as never },
+            persistence: { kind: 'postgres-pool', pool: setup.pool as never },
             operationalExecution: store as never,
             operationalApprovalAuthority: authority as never
+          })
+          // The retry is authorized for the execution's case: the route runs
+          // the decision unit and must refuse the terminal approval itself.
+          await app.caseAuthority.registerExecutionLink(
+            tenantA as never,
+            item.executionId,
+            {
+              kind: 'independent',
+              conversationId: 'conversation_atomic_pg_synthetic',
+              sessionId: 'session_atomic_pg_synthetic'
+            },
+            true
+          )
+          await grantCase(app, {
+            kind: 'independent_execution',
+            resourceId: item.executionId,
+            operatorId: 'approver.f08.0',
+            role: 'Approver',
+            tenantId: tenantA as never
           })
           const retry = app.inject({
             method: 'POST',

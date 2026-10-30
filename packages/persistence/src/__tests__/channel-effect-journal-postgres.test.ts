@@ -88,7 +88,7 @@ describe('channel effect journal PostgreSQL adapter', () => {
       await runPostgresMigrations(admin, { schemaName: schema })
       first = await connectScoped(schema, tenant)
       second = await connectScoped(schema, tenant)
-    })
+    }, 60_000)
 
     afterAll(async () => {
       if (!testDatabaseUrl) return
@@ -619,6 +619,169 @@ describe('channel effect journal PostgreSQL adapter', () => {
               .catch(() => undefined)
           }
         }
+      }
+    )
+
+    // SPEC 0282 (F12c): the rate-limit wait and the attempt ceiling, durable.
+    const retryInput = (identity: ChannelEffectIdentity, extra = {}) => ({
+      identity,
+      payloadHash,
+      hashVersion: sharedHashVersion,
+      leaseOwner: 'host:1:instance-a',
+      leaseMs: 30_000,
+      ...extra
+    })
+
+    itWithPostgres(
+      'SPEC0282: a Retry-After wait survives another connection and instance, and ends exactly on time',
+      async () => {
+        const identity = uniqueIdentity()
+        const T = 10_000_000
+        const writer = new PostgresChannelEffectJournal(first, {
+          clock: () => T
+        })
+        await writer.reserve(retryInput(identity))
+        await writer.release(
+          identity,
+          'host:1:instance-a',
+          'provider_rejected',
+          30_000
+        )
+        const stored = await admin.query<{ retry_not_before_ms: string }>(
+          `SELECT retry_not_before_ms::text FROM ${schema}.channel_effect_journal
+            WHERE idempotency_key = $1`,
+          [identity.idempotencyKey]
+        )
+        expect(stored.rows[0]?.retry_not_before_ms).toBe(String(T + 30_000))
+
+        // A different process: another connection, another adapter instance.
+        const reader = new PostgresChannelEffectJournal(second, {
+          clock: () => T + 10_000
+        })
+        const waiting = await reader.reserve(
+          retryInput(identity, { leaseOwner: 'host:2:instance-b' })
+        )
+        expect(waiting).toMatchObject({
+          outcome: 'retry_later',
+          retryAfterMs: 20_000
+        })
+        const untouched = await reader.find(identity)
+        expect(untouched).toMatchObject({
+          state: 'PENDING',
+          attempt: 1,
+          leaseOwner: null,
+          notBeforeMs: T + 30_000
+        })
+
+        const later = new PostgresChannelEffectJournal(second, {
+          clock: () => T + 30_000
+        })
+        const again = await later.reserve(
+          retryInput(identity, { leaseOwner: 'host:2:instance-b' })
+        )
+        expect(again).toMatchObject({ outcome: 'reserved' })
+        expect(await later.find(identity)).toMatchObject({
+          attempt: 2,
+          notBeforeMs: null
+        })
+        const cleared = await admin.query<{
+          retry_not_before_ms: string | null
+        }>(
+          `SELECT retry_not_before_ms FROM ${schema}.channel_effect_journal
+            WHERE idempotency_key = $1`,
+          [identity.idempotencyKey]
+        )
+        expect(cleared.rows[0]?.retry_not_before_ms).toBeNull()
+      }
+    )
+
+    itWithPostgres(
+      'SPEC0282: after the ceiling the operation is FAILED attempts_exhausted, durably and without further writes',
+      async () => {
+        const identity = uniqueIdentity()
+        let now = 20_000_000
+        const journal = new PostgresChannelEffectJournal(first, {
+          clock: () => now
+        })
+        for (let attempt = 1; attempt <= 5; attempt += 1) {
+          const outcome = await journal.reserve(retryInput(identity))
+          expect(outcome).toMatchObject({
+            outcome: 'reserved',
+            record: { attempt }
+          })
+          await journal.release(
+            identity,
+            'host:1:instance-a',
+            'provider_rejected'
+          )
+          now += 1
+        }
+        const sixth = await journal.reserve(retryInput(identity))
+        expect(sixth).toMatchObject({
+          outcome: 'replay',
+          record: { state: 'FAILED', errorCode: 'attempts_exhausted' }
+        })
+        const seventh = await new PostgresChannelEffectJournal(second, {
+          clock: () => now + 5
+        }).reserve(retryInput(identity))
+        expect(seventh.outcome).toBe('replay')
+        const record = await journal.find(identity)
+        expect(record).toMatchObject({ state: 'FAILED', attempt: 5 })
+        expect(
+          (seventh as { record: { revision: number } }).record.revision
+        ).toBe(record?.revision)
+      }
+    )
+
+    itWithPostgres(
+      'SPEC0282: two reservers after the wait have exactly one winner',
+      async () => {
+        const identity = uniqueIdentity()
+        const T = 30_000_000
+        await new PostgresChannelEffectJournal(first, {
+          clock: () => T
+        }).reserve(retryInput(identity))
+        await new PostgresChannelEffectJournal(first, {
+          clock: () => T
+        }).release(identity, 'host:1:instance-a', 'provider_rejected', 1_000)
+        const outcomes = await Promise.all([
+          new PostgresChannelEffectJournal(first, {
+            clock: () => T + 2_000
+          }).reserve(retryInput(identity, { leaseOwner: 'host:a' })),
+          new PostgresChannelEffectJournal(second, {
+            clock: () => T + 2_000
+          }).reserve(retryInput(identity, { leaseOwner: 'host:b' }))
+        ])
+        expect(outcomes.map((o) => o.outcome).sort()).toEqual([
+          'in_flight',
+          'reserved'
+        ])
+      }
+    )
+
+    itWithPostgres(
+      'SPEC0282: migration 0031 is additive and can be applied twice',
+      async () => {
+        const sql = await readPostgresMigrationSql(
+          '0031_channel_effect_retry_not_before'
+        )
+        expect(sql).toContain('ADD COLUMN IF NOT EXISTS retry_not_before_ms')
+        expect(sql).not.toMatch(/DROP |DELETE |UPDATE |TRUNCATE /i)
+        await first.query(sql)
+        await first.query(sql)
+        const column = await admin.query<{
+          data_type: string
+          is_nullable: string
+        }>(
+          `SELECT data_type, is_nullable FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = 'channel_effect_journal'
+              AND column_name = 'retry_not_before_ms'`,
+          [schema]
+        )
+        expect(column.rows[0]).toEqual({
+          data_type: 'bigint',
+          is_nullable: 'YES'
+        })
       }
     )
   })

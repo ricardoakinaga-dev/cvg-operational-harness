@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto'
 import { DomainError, type TaskPriority } from '@cvg/shared'
 import { TenantIdSchema, type TenantId } from '@cvg/platform'
 import { InMemoryDatabase } from './db.ts'
+import type { PostgresQueryable } from './postgres.ts'
 import { AuditRepository } from './repositories/audit-repository.ts'
 import { TaskRepository } from './repositories/task-repository.ts'
 import type {
@@ -66,15 +67,28 @@ export interface ApiCreationResult<T> {
   resource: T
 }
 
+/**
+ * SPEC 0262: authorization runs INSIDE the creation transaction. The hook is
+ * called with the transaction's client after the tenant context and before the
+ * operation lock, so the principal/grant locks are held until COMMIT and a
+ * replay only starts after the current authorization. Memory ignores it: the
+ * memory unit already runs inside the authority queue.
+ */
+export interface ApiCreationOptions {
+  readonly authorize?: (client: PostgresQueryable) => Promise<void>
+}
+
 /** What the API calls; absent port means the route answers 503 before writes. */
 export interface ApiCreationPort {
   createTaskWithAudit(
     command: CreateTaskWithAuditCommand,
-    tenantId?: TenantId
+    tenantId?: TenantId,
+    options?: ApiCreationOptions
   ): ApiCreationResult<TaskRecord> | Promise<ApiCreationResult<TaskRecord>>
   createApprovalWithAudit(
     command: CreateApprovalWithAuditCommand,
-    tenantId?: TenantId
+    tenantId?: TenantId,
+    options?: ApiCreationOptions
   ):
     | ApiCreationResult<ApprovalRequestRecord>
     | Promise<ApiCreationResult<ApprovalRequestRecord>>

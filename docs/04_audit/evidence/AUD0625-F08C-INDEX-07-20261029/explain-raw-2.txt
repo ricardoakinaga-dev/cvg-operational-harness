@@ -1,0 +1,830 @@
+-- E 10k, 100% in window, 0.1% undecided
+-- sizes {"heap":"16 MB","indexes":"operational_executions_pkey=1480 kB, operational_executions_tenant_id_idempotency_key_key=1432 kB, idx_operational_executions_tenant_state=1528 kB, idx_operational_executions_approval=1304 kB"}
+
+== WITHOUT candidate index / selector limit 25, window 30s..24h
+Limit  (cost=3561.31..3606.34 rows=25 width=61) (actual time=5.516..69.289 rows=11 loops=1)
+  Buffers: shared hit=82036
+  ->  Nested Loop Anti Join  (cost=3561.31..19006.96 rows=8575 width=61) (actual time=5.515..69.282 rows=11 loops=1)
+        Buffers: shared hit=82036
+        ->  Nested Loop  (cost=3560.90..12848.71 rows=9800 width=106) (actual time=5.504..39.875 rows=10001 loops=1)
+              Buffers: shared hit=42043
+              ->  Gather Merge  (cost=3560.48..4700.07 rows=9999 width=73) (actual time=5.477..7.405 rows=10001 loops=1)
+                    Workers Planned: 1
+                    Workers Launched: 1
+                    Buffers: shared hit=2039
+                    ->  Sort  (cost=2560.47..2575.18 rows=5882 width=73) (actual time=3.762..4.276 rows=5000 loops=2)
+                          Sort Key: e.updated_at
+                          Sort Method: quicksort  Memory: 989kB
+                          Buffers: shared hit=2039
+                          Worker 0:  Sort Method: quicksort  Memory: 316kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..2192.20 rows=5882 width=73) (actual time=0.016..2.935 rows=5000 loops=2)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=2001
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.41..0.81 rows=1 width=77) (actual time=0.003..0.003 rows=1 loops=10001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=40004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..0.62 rows=1 width=98) (actual time=0.003..0.003 rows=1 loops=10001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=39993
+Planning Time: 0.438 ms
+Execution Time: 69.335 ms
+
+== WITHOUT candidate index / selector limit 25, no ceiling (backfill)
+Limit  (cost=3517.19..3562.22 rows=25 width=61) (actual time=5.471..70.705 rows=11 loops=1)
+  Buffers: shared hit=82036
+  ->  Nested Loop Anti Join  (cost=3517.19..18964.05 rows=8576 width=61) (actual time=5.470..70.690 rows=11 loops=1)
+        Buffers: shared hit=82036
+        ->  Nested Loop  (cost=3516.77..12805.16 rows=9801 width=106) (actual time=5.457..40.471 rows=10001 loops=1)
+              Buffers: shared hit=42043
+              ->  Gather Merge  (cost=3516.36..4656.06 rows=10000 width=73) (actual time=5.429..7.498 rows=10001 loops=1)
+                    Workers Planned: 1
+                    Workers Launched: 1
+                    Buffers: shared hit=2039
+                    ->  Sort  (cost=2516.35..2531.05 rows=5882 width=73) (actual time=3.614..4.201 rows=5000 loops=2)
+                          Sort Key: e.updated_at
+                          Sort Method: quicksort  Memory: 1262kB
+                          Buffers: shared hit=2039
+                          Worker 0:  Sort Method: quicksort  Memory: 187kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..2148.07 rows=5882 width=73) (actual time=0.011..2.762 rows=5000 loops=2)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=2001
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.41..0.81 rows=1 width=77) (actual time=0.003..0.003 rows=1 loops=10001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=40004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..0.62 rows=1 width=98) (actual time=0.003..0.003 rows=1 loops=10001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=39993
+Planning Time: 0.412 ms
+Execution Time: 70.757 ms
+
+== WITHOUT candidate index / incomplete-envelope count, 24h
+Aggregate  (cost=3066.13..3066.14 rows=1 width=4) (actual time=6.236..6.238 rows=1 loops=1)
+  Buffers: shared hit=715
+  ->  Nested Loop Anti Join  (cost=0.82..3065.69 rows=174 width=0) (actual time=6.233..6.235 rows=0 loops=1)
+        Join Filter: (((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+        Buffers: shared hit=715
+        ->  Nested Loop  (cost=0.41..2525.09 rows=199 width=77) (actual time=6.233..6.233 rows=0 loops=1)
+              Buffers: shared hit=715
+              ->  Seq Scan on runtime_approvals a  (cost=0.00..1177.55 rows=199 width=77) (actual time=6.232..6.232 rows=0 loops=1)
+                    Filter: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                    Rows Removed by Filter: 10001
+                    Buffers: shared hit=715
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.41..6.76 rows=1 width=52) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..1.47 rows=50 width=98) (never executed)
+              Index Cond: (COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text))
+Planning Time: 0.378 ms
+Execution Time: 6.272 ms
+
+== WITHOUT candidate index / incoherent-terminal count, 24h
+Aggregate  (cost=67.39..67.40 rows=1 width=4) (actual time=0.014..0.014 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=53.00..67.38 rows=1 width=0) (actual time=0.013..0.013 rows=0 loops=1)
+        Join Filter: (((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=52.59..64.67 rows=1 width=77) (actual time=0.013..0.013 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=52.18..56.21 rows=1 width=77) (actual time=0.013..0.013 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=52.18..52.18 rows=1 width=0) (actual time=0.012..0.013 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..26.09 rows=1 width=0) (actual time=0.009..0.009 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..26.09 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.41..8.45 rows=1 width=52) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..1.47 rows=50 width=98) (never executed)
+              Index Cond: (COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text))
+Planning Time: 0.246 ms
+Execution Time: 0.036 ms
+
+-- candidate index built in 24 ms
+-- candidate index size 784 kB
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, window 30s..24h
+Limit  (cost=1.25..58.26 rows=25 width=61) (actual time=0.067..78.216 rows=11 loops=1)
+  Buffers: shared hit=82095
+  ->  Nested Loop Anti Join  (cost=1.25..19553.29 rows=8575 width=61) (actual time=0.066..78.207 rows=11 loops=1)
+        Buffers: shared hit=82095
+        ->  Nested Loop  (cost=0.84..13395.04 rows=9800 width=106) (actual time=0.053..43.188 rows=10001 loops=1)
+              Buffers: shared hit=42102
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.42..5246.40 rows=9999 width=73) (actual time=0.032..3.468 rows=10001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                    Buffers: shared hit=2098
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.41..0.81 rows=1 width=77) (actual time=0.003..0.003 rows=1 loops=10001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=40004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..0.62 rows=1 width=98) (actual time=0.003..0.003 rows=1 loops=10001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=39993
+Planning Time: 0.616 ms
+Execution Time: 78.272 ms
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, no ceiling (backfill)
+Limit  (cost=1.25..58.18 rows=25 width=61) (actual time=0.027..69.599 rows=11 loops=1)
+  Buffers: shared hit=82095
+  ->  Nested Loop Anti Join  (cost=1.25..19529.40 rows=8576 width=61) (actual time=0.026..69.591 rows=11 loops=1)
+        Buffers: shared hit=82095
+        ->  Nested Loop  (cost=0.83..13370.52 rows=9801 width=106) (actual time=0.021..38.400 rows=10001 loops=1)
+              Buffers: shared hit=42102
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.42..5221.42 rows=10000 width=73) (actual time=0.012..2.926 rows=10001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)))
+                    Buffers: shared hit=2098
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.41..0.81 rows=1 width=77) (actual time=0.003..0.003 rows=1 loops=10001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=40004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..0.62 rows=1 width=98) (actual time=0.003..0.003 rows=1 loops=10001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=39993
+Planning Time: 0.336 ms
+Execution Time: 69.633 ms
+
+== WITH candidate index (tenant_id, updated_at) / incomplete-envelope count, 24h
+Aggregate  (cost=3066.13..3066.14 rows=1 width=4) (actual time=6.836..6.838 rows=1 loops=1)
+  Buffers: shared hit=715
+  ->  Nested Loop Anti Join  (cost=0.82..3065.69 rows=174 width=0) (actual time=6.833..6.834 rows=0 loops=1)
+        Join Filter: (((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+        Buffers: shared hit=715
+        ->  Nested Loop  (cost=0.41..2525.09 rows=199 width=77) (actual time=6.832..6.833 rows=0 loops=1)
+              Buffers: shared hit=715
+              ->  Seq Scan on runtime_approvals a  (cost=0.00..1177.55 rows=199 width=77) (actual time=6.832..6.832 rows=0 loops=1)
+                    Filter: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                    Rows Removed by Filter: 10001
+                    Buffers: shared hit=715
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.41..6.76 rows=1 width=52) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..1.47 rows=50 width=98) (never executed)
+              Index Cond: (COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text))
+Planning Time: 0.368 ms
+Execution Time: 6.877 ms
+
+== WITH candidate index (tenant_id, updated_at) / incoherent-terminal count, 24h
+Aggregate  (cost=67.39..67.40 rows=1 width=4) (actual time=0.022..0.023 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=53.00..67.38 rows=1 width=0) (actual time=0.021..0.022 rows=0 loops=1)
+        Join Filter: (((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=52.59..64.67 rows=1 width=77) (actual time=0.021..0.022 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=52.18..56.21 rows=1 width=77) (actual time=0.021..0.021 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=52.18..52.18 rows=1 width=0) (actual time=0.020..0.021 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..26.09 rows=1 width=0) (actual time=0.013..0.013 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..26.09 rows=1 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.41..8.45 rows=1 width=52) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.41..1.47 rows=50 width=98) (never executed)
+              Index Cond: (COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text))
+Planning Time: 0.347 ms
+Execution Time: 0.054 ms
+
+-- F 100k, 100% in window, 0.1% undecided
+-- sizes {"heap":"156 MB","indexes":"operational_executions_pkey=14 MB, operational_executions_tenant_id_idempotency_key_key=15 MB, idx_operational_executions_tenant_state=12 MB, idx_operational_executions_approval=13 MB"}
+
+== WITHOUT candidate index / selector limit 25, window 30s..24h
+Limit  (cost=27404.11..27449.63 rows=25 width=63) (actual time=45.124..238.286 rows=25 loops=1)
+  Buffers: shared hit=197874 read=14186, temp read=423 written=528
+  ->  Nested Loop Anti Join  (cost=27404.11..183507.09 rows=85746 width=63) (actual time=45.123..238.268 rows=25 loops=1)
+        Buffers: shared hit=197874 read=14186, temp read=423 written=528
+        ->  Nested Loop  (cost=27403.69..121179.35 rows=97996 width=109) (actual time=45.110..151.030 rows=24001 loops=1)
+              Buffers: shared hit=101895 read=14186, temp read=423 written=528
+              ->  Gather Merge  (cost=27403.27..39047.71 rows=99981 width=75) (actual time=45.075..57.909 rows=24001 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=5891 read=14186, temp read=423 written=528
+                    ->  Sort  (cost=26403.25..26507.39 rows=41659 width=75) (actual time=32.820..33.408 rows=8298 loops=3)
+                          Sort Key: e.updated_at
+                          Sort Method: external merge  Disk: 4216kB
+                          Buffers: shared hit=5891 read=14186, temp read=423 written=528
+                          Worker 0:  Sort Method: quicksort  Memory: 3623kB
+                          Worker 1:  Sort Method: quicksort  Memory: 3667kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..21355.18 rows=41659 width=75) (actual time=0.031..24.663 rows=33334 loops=3)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=5815 read=14186
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=24001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=96004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=24001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=95979
+Planning Time: 0.507 ms
+Execution Time: 239.530 ms
+
+== WITHOUT candidate index / selector limit 25, no ceiling (backfill)
+Limit  (cost=27091.95..27137.46 rows=25 width=63) (actual time=47.628..251.503 rows=25 loops=1)
+  Buffers: shared hit=198144 read=13916 written=3, temp read=480 written=585
+  ->  Nested Loop Anti Join  (cost=27091.95..183207.16 rows=85755 width=63) (actual time=47.627..251.485 rows=25 loops=1)
+        Buffers: shared hit=198144 read=13916 written=3, temp read=480 written=585
+        ->  Nested Loop  (cost=27091.53..120873.06 rows=98006 width=109) (actual time=47.609..158.460 rows=24001 loops=1)
+              Buffers: shared hit=102165 read=13916 written=3, temp read=480 written=585
+              ->  Gather Merge  (cost=27091.10..38736.70 rows=99991 width=75) (actual time=47.555..58.747 rows=24001 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=6161 read=13916 written=3, temp read=480 written=585
+                    ->  Sort  (cost=26091.08..26195.24 rows=41663 width=75) (actual time=33.977..34.644 rows=8365 loops=3)
+                          Sort Key: e.updated_at
+                          Sort Method: external merge  Disk: 4672kB
+                          Buffers: shared hit=6161 read=13916 written=3, temp read=480 written=585
+                          Worker 0:  Sort Method: quicksort  Memory: 2971kB
+                          Worker 1:  Sort Method: quicksort  Memory: 3780kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..21042.68 rows=41663 width=75) (actual time=0.030..25.246 rows=33334 loops=3)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=6085 read=13916 written=3
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.004..0.004 rows=1 loops=24001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=96004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.004..0.004 rows=1 loops=24001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=95979
+Planning Time: 0.524 ms
+Execution Time: 252.554 ms
+
+== WITHOUT candidate index / incomplete-envelope count, 24h
+Finalize Aggregate  (cost=20063.84..20063.85 rows=1 width=4) (actual time=48.230..56.638 rows=1 loops=1)
+  Buffers: shared hit=1880 read=5300
+  ->  Gather  (cost=20063.73..20063.84 rows=1 width=8) (actual time=48.146..56.633 rows=2 loops=1)
+        Workers Planned: 1
+        Workers Launched: 1
+        Buffers: shared hit=1880 read=5300
+        ->  Partial Aggregate  (cost=19063.73..19063.74 rows=1 width=8) (actual time=38.125..38.128 rows=1 loops=2)
+              Buffers: shared hit=1880 read=5300
+              ->  Parallel Hash Right Anti Join  (cost=14671.67..19061.17 rows=1022 width=0) (actual time=38.122..38.125 rows=0 loops=2)
+                    Hash Cond: ((COALESCE(audit.tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+                    Buffers: shared hit=1880 read=5300
+                    ->  Parallel Seq Scan on audit_events audit  (cost=0.00..3434.56 rows=58765 width=99) (never executed)
+                          Filter: (type = 'approval_decision'::text)
+                    ->  Parallel Hash  (cost=14657.20..14657.20 rows=827 width=78) (actual time=37.906..37.907 rows=0 loops=2)
+                          Buckets: 2048  Batches: 1  Memory Usage: 0kB
+                          Buffers: shared hit=1844 read=5300
+                          ->  Nested Loop  (cost=0.42..14657.20 rows=827 width=78) (actual time=37.889..37.889 rows=0 loops=2)
+                                Buffers: shared hit=1844 read=5300
+                                ->  Parallel Seq Scan on runtime_approvals a  (cost=0.00..9071.10 rows=827 width=78) (actual time=37.888..37.888 rows=0 loops=2)
+                                      Filter: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                                      Rows Removed by Filter: 50000
+                                      Buffers: shared hit=1844 read=5300
+                                ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..6.74 rows=1 width=53) (never executed)
+                                      Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                                      Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+Planning Time: 0.374 ms
+Execution Time: 56.683 ms
+
+== WITHOUT candidate index / incoherent-terminal count, 24h
+Aggregate  (cost=89.25..89.26 rows=1 width=4) (actual time=0.024..0.025 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=61.13..89.25 rows=1 width=0) (actual time=0.023..0.024 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=60.70..72.78 rows=1 width=78) (actual time=0.023..0.024 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=60.28..64.31 rows=1 width=78) (actual time=0.023..0.023 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=60.28..60.28 rows=1 width=0) (actual time=0.022..0.022 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.014..0.015 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..8.46 rows=1 width=53) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..8.44 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.323 ms
+Execution Time: 0.051 ms
+
+-- candidate index built in 136 ms
+-- candidate index size 5968 kB
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, window 30s..24h
+Limit  (cost=1.28..58.41 rows=25 width=63) (actual time=0.042..189.227 rows=25 loops=1)
+  Buffers: shared hit=198883
+  ->  Nested Loop Anti Join  (cost=1.28..195945.14 rows=85746 width=63) (actual time=0.041..189.212 rows=25 loops=1)
+        Buffers: shared hit=198883
+        ->  Nested Loop  (cost=0.85..133617.40 rows=97996 width=109) (actual time=0.032..102.828 rows=24001 loops=1)
+              Buffers: shared hit=102904
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..51485.75 rows=99981 width=75) (actual time=0.020..7.294 rows=24001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                    Buffers: shared hit=6900
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=24001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=96004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=24001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=95979
+Planning Time: 0.565 ms
+Execution Time: 189.277 ms
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, no ceiling (backfill)
+Limit  (cost=1.27..58.33 rows=25 width=63) (actual time=0.050..186.664 rows=25 loops=1)
+  Buffers: shared hit=198883
+  ->  Nested Loop Anti Join  (cost=1.27..195707.58 rows=85755 width=63) (actual time=0.050..186.650 rows=25 loops=1)
+        Buffers: shared hit=198883
+        ->  Nested Loop  (cost=0.85..133373.48 rows=98006 width=109) (actual time=0.042..101.351 rows=24001 loops=1)
+              Buffers: shared hit=102904
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..51237.12 rows=99991 width=75) (actual time=0.014..7.005 rows=24001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)))
+                    Buffers: shared hit=6900
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=24001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=96004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=24001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=95979
+Planning Time: 0.354 ms
+Execution Time: 186.706 ms
+
+== WITH candidate index (tenant_id, updated_at) / incomplete-envelope count, 24h
+Finalize Aggregate  (cost=20063.84..20063.85 rows=1 width=4) (actual time=38.638..44.496 rows=1 loops=1)
+  Buffers: shared hit=2072 read=5108
+  ->  Gather  (cost=20063.73..20063.84 rows=1 width=8) (actual time=38.561..44.490 rows=2 loops=1)
+        Workers Planned: 1
+        Workers Launched: 1
+        Buffers: shared hit=2072 read=5108
+        ->  Partial Aggregate  (cost=19063.73..19063.74 rows=1 width=8) (actual time=30.152..30.155 rows=1 loops=2)
+              Buffers: shared hit=2072 read=5108
+              ->  Parallel Hash Right Anti Join  (cost=14671.67..19061.17 rows=1022 width=0) (actual time=30.149..30.152 rows=0 loops=2)
+                    Hash Cond: ((COALESCE(audit.tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+                    Buffers: shared hit=2072 read=5108
+                    ->  Parallel Seq Scan on audit_events audit  (cost=0.00..3434.56 rows=58765 width=99) (never executed)
+                          Filter: (type = 'approval_decision'::text)
+                    ->  Parallel Hash  (cost=14657.20..14657.20 rows=827 width=78) (actual time=29.932..29.933 rows=0 loops=2)
+                          Buckets: 2048  Batches: 1  Memory Usage: 0kB
+                          Buffers: shared hit=2036 read=5108
+                          ->  Nested Loop  (cost=0.42..14657.20 rows=827 width=78) (actual time=29.907..29.907 rows=0 loops=2)
+                                Buffers: shared hit=2036 read=5108
+                                ->  Parallel Seq Scan on runtime_approvals a  (cost=0.00..9071.10 rows=827 width=78) (actual time=29.906..29.906 rows=0 loops=2)
+                                      Filter: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                                      Rows Removed by Filter: 50000
+                                      Buffers: shared hit=2036 read=5108
+                                ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..6.74 rows=1 width=53) (never executed)
+                                      Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                                      Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+Planning Time: 0.384 ms
+Execution Time: 44.539 ms
+
+== WITH candidate index (tenant_id, updated_at) / incoherent-terminal count, 24h
+Aggregate  (cost=89.25..89.26 rows=1 width=4) (actual time=0.012..0.013 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=61.13..89.25 rows=1 width=0) (actual time=0.012..0.012 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=60.70..72.78 rows=1 width=78) (actual time=0.012..0.012 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=60.28..64.31 rows=1 width=78) (actual time=0.012..0.012 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=60.28..60.28 rows=1 width=0) (actual time=0.011..0.011 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..8.46 rows=1 width=53) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..8.44 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.252 ms
+Execution Time: 0.034 ms
+
+-- G 100k, 1% in window, 50% undecided
+-- sizes {"heap":"156 MB","indexes":"operational_executions_pkey=14 MB, operational_executions_tenant_id_idempotency_key_key=15 MB, idx_operational_executions_tenant_state=15 MB, idx_operational_executions_approval=13 MB"}
+
+== WITHOUT candidate index / selector limit 25, window 30s..24h
+Limit  (cost=11761.05..11761.12 rows=25 width=63) (actual time=13.059..13.062 rows=25 loops=1)
+  Buffers: shared hit=9564
+  ->  Sort  (cost=11761.05..11761.41 rows=142 width=63) (actual time=13.058..13.060 rows=25 loops=1)
+        Sort Key: e.updated_at
+        Sort Method: top-N heapsort  Memory: 26kB
+        Buffers: shared hit=9564
+        ->  Nested Loop Anti Join  (cost=1.27..11757.05 rows=142 width=63) (actual time=4.250..12.983 rows=501 loops=1)
+              Buffers: shared hit=9564
+              ->  Nested Loop  (cost=0.85..10474.85 rows=162 width=109) (actual time=4.241..9.244 rows=1001 loops=1)
+                    Buffers: shared hit=6061
+                    ->  Index Scan using idx_operational_executions_tenant_state on operational_executions e  (cost=0.43..9113.09 rows=165 width=75) (actual time=4.219..4.528 rows=1001 loops=1)
+                          Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                          Buffers: shared hit=2057
+                    ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..8.25 rows=1 width=78) (actual time=0.004..0.004 rows=1 loops=1001)
+                          Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                          Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                          Buffers: shared hit=4004
+              ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..7.91 rows=1 width=99) (actual time=0.003..0.003 rows=0 loops=1001)
+                    Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+                    Buffers: shared hit=3503
+Planning Time: 0.331 ms
+Execution Time: 13.093 ms
+
+== WITHOUT candidate index / selector limit 25, no ceiling (backfill)
+Limit  (cost=27091.95..27134.72 rows=25 width=63) (actual time=42.846..53.210 rows=25 loops=1)
+  Buffers: shared hit=11121 read=13131 written=91, temp read=464 written=569
+  ->  Nested Loop Anti Join  (cost=27091.95..173819.08 rows=85755 width=63) (actual time=42.845..53.206 rows=25 loops=1)
+        Buffers: shared hit=11121 read=13131 written=91, temp read=464 written=569
+        ->  Nested Loop  (cost=27091.53..120873.06 rows=98006 width=109) (actual time=42.821..51.503 rows=525 loops=1)
+              Buffers: shared hit=9046 read=13131 written=91, temp read=464 written=569
+              ->  Gather Merge  (cost=27091.10..38736.70 rows=99991 width=75) (actual time=42.761..49.527 rows=525 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=6946 read=13131 written=91, temp read=464 written=569
+                    ->  Sort  (cost=26091.08..26195.24 rows=41663 width=75) (actual time=29.852..29.875 rows=476 loops=3)
+                          Sort Key: e.updated_at
+                          Sort Method: external merge  Disk: 4544kB
+                          Buffers: shared hit=6946 read=13131 written=91, temp read=464 written=569
+                          Worker 0:  Sort Method: quicksort  Memory: 3422kB
+                          Worker 1:  Sort Method: quicksort  Memory: 3475kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..21042.68 rows=41663 width=75) (actual time=0.052..22.395 rows=33334 loops=3)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=6870 read=13131 written=91
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=525)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=2100
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.53 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=525)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=2075
+Planning Time: 0.348 ms
+Execution Time: 54.038 ms
+
+== WITHOUT candidate index / incomplete-envelope count, 24h
+Aggregate  (cost=10506.08..10506.10 rows=1 width=4) (actual time=9.761..9.762 rows=1 loops=1)
+  Buffers: shared hit=6061
+  ->  Nested Loop Anti Join  (cost=1.27..10506.08 rows=3 width=0) (actual time=9.758..9.759 rows=0 loops=1)
+        Buffers: shared hit=6061
+        ->  Nested Loop  (cost=0.85..10474.86 rows=3 width=78) (actual time=9.758..9.758 rows=0 loops=1)
+              Buffers: shared hit=6061
+              ->  Index Scan using idx_operational_executions_tenant_state on operational_executions e  (cost=0.43..9113.09 rows=165 width=53) (actual time=4.490..4.800 rows=1001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                    Buffers: shared hit=2057
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..8.25 rows=1 width=78) (actual time=0.005..0.005 rows=0 loops=1001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                    Rows Removed by Filter: 1
+                    Buffers: shared hit=4004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..7.91 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.327 ms
+Execution Time: 9.794 ms
+
+== WITHOUT candidate index / incoherent-terminal count, 24h
+Aggregate  (cost=89.25..89.26 rows=1 width=4) (actual time=0.014..0.015 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=61.12..89.24 rows=1 width=0) (actual time=0.014..0.014 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=60.70..72.78 rows=1 width=78) (actual time=0.014..0.014 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=60.28..64.31 rows=1 width=78) (actual time=0.014..0.014 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=60.28..60.28 rows=1 width=0) (actual time=0.013..0.013 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.009..0.009 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..8.46 rows=1 width=53) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..8.44 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.275 ms
+Execution Time: 0.039 ms
+
+-- candidate index built in 159 ms
+-- candidate index size 7592 kB
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, window 30s..24h
+Limit  (cost=1.27..524.98 rows=25 width=63) (actual time=0.029..4.693 rows=25 loops=1)
+  Buffers: shared hit=4289
+  ->  Nested Loop Anti Join  (cost=1.27..2913.05 rows=139 width=63) (actual time=0.029..4.691 rows=25 loops=1)
+        Buffers: shared hit=4289
+        ->  Nested Loop  (cost=0.85..1656.17 rows=159 width=109) (actual time=0.022..2.658 rows=525 loops=1)
+              Buffers: shared hit=2214
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..315.83 rows=162 width=75) (actual time=0.012..0.159 rows=525 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                    Buffers: shared hit=114
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..8.27 rows=1 width=78) (actual time=0.004..0.004 rows=1 loops=525)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=2100
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..7.90 rows=1 width=99) (actual time=0.004..0.004 rows=1 loops=525)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=2075
+Planning Time: 0.337 ms
+Execution Time: 4.720 ms
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, no ceiling (backfill)
+Limit  (cost=1.27..55.82 rows=25 width=63) (actual time=0.030..3.785 rows=25 loops=1)
+  Buffers: shared hit=4288
+  ->  Nested Loop Anti Join  (cost=1.27..187131.50 rows=85755 width=63) (actual time=0.030..3.783 rows=25 loops=1)
+        Buffers: shared hit=4288
+        ->  Nested Loop  (cost=0.85..134185.48 rows=98006 width=109) (actual time=0.023..2.135 rows=525 loops=1)
+              Buffers: shared hit=2213
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..52049.12 rows=99991 width=75) (actual time=0.013..0.158 rows=525 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)))
+                    Buffers: shared hit=113
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=525)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=2100
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.53 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=525)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=2075
+Planning Time: 0.358 ms
+Execution Time: 3.813 ms
+
+== WITH candidate index (tenant_id, updated_at) / incomplete-envelope count, 24h
+Aggregate  (cost=1687.36..1687.38 rows=1 width=4) (actual time=5.828..5.830 rows=1 loops=1)
+  Buffers: shared hit=4219
+  ->  Nested Loop Anti Join  (cost=1.27..1687.36 rows=3 width=0) (actual time=5.826..5.827 rows=0 loops=1)
+        Buffers: shared hit=4219
+        ->  Nested Loop  (cost=0.85..1656.18 rows=3 width=78) (actual time=5.825..5.826 rows=0 loops=1)
+              Buffers: shared hit=4219
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..315.83 rows=162 width=53) (actual time=0.014..0.339 rows=1001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                    Buffers: shared hit=215
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..8.27 rows=1 width=78) (actual time=0.005..0.005 rows=0 loops=1001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                    Rows Removed by Filter: 1
+                    Buffers: shared hit=4004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..7.90 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.365 ms
+Execution Time: 5.868 ms
+
+== WITH candidate index (tenant_id, updated_at) / incoherent-terminal count, 24h
+Aggregate  (cost=89.25..89.26 rows=1 width=4) (actual time=0.014..0.014 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=61.12..89.24 rows=1 width=0) (actual time=0.013..0.014 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=60.70..72.78 rows=1 width=78) (actual time=0.013..0.013 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=60.28..64.31 rows=1 width=78) (actual time=0.013..0.013 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=60.28..60.28 rows=1 width=0) (actual time=0.013..0.013 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.009..0.009 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..8.46 rows=1 width=53) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..8.44 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.265 ms
+Execution Time: 0.046 ms
+
+-- H 100k, 100% in window, 0 undecided (selector finds nothing)
+-- sizes {"heap":"156 MB","indexes":"operational_executions_pkey=14 MB, operational_executions_tenant_id_idempotency_key_key=15 MB, idx_operational_executions_tenant_state=12 MB, idx_operational_executions_approval=13 MB"}
+
+== WITHOUT candidate index / selector limit 25, window 30s..24h
+Limit  (cost=27404.11..27449.63 rows=25 width=63) (actual time=793.981..803.537 rows=1 loops=1)
+  Buffers: shared hit=800179 read=19905, temp read=556 written=557
+  ->  Nested Loop Anti Join  (cost=27404.11..183511.09 rows=85746 width=63) (actual time=793.980..803.534 rows=1 loops=1)
+        Buffers: shared hit=800179 read=19905, temp read=556 written=557
+        ->  Nested Loop  (cost=27403.69..121179.35 rows=97996 width=109) (actual time=46.951..448.290 rows=100001 loops=1)
+              Buffers: shared hit=400176 read=19905, temp read=556 written=557
+              ->  Gather Merge  (cost=27403.27..39047.71 rows=99981 width=75) (actual time=46.914..63.300 rows=100001 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=172 read=19905, temp read=556 written=557
+                    ->  Sort  (cost=26403.25..26507.39 rows=41659 width=75) (actual time=33.463..35.939 rows=33334 loops=3)
+                          Sort Key: e.updated_at
+                          Sort Method: external merge  Disk: 4448kB
+                          Buffers: shared hit=172 read=19905, temp read=556 written=557
+                          Worker 0:  Sort Method: quicksort  Memory: 3175kB
+                          Worker 1:  Sort Method: quicksort  Memory: 3836kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..21355.18 rows=41659 width=75) (actual time=0.028..24.988 rows=33334 loops=3)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=96 read=19905
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=100001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=400004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=100001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=400003
+Planning Time: 0.596 ms
+Execution Time: 811.537 ms
+
+== WITHOUT candidate index / selector limit 25, no ceiling (backfill)
+Limit  (cost=27091.95..27137.46 rows=25 width=63) (actual time=776.688..785.322 rows=1 loops=1)
+  Buffers: shared hit=800467 read=19617, temp read=518 written=519
+  ->  Nested Loop Anti Join  (cost=27091.95..183211.16 rows=85755 width=63) (actual time=776.687..785.320 rows=1 loops=1)
+        Buffers: shared hit=800467 read=19617, temp read=518 written=519
+        ->  Nested Loop  (cost=27091.53..120873.06 rows=98006 width=109) (actual time=41.174..435.861 rows=100001 loops=1)
+              Buffers: shared hit=400464 read=19617, temp read=518 written=519
+              ->  Gather Merge  (cost=27091.10..38736.70 rows=99991 width=75) (actual time=41.142..56.939 rows=100001 loops=1)
+                    Workers Planned: 2
+                    Workers Launched: 2
+                    Buffers: shared hit=460 read=19617, temp read=518 written=519
+                    ->  Sort  (cost=26091.08..26195.24 rows=41663 width=75) (actual time=29.131..31.468 rows=33334 loops=3)
+                          Sort Key: e.updated_at
+                          Sort Method: external merge  Disk: 4144kB
+                          Buffers: shared hit=460 read=19617, temp read=518 written=519
+                          Worker 0:  Sort Method: quicksort  Memory: 3709kB
+                          Worker 1:  Sort Method: quicksort  Memory: 3666kB
+                          ->  Parallel Seq Scan on operational_executions e  (cost=0.00..21042.68 rows=41663 width=75) (actual time=0.026..21.905 rows=33334 loops=3)
+                                Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                                Buffers: shared hit=384 read=19617
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=100001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=400004
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=100001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=400003
+Planning Time: 0.344 ms
+Execution Time: 787.599 ms
+
+== WITHOUT candidate index / incomplete-envelope count, 24h
+Finalize Aggregate  (cost=20067.54..20067.55 rows=1 width=4) (actual time=40.067..47.631 rows=1 loops=1)
+  Buffers: shared hit=7180
+  ->  Gather  (cost=20067.42..20067.53 rows=1 width=8) (actual time=39.987..47.625 rows=2 loops=1)
+        Workers Planned: 1
+        Workers Launched: 1
+        Buffers: shared hit=7180
+        ->  Partial Aggregate  (cost=19067.42..19067.43 rows=1 width=8) (actual time=31.431..31.434 rows=1 loops=2)
+              Buffers: shared hit=7180
+              ->  Parallel Hash Right Anti Join  (cost=14671.67..19064.87 rows=1022 width=0) (actual time=31.428..31.431 rows=0 loops=2)
+                    Hash Cond: ((COALESCE(audit.tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+                    Buffers: shared hit=7180
+                    ->  Parallel Seq Scan on audit_events audit  (cost=0.00..3437.29 rows=58824 width=99) (never executed)
+                          Filter: (type = 'approval_decision'::text)
+                    ->  Parallel Hash  (cost=14657.20..14657.20 rows=827 width=78) (actual time=31.190..31.191 rows=0 loops=2)
+                          Buckets: 2048  Batches: 1  Memory Usage: 0kB
+                          Buffers: shared hit=7144
+                          ->  Nested Loop  (cost=0.42..14657.20 rows=827 width=78) (actual time=31.158..31.158 rows=0 loops=2)
+                                Buffers: shared hit=7144
+                                ->  Parallel Seq Scan on runtime_approvals a  (cost=0.00..9071.10 rows=827 width=78) (actual time=31.157..31.157 rows=0 loops=2)
+                                      Filter: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                                      Rows Removed by Filter: 50000
+                                      Buffers: shared hit=7144
+                                ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..6.74 rows=1 width=53) (never executed)
+                                      Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                                      Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+Planning Time: 0.404 ms
+Execution Time: 47.676 ms
+
+== WITHOUT candidate index / incoherent-terminal count, 24h
+Aggregate  (cost=89.25..89.26 rows=1 width=4) (actual time=0.021..0.022 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=61.13..89.25 rows=1 width=0) (actual time=0.020..0.021 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=60.70..72.78 rows=1 width=78) (actual time=0.020..0.020 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=60.28..64.31 rows=1 width=78) (actual time=0.020..0.020 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=60.28..60.28 rows=1 width=0) (actual time=0.019..0.020 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.012..0.012 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..8.46 rows=1 width=53) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..8.44 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.390 ms
+Execution Time: 0.055 ms
+
+-- candidate index built in 1536 ms
+-- candidate index size 5968 kB
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, window 30s..24h
+Limit  (cost=1.28..58.41 rows=25 width=63) (actual time=781.974..791.393 rows=1 loops=1)
+  Buffers: shared hit=796089 read=32658
+  ->  Nested Loop Anti Join  (cost=1.28..195949.14 rows=85746 width=63) (actual time=781.972..791.390 rows=1 loops=1)
+        Buffers: shared hit=796089 read=32658
+        ->  Nested Loop  (cost=0.85..133617.40 rows=97996 width=109) (actual time=0.038..448.617 rows=100001 loops=1)
+              Buffers: shared hit=399870 read=28874
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..51485.75 rows=99981 width=75) (actual time=0.026..64.501 rows=100001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+                    Buffers: shared hit=8002 read=20738
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.003..0.003 rows=1 loops=100001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=391868 read=8136
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=100001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=396219 read=3784
+Planning Time: 0.359 ms
+Execution Time: 791.425 ms
+
+== WITH candidate index (tenant_id, updated_at) / selector limit 25, no ceiling (backfill)
+Limit  (cost=1.27..58.33 rows=25 width=63) (actual time=815.764..825.023 rows=1 loops=1)
+  Buffers: shared hit=795973 read=32774
+  ->  Nested Loop Anti Join  (cost=1.27..195711.58 rows=85755 width=63) (actual time=815.763..825.021 rows=1 loops=1)
+        Buffers: shared hit=795973 read=32774
+        ->  Nested Loop  (cost=0.85..133373.48 rows=98006 width=109) (actual time=0.056..466.740 rows=100001 loops=1)
+              Buffers: shared hit=399850 read=28894
+              ->  Index Scan using idx_f08c_candidate on operational_executions e  (cost=0.43..51237.12 rows=99991 width=75) (actual time=0.037..65.722 rows=100001 loops=1)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (updated_at < (now() - '00:00:30'::interval)))
+                    Buffers: shared hit=8002 read=20738
+              ->  Index Scan using runtime_approvals_pkey on runtime_approvals a  (cost=0.42..0.82 rows=1 width=78) (actual time=0.004..0.004 rows=1 loops=100001)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = e.approval_id))
+                    Filter: ((COALESCE(approver_id, ''::text) <> ''::text) AND (COALESCE(decision_actor_type, ''::text) <> ''::text) AND (COALESCE(decision_correlation_id, ''::text) <> ''::text) AND (COALESCE(decision_command_key, ''::text) <> ''::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))))
+                    Buffers: shared hit=391848 read=8156
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..0.63 rows=1 width=99) (actual time=0.003..0.003 rows=1 loops=100001)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+              Buffers: shared hit=396123 read=3880
+Planning Time: 0.419 ms
+Execution Time: 825.056 ms
+
+== WITH candidate index (tenant_id, updated_at) / incomplete-envelope count, 24h
+Finalize Aggregate  (cost=20067.54..20067.55 rows=1 width=4) (actual time=38.502..46.126 rows=1 loops=1)
+  Buffers: shared hit=5383 read=1797
+  ->  Gather  (cost=20067.42..20067.53 rows=1 width=8) (actual time=38.418..46.121 rows=2 loops=1)
+        Workers Planned: 1
+        Workers Launched: 1
+        Buffers: shared hit=5383 read=1797
+        ->  Partial Aggregate  (cost=19067.42..19067.43 rows=1 width=8) (actual time=30.384..30.388 rows=1 loops=2)
+              Buffers: shared hit=5383 read=1797
+              ->  Parallel Hash Right Anti Join  (cost=14671.67..19064.87 rows=1022 width=0) (actual time=30.381..30.384 rows=0 loops=2)
+                    Hash Cond: ((COALESCE(audit.tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((audit.payload ->> 'approvalId'::text) = a.approval_id) AND ((audit.payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+                    Buffers: shared hit=5383 read=1797
+                    ->  Parallel Seq Scan on audit_events audit  (cost=0.00..3437.29 rows=58824 width=99) (never executed)
+                          Filter: (type = 'approval_decision'::text)
+                    ->  Parallel Hash  (cost=14657.20..14657.20 rows=827 width=78) (actual time=30.163..30.164 rows=0 loops=2)
+                          Buckets: 2048  Batches: 1  Memory Usage: 0kB
+                          Buffers: shared hit=5347 read=1797
+                          ->  Nested Loop  (cost=0.42..14657.20 rows=827 width=78) (actual time=30.132..30.133 rows=0 loops=2)
+                                Buffers: shared hit=5347 read=1797
+                                ->  Parallel Seq Scan on runtime_approvals a  (cost=0.00..9071.10 rows=827 width=78) (actual time=30.132..30.132 rows=0 loops=2)
+                                      Filter: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])) AND ((status <> ALL ('{FAILED,EXPIRED}'::text[])) OR ((status = 'FAILED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NULL)) OR ((status = 'EXPIRED'::text) AND ((approved_at IS NULL) <> (rejected_at IS NULL)))) AND ((COALESCE(approver_id, ''::text) = ''::text) OR (COALESCE(decision_actor_type, ''::text) = ''::text) OR (COALESCE(decision_correlation_id, ''::text) = ''::text) OR (COALESCE(decision_command_key, ''::text) = ''::text)))
+                                      Rows Removed by Filter: 50000
+                                      Buffers: shared hit=5347 read=1797
+                                ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..6.74 rows=1 width=53) (never executed)
+                                      Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                                      Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+Planning Time: 0.346 ms
+Execution Time: 46.167 ms
+
+== WITH candidate index (tenant_id, updated_at) / incoherent-terminal count, 24h
+Aggregate  (cost=89.25..89.26 rows=1 width=4) (actual time=0.012..0.013 rows=1 loops=1)
+  Buffers: shared hit=4
+  ->  Nested Loop Anti Join  (cost=61.13..89.25 rows=1 width=0) (actual time=0.011..0.012 rows=0 loops=1)
+        Buffers: shared hit=4
+        ->  Nested Loop  (cost=60.70..72.78 rows=1 width=78) (actual time=0.011..0.012 rows=0 loops=1)
+              Buffers: shared hit=4
+              ->  Bitmap Heap Scan on runtime_approvals a  (cost=60.28..64.31 rows=1 width=78) (actual time=0.011..0.011 rows=0 loops=1)
+                    Recheck Cond: (((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))) OR ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[]))))
+                    Filter: ((((status = 'FAILED'::text) AND ((approved_at IS NULL) OR (rejected_at IS NOT NULL))) OR ((status = 'EXPIRED'::text) AND (approved_at IS NOT NULL) AND (rejected_at IS NOT NULL))) AND (tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)))
+                    Buffers: shared hit=4
+                    ->  BitmapOr  (cost=60.28..60.28 rows=1 width=0) (actual time=0.011..0.011 rows=0 loops=1)
+                          Buffers: shared hit=4
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'FAILED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+                          ->  Bitmap Index Scan on idx_runtime_approvals_status_reservation_expires  (cost=0.00..30.14 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=1)
+                                Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (status = 'EXPIRED'::text) AND (status = ANY ('{APPROVED,RESERVED,EXECUTING,EXECUTED,REJECTED,FAILED,EXPIRED}'::text[])))
+                                Buffers: shared hit=2
+              ->  Index Scan using idx_operational_executions_approval on operational_executions e  (cost=0.42..8.46 rows=1 width=53) (never executed)
+                    Index Cond: ((tenant_id = NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text)) AND (approval_id = a.approval_id))
+                    Filter: ((updated_at < (now() - '00:00:30'::interval)) AND (updated_at > (now() - '24:00:00'::interval)))
+        ->  Index Scan using uq_audit_approval_decision on audit_events audit  (cost=0.42..8.44 rows=1 width=99) (never executed)
+              Index Cond: ((COALESCE(tenant_id, ''::text) = COALESCE(e.tenant_id, ''::text)) AND ((payload ->> 'approvalId'::text) = a.approval_id) AND ((payload ->> 'decision'::text) = CASE WHEN ((a.status = 'REJECTED'::text) OR ((a.status = 'EXPIRED'::text) AND (a.rejected_at IS NOT NULL) AND (a.approved_at IS NULL))) THEN 'rejected'::text ELSE 'approved'::text END))
+Planning Time: 0.255 ms
+Execution Time: 0.034 ms
+

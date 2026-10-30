@@ -1,3 +1,4 @@
+import { coreHook } from '../kernel/hook-authority.ts'
 import { describe, expect, it, vi } from 'vitest'
 import type { RuntimeInput } from '@cvg/harness-contracts'
 import {
@@ -413,11 +414,15 @@ describe('PDSH-031 slice 2d-3b — iterative tool dispatch edges', () => {
 
   it('rejects an approval whose identity changed while resuming', async () => {
     const reservationListener = {
+      kind: 'control',
       plugin: 'control.approvals',
-      fn: (async (call: { grant?: unknown }, next: () => unknown) => {
+      fn: coreHook('tool/pre-execute', (async (
+        call: { grant?: unknown },
+        next: () => unknown
+      ) => {
         ;(call as { grant?: unknown }).grant = { approvalId: 'approval-y' }
         return (next as () => unknown)()
-      }) as never
+      }) as never)
     }
     const ctx = makeCtx({
       kernel: () =>
@@ -568,18 +573,20 @@ describe('PDSH-031 slice 2d-3b — iterative tool dispatch edges', () => {
 
   it('reports reserved cancellation and deadline as unknown effects', async () => {
     const reservationListener = {
+      kind: 'control',
       plugin: 'control.approvals',
-      fn: (async (
+      fn: coreHook('tool/pre-execute', (async (
         call: { grant?: unknown; approval?: unknown },
         next: () => unknown
       ) => {
         ;(call as { grant?: unknown }).grant = { approvalId: 'approval-x' }
         return (next as () => unknown)()
-      }) as never
+      }) as never)
     }
     const reserveListener = {
+      kind: 'control',
       plugin: 'control.approvals',
-      fn: (async (
+      fn: coreHook('tool/execute', (async (
         call: { approval?: unknown; grant?: unknown },
         next: () => unknown
       ) => {
@@ -588,7 +595,7 @@ describe('PDSH-031 slice 2d-3b — iterative tool dispatch edges', () => {
           handle: { reservationId: 'res_pdsh031' }
         }
         return (next as () => unknown)()
-      }) as never
+      }) as never)
     }
     const listeners = {
       'tool/pre-execute': [reservationListener],

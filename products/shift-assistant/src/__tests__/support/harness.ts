@@ -23,7 +23,7 @@ export const THOR: Organized = {
       nome: 'Thor',
       leito: '3',
       especie: 'canino',
-      evolucao: 'Vomitou 2 vezes',
+      evolucao: 'Vomitou duas vezes',
       exames_pedidos: [],
       condutas: []
     }

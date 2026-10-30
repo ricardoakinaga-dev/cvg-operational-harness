@@ -5,6 +5,7 @@ import { Client } from 'pg'
 
 const version = '0000_operator_session_auth'
 const oidcStateVersion = '0001_oidc_login_state'
+const principalRevisionVersion = '0002_operator_session_principal_revision'
 const migrationPath = resolve(
   process.cwd(),
   'packages/persistence/migrations/operator-session/0000_auth.sql'
@@ -13,14 +14,34 @@ const oidcStateMigrationPath = resolve(
   process.cwd(),
   'packages/persistence/migrations/operator-session/0001_oidc_state.sql'
 )
+const principalRevisionMigrationPath = resolve(
+  process.cwd(),
+  'packages/persistence/migrations/operator-session/0002_principal_revision.sql'
+)
+/** The bodies pinned by the preflight (SPEC 0262 §6.2: create/get/replace are v2). */
 const functionNames = [
+  'operator_session_create_v2',
+  'operator_session_get_v2',
+  'operator_session_replace_v2',
+  'operator_session_revoke'
+] as const
+/** What migration 0002 defines. */
+const revisionFunctionNames = [
+  'operator_session_create_v2',
+  'operator_session_get_v2',
+  'operator_session_replace_v2'
+] as const
+/** What migration 0000 itself defines (the unbound v1 entry points are dropped by 0002). */
+const baseFunctionNames = [
   'operator_session_create',
   'operator_session_get',
   'operator_session_replace',
   'operator_session_revoke'
 ] as const
 
-export type OperatorSessionFunctionName = (typeof functionNames)[number]
+export type OperatorSessionFunctionName =
+  | (typeof functionNames)[number]
+  | (typeof baseFunctionNames)[number]
 
 function requirePinnedMigrationClient(client: Client): void {
   if (!(client instanceof Client)) {
@@ -69,10 +90,11 @@ export function renderOperatorSessionMigration(
 }
 
 export function extractOperatorSessionFunctionBodies(
-  renderedSql: string
+  renderedSql: string,
+  names: readonly OperatorSessionFunctionName[] = functionNames
 ): Record<OperatorSessionFunctionName, string> {
   const bodies = {} as Record<OperatorSessionFunctionName, string>
-  for (const name of functionNames) {
+  for (const name of names) {
     const delimiter = `$cvg_${name.replace('operator_session_', '')}$`
     const start = renderedSql.indexOf(`AS ${delimiter}`)
     if (start < 0 || renderedSql.indexOf(`AS ${delimiter}`, start + 1) >= 0) {
@@ -108,6 +130,13 @@ export async function runOperatorSessionMigrations(
   const oidcStateTemplate = await readFile(oidcStateMigrationPath, 'utf8')
   const oidcStateChecksum = createHash('sha256')
     .update(oidcStateTemplate)
+    .digest('hex')
+  const principalRevisionTemplate = await readFile(
+    principalRevisionMigrationPath,
+    'utf8'
+  )
+  const principalRevisionChecksum = createHash('sha256')
+    .update(principalRevisionTemplate)
     .digest('hex')
 
   await client.query('BEGIN')
@@ -161,7 +190,7 @@ export async function runOperatorSessionMigrations(
         schemaName,
         ownerName
       )
-      extractOperatorSessionFunctionBodies(rendered)
+      extractOperatorSessionFunctionBodies(rendered, baseFunctionNames)
       await client.query(rendered)
       await client.query(
         `INSERT INTO ${quotedSchema}.schema_migrations (version, checksum)
@@ -191,6 +220,31 @@ export async function runOperatorSessionMigrations(
         [oidcStateVersion, oidcStateChecksum]
       )
     }
+    const revisionApplied = await client.query<{ checksum: string }>(
+      `SELECT checksum FROM ${quotedSchema}.schema_migrations
+       WHERE version = $1 FOR UPDATE`,
+      [principalRevisionVersion]
+    )
+    if (revisionApplied.rows.length > 0) {
+      if (revisionApplied.rows[0]?.checksum !== principalRevisionChecksum) {
+        throw new Error(
+          'Operator-auth principal revision migration checksum mismatch'
+        )
+      }
+    } else {
+      const rendered = renderOperatorSessionMigration(
+        principalRevisionTemplate,
+        schemaName,
+        ownerName
+      )
+      extractOperatorSessionFunctionBodies(rendered, revisionFunctionNames)
+      await client.query(rendered)
+      await client.query(
+        `INSERT INTO ${quotedSchema}.schema_migrations (version, checksum)
+         VALUES ($1, $2)`,
+        [principalRevisionVersion, principalRevisionChecksum]
+      )
+    }
     await client.query('COMMIT')
   } catch (error) {
     await client.query('ROLLBACK')
@@ -215,13 +269,13 @@ export async function grantOperatorSessionFunctions(
   try {
     await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`)
     await client.query(
-      `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_create(bytea,text,text,text,timestamptz) TO ${role}`
+      `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_create_v2(bytea,text,text,text,bigint,timestamptz) TO ${role}`
     )
     await client.query(
-      `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_get(bytea) TO ${role}`
+      `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_get_v2(bytea) TO ${role}`
     )
     await client.query(
-      `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_replace(bytea,bytea,text,text,text,timestamptz) TO ${role}`
+      `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_replace_v2(bytea,bytea,text,text,text,bigint,timestamptz) TO ${role}`
     )
     await client.query(
       `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_revoke(bytea) TO ${role}`

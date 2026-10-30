@@ -70,25 +70,21 @@ const preRollForwardMigrations = [
   '0025_webhook_replay_fencing',
   '0026_rate_limit_key_hardening',
   '0027_worker_operations',
-  '0029_case_assignment_authorization'
+  '0029_case_assignment_authorization',
+  '0030_api_creation_receipts'
 ]
 // The proof always rolls forward the newest migration of the default run
 // (POSTGRES_MIGRATIONS; 0028_session_events is opt-in) over a dump of the one
 // before it; keep both in step with packages/persistence/migrations.
-const rollForwardMigration = '0030_api_creation_receipts'
+const rollForwardMigration = '0031_channel_effect_retry_not_before'
 const preRollForwardVersion = preRollForwardMigrations.at(-1)
 // Objects the roll-forward migration adds, removed before the pre-migration
 // backup is restored over the rolled-forward schema. SPEC0176 recovers
-// production by rolling forward; this drill only restores the 0029 backup.
-// 0030 (SPEC 0257) adds the receipts table, its guard function and the two
-// support keys it creates only when absent (absent before 0030).
+// production by rolling forward; this drill only restores the 0030 backup.
+// 0031 (SPEC 0282) adds one nullable column to channel_effect_journal.
 const rollForwardRollbackSql = [
-  'DROP TABLE IF EXISTS api_creation_receipts;',
-  'DROP FUNCTION IF EXISTS api_creation_receipt_reject_mutation();',
-  'ALTER TABLE tasks DROP CONSTRAINT IF EXISTS',
-  'tasks_tenant_id_session_id_id_key;',
-  'ALTER TABLE approval_requests DROP CONSTRAINT IF EXISTS',
-  'approval_requests_tenant_id_session_id_id_key'
+  'ALTER TABLE channel_effect_journal DROP COLUMN IF EXISTS',
+  'retry_not_before_ms'
 ].join(' ')
 
 type ManagedPostgres = {
@@ -443,7 +439,16 @@ async function runSyntheticWorkload(
       executionRef: 'rem21-010-execution-1',
       resultDigest: 'b'.repeat(64)
     })
+  })
 
+  return { eventIds, firstEventId: eventIds[0] as string }
+}
+
+// The channel journal (SPEC 0282) needs the newest migration's column, so its
+// part of the workload runs after the roll-forward, never on the pre-roll-forward
+// schema the rollback drill restores.
+async function runChannelJournalWorkload(appPool: Pool): Promise<void> {
+  await withTenantContext(appPool, tenantId, async (client) => {
     const channelJournal = new PostgresChannelEffectJournal(client, {
       clock: () => fixedJournalNow.getTime()
     })
@@ -474,8 +479,6 @@ async function runSyntheticWorkload(
     if (completed !== 'committed')
       throw new Error('channel_journal_not_committed')
   })
-
-  return { eventIds, firstEventId: eventIds[0] as string }
 }
 
 async function tableNames(client: Client): Promise<string[]> {
@@ -639,6 +642,8 @@ async function main(): Promise<void> {
     // tables added by the roll-forward are covered in the backup too.
     stage = 'grant-source-role-after-roll-forward'
     await grantSyntheticRole(sourceAdmin)
+    stage = 'run-channel-journal-workload'
+    await runChannelJournalWorkload(sourcePool)
     stage = 'dump-post-roll-forward'
     const postDump = dumpDatabase(source, database)
 

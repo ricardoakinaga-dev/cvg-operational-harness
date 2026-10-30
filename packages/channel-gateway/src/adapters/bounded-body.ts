@@ -23,6 +23,53 @@ export function statusEffectOptions(status: number): {
   return status >= 500 ? { effectUnknown: true } : {}
 }
 
+/** SPEC 0282: ceiling of an honoured Retry-After (5 minutes). */
+export const MAX_RETRY_AFTER_MS = 300_000
+
+/**
+ * SPEC 0282: a Retry-After (delta-seconds or an HTTP date) as milliseconds from
+ * `nowMs`, cut at `ceilingMs`. Absent, malformed, negative or zero is `undefined`
+ * (no wait): a bad header never blocks an operation.
+ */
+export function parseRetryAfter(
+  value: string | null | undefined,
+  nowMs: number,
+  ceilingMs = MAX_RETRY_AFTER_MS
+): number | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.trim()
+  let ms: number
+  if (/^\d{1,9}$/.test(text)) {
+    ms = Number(text) * 1000
+  } else if (text.length > 0 && text.length <= 64) {
+    const at = Date.parse(text)
+    if (!Number.isFinite(at)) return undefined
+    ms = at - nowMs
+  } else {
+    return undefined
+  }
+  if (!Number.isFinite(ms) || ms <= 0) return undefined
+  return Math.min(Math.floor(ms), ceilingMs)
+}
+
+/** Error options of a non-2xx provider response (SPEC 0268 and SPEC 0282). */
+export function responseErrorOptions(
+  response: { status: number; headers: Headers },
+  nowMs: number
+): { effectUnknown?: boolean; retryAfterMs?: number } {
+  const options: { effectUnknown?: boolean; retryAfterMs?: number } = {
+    ...statusEffectOptions(response.status)
+  }
+  if (response.status === 429) {
+    const retryAfterMs = parseRetryAfter(
+      response.headers.get('retry-after'),
+      nowMs
+    )
+    if (retryAfterMs !== undefined) options.retryAfterMs = retryAfterMs
+  }
+  return options
+}
+
 /** The ceiling error; the transport attaches the response status. */
 export function responseTooLarge(status?: number): Error {
   const error = new Error('Response exceeds maxResponseBytes')

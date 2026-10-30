@@ -68,7 +68,15 @@ export interface ChannelEffectRecord {
   errorCode: ChannelErrorCode | null
   updatedAtMs: number
   revision: number
+  /**
+   * SPEC 0282: earliest moment a released operation may be reserved again
+   * (a 429 Retry-After). Absent or null means no wait.
+   */
+  notBeforeMs?: number | null
 }
+
+/** SPEC 0282: reservations an operation may receive before it is FAILED. */
+export const DEFAULT_CHANNEL_MAX_ATTEMPTS = 5
 
 export type ChannelEffectReserveOutcome =
   | { outcome: 'reserved'; record: ChannelEffectRecord }
@@ -76,6 +84,11 @@ export type ChannelEffectReserveOutcome =
   | { outcome: 'in_flight'; record: ChannelEffectRecord }
   | { outcome: 'conflict'; record: ChannelEffectRecord }
   | { outcome: 'uncertain'; record: ChannelEffectRecord }
+  | {
+      outcome: 'retry_later'
+      record: ChannelEffectRecord
+      retryAfterMs: number
+    }
   | { outcome: 'version_mismatch' }
 
 export interface ChannelEffectReserveInput {
@@ -84,6 +97,8 @@ export interface ChannelEffectReserveInput {
   hashVersion: string
   leaseOwner: string
   leaseMs: number
+  /** SPEC 0282: reservation ceiling (default {@link DEFAULT_CHANNEL_MAX_ATTEMPTS}). */
+  maxAttempts?: number
 }
 
 export type ChannelEffectTransition = 'committed' | 'lease_lost'
@@ -147,7 +162,8 @@ export interface ChannelEffectJournal {
   release(
     identity: ChannelEffectIdentity,
     leaseOwner: string,
-    errorCode: ChannelErrorCode
+    errorCode: ChannelErrorCode,
+    retryAfterMs?: number
   ): Promise<ChannelEffectTransition>
   markUncertain(
     identity: ChannelEffectIdentity,
@@ -209,8 +225,33 @@ export function createEffectRecord(
     result: null,
     errorCode: null,
     updatedAtMs: nowMs,
-    revision: 1
+    revision: 1,
+    notBeforeMs: null
   }
+}
+
+/** SPEC 0282: the "not before" moment of a released operation, or null. */
+export function notBeforeAfter(
+  nowMs: number,
+  retryAfterMs: number | undefined
+): number | null {
+  return retryAfterMs !== undefined &&
+    Number.isFinite(retryAfterMs) &&
+    retryAfterMs > 0
+    ? nowMs + Math.floor(retryAfterMs)
+    : null
+}
+
+/** A malformed or non-numeric "not before" is ignored, never a permanent wait. */
+export function isFutureNotBefore(
+  notBeforeMs: unknown,
+  nowMs: number
+): notBeforeMs is number {
+  return (
+    typeof notBeforeMs === 'number' &&
+    Number.isFinite(notBeforeMs) &&
+    notBeforeMs > nowMs
+  )
 }
 
 export interface ReserveDecision {
@@ -221,6 +262,8 @@ export interface ReserveDecision {
     | 'in_flight'
     | 'conflict'
     | 'uncertain'
+    | 'retry_later'
+    | 'exhausted'
     | 'version_mismatch'
   record?: ChannelEffectRecord
 }
@@ -269,10 +312,29 @@ export function decideReserve(
     }
     return { action: 'uncertain', record: uncertain }
   }
+  // SPEC 0282: the ceiling first (terminal), then the provider's "not before".
+  const maxAttempts = input.maxAttempts ?? DEFAULT_CHANNEL_MAX_ATTEMPTS
+  if (existing.attempt >= maxAttempts) {
+    const exhausted: ChannelEffectRecord = {
+      ...existing,
+      state: 'FAILED',
+      errorCode: 'attempts_exhausted',
+      leaseOwner: null,
+      leaseExpiresAtMs: null,
+      notBeforeMs: null,
+      updatedAtMs: nowMs,
+      revision: existing.revision + 1
+    }
+    return { action: 'exhausted', record: exhausted }
+  }
+  if (isFutureNotBefore(existing.notBeforeMs, nowMs)) {
+    return { action: 'retry_later', record: existing }
+  }
   const takeover: ChannelEffectRecord = {
     ...existing,
     state: 'PENDING',
     attempt: existing.attempt + 1,
+    notBeforeMs: null,
     leaseOwner: input.leaseOwner,
     leaseExpiresAtMs: nowMs + input.leaseMs,
     result: null,
@@ -383,6 +445,19 @@ export class InMemoryChannelEffectJournal implements ChannelEffectJournal {
         record: cloneEffectRecord(decision.record as ChannelEffectRecord)
       }
     }
+    if (decision.action === 'exhausted') {
+      const failed = decision.record as ChannelEffectRecord
+      this.#entries.set(key, failed)
+      return { outcome: 'replay', record: cloneEffectRecord(failed) }
+    }
+    if (decision.action === 'retry_later') {
+      const waiting = decision.record as ChannelEffectRecord
+      return {
+        outcome: 'retry_later',
+        record: cloneEffectRecord(waiting),
+        retryAfterMs: Math.max(0, (waiting.notBeforeMs ?? now) - now)
+      }
+    }
     return {
       outcome: 'in_flight',
       record: cloneEffectRecord(decision.record as ChannelEffectRecord)
@@ -486,7 +561,8 @@ export class InMemoryChannelEffectJournal implements ChannelEffectJournal {
   async release(
     identity: ChannelEffectIdentity,
     leaseOwner: string,
-    errorCode: ChannelErrorCode
+    errorCode: ChannelErrorCode,
+    retryAfterMs?: number
   ): Promise<ChannelEffectTransition> {
     return this.#settle(identity, leaseOwner, (record, now) => ({
       ...record,
@@ -494,6 +570,7 @@ export class InMemoryChannelEffectJournal implements ChannelEffectJournal {
       errorCode,
       leaseOwner: null,
       leaseExpiresAtMs: null,
+      notBeforeMs: notBeforeAfter(now, retryAfterMs),
       updatedAtMs: now,
       revision: record.revision + 1
     }))

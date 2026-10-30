@@ -49,7 +49,7 @@ export default defineConfig({
         `CVG_OPERATOR_IDENTITY_KEYRING=${shellQuote(syntheticKeyRing)}`,
         `API_ALLOWED_ORIGINS=${consoleOrigin}`,
         `PORT=${apiPort}`,
-        'npm run dev:api'
+        'npx tsx scripts/rem21-014-trusted-test-api.ts'
       ].join(' '),
       url: `http://127.0.0.1:${apiPort}/health`,
       reuseExistingServer: false,

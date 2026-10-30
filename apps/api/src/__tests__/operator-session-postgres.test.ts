@@ -158,28 +158,31 @@ describe('PostgreSQL operator session boundary', () => {
           }
           const created = await storeA.create({
             identity,
-            expiresAt: Date.now() + 60_000
+            expiresAt: Date.now() + 60_000,
+            principalRevision: 3
           })
           expect(created.sessionId).toMatch(/^opsess_[A-Za-z0-9_-]{43}$/)
           expect(await storeB.get(created.sessionId)).toMatchObject({
-            identity
+            identity,
+            principalRevision: 3
           })
           await expect(
             pool.query(`SELECT * FROM ${schema}.operator_sessions`)
           ).rejects.toMatchObject({ code: '42501' })
           await expect(
-            pool.query(`SELECT * FROM ${schema}.operator_session_get($1)`, [
+            pool.query(`SELECT * FROM ${schema}.operator_session_get_v2($1)`, [
               digest()
             ])
           ).resolves.toMatchObject({ rows: [] })
           await expect(
             pool.query(
-              `SELECT ${schema}.operator_session_create($1,$2,$3,$4,$5)`,
+              `SELECT ${schema}.operator_session_create_v2($1,$2,$3,$4,$5,$6)`,
               [
                 digest(),
                 'tenant_00000000-0000-4000-8000-000000000701',
                 'operator.synthetic.pg',
                 'Supervisor',
+                3,
                 new Date(Date.now() + 16 * 60_000)
               ]
             )
@@ -202,15 +205,16 @@ describe('PostgreSQL operator session boundary', () => {
           'tenant_00000000-0000-4000-8000-000000000701',
           'operator.synthetic.pg',
           'Supervisor',
+          3,
           expires
         ]
         await pool.query(
-          `SELECT ${schema}.operator_session_create($1,$2,$3,$4,$5)`,
+          `SELECT ${schema}.operator_session_create_v2($1,$2,$3,$4,$5,$6)`,
           [original, ...identity]
         )
         const outcomes = await Promise.allSettled([
           pool.query(
-            `SELECT ${schema}.operator_session_replace($1,$2,$3,$4,$5,$6)`,
+            `SELECT ${schema}.operator_session_replace_v2($1,$2,$3,$4,$5,$6,$7)`,
             [original, successor, ...identity]
           ),
           otherPool.query(`SELECT ${schema}.operator_session_revoke($1)`, [
@@ -221,7 +225,7 @@ describe('PostgreSQL operator session boundary', () => {
         expect(
           (
             await pool.query(
-              `SELECT * FROM ${schema}.operator_session_get($1)`,
+              `SELECT * FROM ${schema}.operator_session_get_v2($1)`,
               [original]
             )
           ).rows
@@ -229,7 +233,7 @@ describe('PostgreSQL operator session boundary', () => {
         expect(
           (
             await otherPool.query(
-              `SELECT * FROM ${schema}.operator_session_get($1)`,
+              `SELECT * FROM ${schema}.operator_session_get_v2($1)`,
               [successor]
             )
           ).rows
@@ -269,13 +273,13 @@ describe('PostgreSQL operator session boundary', () => {
           await verify()
 
           await admin.query(
-            `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_get(bytea) TO PUBLIC`
+            `GRANT EXECUTE ON FUNCTION ${schema}.operator_session_get_v2(bytea) TO PUBLIC`
           )
           await expect(verify()).rejects.toThrow(
-            'function operator_session_get'
+            'function operator_session_get_v2'
           )
           await admin.query(
-            `REVOKE EXECUTE ON FUNCTION ${schema}.operator_session_get(bytea) FROM PUBLIC`
+            `REVOKE EXECUTE ON FUNCTION ${schema}.operator_session_get_v2(bytea) FROM PUBLIC`
           )
           await verify()
 
@@ -328,14 +332,149 @@ describe('PostgreSQL operator session boundary', () => {
           await verify()
 
           await admin.query(
-            `CREATE OR REPLACE FUNCTION ${schema}.operator_session_get(p_digest bytea)
-         RETURNS TABLE(tenant_id text, operator_id text, role text, expires_at timestamptz)
+            `CREATE OR REPLACE FUNCTION ${schema}.operator_session_get_v2(p_digest bytea)
+         RETURNS TABLE(tenant_id text, operator_id text, role text, principal_revision bigint, expires_at timestamptz)
          LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
          AS 'BEGIN RETURN; END;'`
           )
           await expect(verify()).rejects.toThrow(
-            'function operator_session_get'
+            'function operator_session_get_v2'
           )
+        }
+      )
+    }
+  )
+
+  itWithPostgres(
+    'SPEC 0262 §6.2: binding, legacy rows, replacement and the removed unbound functions',
+    async () => {
+      await withAuthDatabase(async ({ schema, pool, otherPool, admin }) => {
+        const storeA = new PostgresOperatorSessionStore(pool, schema)
+        const identity = {
+          tenantId: 'tenant_00000000-0000-4000-8000-000000000701',
+          operatorId: 'operator.synthetic.pg',
+          role: 'Supervisor' as const
+        }
+        // The unbound v1 entry points do not exist (no overload, no alias).
+        for (const signature of [
+          'operator_session_create(bytea,text,text,text,timestamptz)',
+          'operator_session_get(bytea)',
+          'operator_session_replace(bytea,bytea,text,text,text,timestamptz)'
+        ]) {
+          const resolved = await admin.query(
+            'SELECT to_regprocedure($1)::text AS oid',
+            [`${schema}.${signature}`]
+          )
+          expect(resolved.rows[0].oid).toBeNull()
+        }
+        // A revision below 1 or past MAX_SAFE_INTEGER is never stored.
+        for (const bad of [0, -1, Number.MAX_SAFE_INTEGER + 1, 1.5]) {
+          await expect(
+            storeA.create({
+              identity,
+              expiresAt: Date.now() + 60_000,
+              principalRevision: bad
+            })
+          ).rejects.toThrow('principal revision is invalid')
+        }
+        // The binding is returned exactly and survives a rotation.
+        const first = await storeA.create({
+          identity,
+          expiresAt: Date.now() + 60_000,
+          principalRevision: 7
+        })
+        const rotated = await storeA.replace(first.sessionId, {
+          identity,
+          expiresAt: Date.now() + 60_000,
+          principalRevision: 7
+        })
+        expect((await storeA.get(rotated.sessionId))?.principalRevision).toBe(7)
+        // A rotation never changes the revision: that is a new family.
+        await expect(
+          storeA.replace(rotated.sessionId, {
+            identity,
+            expiresAt: Date.now() + 60_000,
+            principalRevision: 8
+          })
+        ).rejects.toMatchObject({ code: '22023' })
+        const switched = await storeA.switchIdentity(rotated.sessionId, {
+          identity,
+          expiresAt: Date.now() + 60_000,
+          principalRevision: 8
+        })
+        expect((await storeA.get(switched.sessionId))?.principalRevision).toBe(
+          8
+        )
+        expect(await storeA.get(rotated.sessionId)).toBeNull()
+        // A legacy row (revision 0) is never a current binding.
+        const legacy = digest()
+        await admin.query(
+          `INSERT INTO ${schema}.operator_session_families (family_id) VALUES ($1)`,
+          [legacy]
+        )
+        await admin.query(
+          `INSERT INTO ${schema}.operator_sessions
+             (token_digest, family_id, tenant_id, operator_id, role, created_at, expires_at)
+           VALUES ($1, $1, $2, $3, 'Supervisor', now(), now() + interval '5 minutes')`,
+          [legacy, identity.tenantId, identity.operatorId]
+        )
+        const legacyRow = await admin.query(
+          `SELECT principal_revision FROM ${schema}.operator_sessions WHERE token_digest = $1`,
+          [legacy]
+        )
+        expect(Number(legacyRow.rows[0].principal_revision)).toBe(0)
+        expect(
+          (
+            await otherPool.query(
+              `SELECT * FROM ${schema}.operator_session_get_v2($1)`,
+              [legacy]
+            )
+          ).rows
+        ).toEqual([])
+      })
+    }
+  )
+
+  itWithPostgres(
+    'SPEC 0262 §6.2/R10: a decoy overload, a revived unbound function or a loosened revision constraint refuses serving',
+    async () => {
+      await withAuthDatabase(
+        async ({ schema, productSchema, pool, admin, sessionRole }) => {
+          const verify = () =>
+            assertPostgresOperatorSessionBoundary(pool, {
+              authSchemaName: schema,
+              expectedSessionRole: sessionRole,
+              productSchemaName: productSchema
+            })
+          await verify()
+          // A permissive alias of the removed unbound getter.
+          await admin.query(
+            `CREATE FUNCTION ${schema}.operator_session_get(p_digest bytea)
+             RETURNS TABLE(tenant_id text, operator_id text, role text, expires_at timestamptz)
+             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+             AS 'BEGIN RETURN; END;'`
+          )
+          await expect(verify()).rejects.toThrow('function inventory')
+          await admin.query(
+            `DROP FUNCTION ${schema}.operator_session_get(bytea)`
+          )
+          await verify()
+          // A decoy overload of the v2 creator.
+          await admin.query(
+            `CREATE FUNCTION ${schema}.operator_session_create_v2(p_digest bytea)
+             RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+             SET search_path = pg_catalog, pg_temp AS 'BEGIN RETURN; END;'`
+          )
+          await expect(verify()).rejects.toThrow('function inventory')
+          await admin.query(
+            `DROP FUNCTION ${schema}.operator_session_create_v2(bytea)`
+          )
+          await verify()
+          // The revision constraint is part of the pinned inventory.
+          await admin.query(
+            `ALTER TABLE ${schema}.operator_sessions DROP CONSTRAINT operator_sessions_principal_revision_check`
+          )
+          await expect(verify()).rejects.toThrow('session check constraints')
         }
       )
     }
