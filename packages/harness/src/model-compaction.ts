@@ -1,3 +1,4 @@
+import { coreHook } from './kernel/hook-authority.ts'
 import { createHash } from 'node:crypto'
 import { canonicalizeJson } from '@cvg/harness-contracts'
 import type { ModelMessage, ModelResult } from '@cvg/harness-contracts'
@@ -292,8 +293,8 @@ export function createModelCompactionControl(
             view.map(({ role, content }) => ({ role, content }))
           return next()
         }
-      ctx.on('model/before-call', handler(false))
-      ctx.on('model/overflow', handler(true))
+      ctx.on('model/before-call', coreHook('model/before-call', handler(false)))
+      ctx.on('model/overflow', coreHook('model/overflow', handler(true)))
     }
   }
 }

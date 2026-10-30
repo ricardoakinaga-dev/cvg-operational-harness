@@ -207,7 +207,7 @@ export interface HookMap {
    * leaving them untouched keeps the original failure.
    */
   'model/overflow': (
-    call: ModelCallState,
+    call: ModelCallView,
     next: Next<KernelGate>
   ) => Promise<KernelGate>
   /** waterfall — policy and approval decide before dispatch. */
