@@ -46,3 +46,10 @@ Os únicos pontos que criam `system` no código são três composições do pró
 - Cobertura por arquivo (`CVG_COVERAGE_PER_FILE=1`, include nos dois arquivos): `compaction.ts` e `model-compaction.ts` em 100%.
 - Mutantes `mutations-slice2.json`: 26/26 mortos (`mutation-results-slice2.json`); os 8 da fatia 1 seguem mortos.
 - typecheck, eslint, prettier, `skip:governance` verdes.
+
+## Correção P2 da revisão do DF (retentativa só de erro retentável)
+
+`model-compaction.ts`: a 2ª tentativa só ocorre quando o erro da porta traz `retryable === true`; qualquer outro erro (`internal_error` de
+settlement da C02, recusa de política/orçamento, `context_window`, erro simples, `retryable` truthy mas não `true`) é recusa
+(`INSUFFICIENT_EVIDENCE`) com **1** chamada e sem evento. Teste com 5 formas de erro não retentável; mutantes S2-27 (retry ignora `retryable`) e
+S2-28 (aceita truthy) mortos (`mutations-slice2-p2.json`). Cobertura de `model-compaction.ts` segue 100%.

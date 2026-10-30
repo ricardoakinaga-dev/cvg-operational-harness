@@ -186,8 +186,15 @@ export function createModelCompactionControl(
               purpose: 'COMPACTION',
               signal: call.turn.signal
             })
-          } catch {
+          } catch (error) {
             if (call.turn.signal.aborted) return next()
+            // only a failure the port itself calls retryable earns the second
+            // request: an uncertain settlement (C02 `internal_error`), a policy
+            // or budget refusal or a window refusal would be repeated or paid
+            // for twice
+            if ((error as { retryable?: unknown } | null)?.retryable !== true) {
+              return refuse()
+            }
             continue
           }
           if (call.turn.signal.aborted) return next()

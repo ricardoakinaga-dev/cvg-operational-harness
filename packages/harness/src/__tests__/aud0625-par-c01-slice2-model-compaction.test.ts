@@ -38,6 +38,9 @@ import {
 
 /** PAR-C01 / SPEC 0290 slice 2: compaction by a model call with host pins. Synthetic data only. */
 
+const retryable = (message = 'provider down') =>
+  Object.assign(new Error(message), { retryable: true })
+
 const ok = (text: string, costUsd = 0): ModelResult => ({
   text,
   provider: 'synthetic',
@@ -248,7 +251,7 @@ describe('PAR-C01 slice 2: one request and one retry', () => {
     const t = build({
       compaction: async () => {
         n += 1
-        if (n === 1) throw new Error('provider down')
+        if (n === 1) throw retryable()
         return ok('segundo resumo')
       }
     })
@@ -261,11 +264,36 @@ describe('PAR-C01 slice 2: one request and one retry', () => {
   it('stops after the retry: never a third request, no model call, no event', async () => {
     const t = build({
       compaction: async () => {
-        throw new Error('provider down')
+        throw retryable()
       }
     })
     refused(await t.kernel.execute(t.input), t)
     expect(t.compactionCalls).toHaveLength(2)
+  })
+
+  it('does not retry an error that is not retryable: one request, no model call, no event', async () => {
+    const errors: unknown[] = [
+      Object.assign(new Error('settlement uncertain'), {
+        code: 'internal_error',
+        retryable: false
+      }),
+      Object.assign(new Error('window'), {
+        code: 'invalid_request',
+        reason: 'context_window'
+      }),
+      new Error('plain failure'),
+      Object.assign(new Error('truthy but not true'), { retryable: 'yes' }),
+      null
+    ]
+    for (const error of errors) {
+      const t = build({
+        compaction: async () => {
+          throw error
+        }
+      })
+      refused(await t.kernel.execute(t.input), t)
+      expect(t.compactionCalls).toHaveLength(1)
+    }
   })
 
   it('treats an empty or oversized summary as a failed attempt', async () => {
