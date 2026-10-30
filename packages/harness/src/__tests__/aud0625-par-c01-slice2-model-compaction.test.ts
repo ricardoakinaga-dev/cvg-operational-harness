@@ -125,7 +125,9 @@ function build(setup: Setup = {}) {
           : {
               onCompacted: (r: ContextCompactionResult) => {
                 recorded.push(r)
-              }
+              },
+              // SPEC 0290c: the host maps each request message to a log sequence
+              logSequenceOf: (index: number) => 100 + index
             }),
         ...setup.options
       })
@@ -226,7 +228,8 @@ describe('PAR-C01 slice 2: the compaction request', () => {
     expect(r.usage).toEqual({ inputTokens: 3, outputTokens: 2, costUsd: 0.01 })
     expect(r.summary).toBe('resumo')
     expect(r.droppedMessages).toBe(2)
-    expect(r.throughSequence).toBe(3)
+    // the last summarised message is request index 2, mapped to log sequence 102
+    expect(r.throughSequence).toBe(102)
     const prefix = [
       {
         sequence: 2,
