@@ -18,6 +18,7 @@ import {
   scanPidNamespace,
   type PidNamespaceScan
 } from './procfs.ts'
+import { LandlockStatusChannel } from './landlock-status.ts'
 import { StatusChannel } from './status.ts'
 import {
   PROCESS_CONSUMERS,
@@ -46,6 +47,11 @@ export interface ProcessServiceOptions {
   /** Concurrent launches (reserved slots); default 8. */
   readonly maxConcurrent?: number
   readonly bwrapPath?: string
+  /**
+   * SPEC 0288: every launch runs under the profile's Landlock helper and must prove the
+   * ruleset on its private channel; a profile without the helper launches nothing.
+   */
+  readonly requireLandlock?: boolean
   /** Test seams, host composition only: /proc root, the spawn function and the namespace observer. */
   readonly procRoot?: string
   readonly spawn?: typeof nodeSpawn
@@ -168,6 +174,7 @@ export function createProcessService(
         },
         profile: 'namespace-observed',
         ownerIndependent: false,
+        landlock: { applied: false },
         secondaryErrors: secondary
       }
       return {
@@ -190,7 +197,8 @@ export function createProcessService(
           ? { bwrapPath: options.bwrapPath }
           : {}),
         statusFd: true,
-        env
+        env,
+        ...(options.requireLandlock === true ? { landlock: true } : {})
       })
     } catch (error) {
       return nothingLaunched('spawn_failed', [
@@ -205,7 +213,14 @@ export function createProcessService(
     let child: ChildProcess
     try {
       child = spawn(prepared.executable, [...prepared.args], {
-        stdio: ['pipe', 'pipe', 'pipe', ...prepared.fds, 'pipe'],
+        stdio: [
+          'pipe',
+          'pipe',
+          'pipe',
+          ...prepared.fds,
+          'pipe',
+          ...(prepared.landlock ? (['pipe', 'pipe'] as const) : [])
+        ],
         env: prepared.env,
         detached: true
       })
@@ -217,10 +232,22 @@ export function createProcessService(
     } finally {
       prepared.close()
     }
+    if (prepared.landlock) {
+      // The helper reads its ruleset to EOF before anything else, then closes the channel.
+      const rules = child.stdio[prepared.landlock.rulesFdIndex] as
+        | NodeJS.WritableStream
+        | null
+        | undefined
+      rules?.on('error', () => undefined)
+      rules?.end(prepared.landlock.rules)
+    }
     const supervised = supervise({
       id,
       child,
       statusIndex: prepared.statusFdIndex!,
+      ...(prepared.landlock
+        ? { landlockStatusIndex: prepared.landlock.statusFdIndex }
+        : {}),
       limits,
       request,
       procRoot,
@@ -256,6 +283,8 @@ interface Supervision {
   readonly id: string
   readonly child: ChildProcess
   readonly statusIndex: number
+  /** Present only for a Landlock launch: the helper's private status channel. */
+  readonly landlockStatusIndex?: number
   readonly limits: ProcessLimits
   readonly request: ProcessLaunchRequest
   readonly procRoot: string
@@ -272,6 +301,10 @@ interface Supervised {
 function supervise(s: Supervision): Supervised {
   const { child, limits, procRoot } = s
   const status = new StatusChannel()
+  const landlock =
+    s.landlockStatusIndex !== undefined
+      ? new LandlockStatusChannel()
+      : undefined
   const stdout: Buffer[] = []
   const stderr: Buffer[] = []
   const secondary: string[] = []
@@ -422,6 +455,7 @@ function supervise(s: Supervision): Supervised {
       cleanup,
       profile: 'namespace-observed',
       ownerIndependent: false,
+      landlock: landlock ? landlock.report() : { applied: false },
       secondaryErrors: [...secondary]
     }
     cleanupTimersAndListeners()
@@ -563,6 +597,11 @@ function supervise(s: Supervision): Supervised {
       resolveNsKnown()
     }
   })
+  if (landlock && s.landlockStatusIndex !== undefined) {
+    const landlockPipe = child.stdio[s.landlockStatusIndex]
+    landlockPipe?.on('data', (chunk: Buffer) => landlock.feed(chunk))
+    landlockPipe?.on('error', () => undefined)
+  }
   child.stdin?.on('error', () => undefined)
   statusPipe?.on('error', () => undefined)
   child.stdout?.on('error', () => undefined)
@@ -590,6 +629,15 @@ function supervise(s: Supervision): Supervised {
           `launcher_exit_${child.exitCode ?? child.signalCode ?? 'unknown'}`
         )
         trigger('spawn_failed')
+      } else if (landlock) {
+        const report = landlock.report()
+        // Without a proof the helper never executed the payload (XL04): nothing ran.
+        if (!report.applied) {
+          secondary.push(`landlock_${report.error ?? 'unproven'}`)
+          trigger('spawn_failed')
+        } else if (child.signalCode !== null && snap.exitCode === undefined)
+          trigger('signal')
+        else trigger('exit')
       } else if (child.signalCode !== null && snap.exitCode === undefined)
         trigger('signal')
       else trigger('exit')

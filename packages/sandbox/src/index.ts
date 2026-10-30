@@ -34,6 +34,8 @@ export {
 export { confinePath } from './confine.ts'
 export {
   createProcessContainmentProfile,
+  LANDLOCK_HELPER_DESTINATION,
+  landlockRulesFor,
   type ProcessContainmentProfile,
   type ProcessContainmentOptions,
   type ProcessRuntimeFile
@@ -50,6 +52,7 @@ export type {
   ProcessConsumer,
   ProcessDisposeReport,
   ProcessHandle,
+  ProcessLandlockReport,
   ProcessLaunchRequest,
   ProcessLimits,
   ProcessOutcome,

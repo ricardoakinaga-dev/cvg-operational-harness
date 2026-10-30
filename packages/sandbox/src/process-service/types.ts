@@ -64,6 +64,20 @@ export interface ProcessCleanup {
   readonly unverified: number
 }
 
+/**
+ * SPEC 0288 §5.4: what the Landlock helper proved on its private channel. `applied: false`
+ * says no ruleset was proven for this launch; it is never silence.
+ */
+export type ProcessLandlockReport =
+  | {
+      readonly applied: true
+      readonly abi: number
+      readonly handledFs: number
+      readonly handledNet: number
+      readonly scoped: number
+    }
+  | { readonly applied: false; readonly error?: string }
+
 export interface ProcessOutcome {
   readonly cause: ProcessCause
   readonly exitCode: number | null
@@ -74,6 +88,7 @@ export interface ProcessOutcome {
   readonly cleanup: ProcessCleanup
   readonly profile: 'namespace-observed'
   readonly ownerIndependent: false
+  readonly landlock: ProcessLandlockReport
   /** Cleanup and channel faults; they never replace `cause` (I3). */
   readonly secondaryErrors: readonly string[]
 }

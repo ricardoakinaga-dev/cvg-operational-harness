@@ -35,6 +35,8 @@ export interface ProcessContainmentOptions {
   readonly bwrapPath: string
   readonly runtimeFiles: readonly ProcessRuntimeFile[]
   readonly executablePaths: readonly string[]
+  /** SPEC 0288: the reviewed `cvg-landlock-exec` build; required for a Landlock launch. */
+  readonly landlockHelperPath?: string
 }
 interface PinnedFile {
   readonly source: string
@@ -50,9 +52,22 @@ interface ProfileRecord {
   readonly bwrap: PinnedFile
   readonly files: readonly PinnedFile[]
   readonly executablePaths: readonly string[]
+  readonly landlockHelper?: PinnedFile
   readonly digest: string
 }
 const profiles = new WeakMap<object, ProfileRecord>()
+/** Where the helper is mounted inside the sandbox; nothing else lives under `/.cvg`. */
+export const LANDLOCK_HELPER_DESTINATION = '/.cvg/landlock-exec'
+/**
+ * Landlock filesystem rights (kernel UAPI bit values) used by the derived ruleset. Only the
+ * ABI 3 set (bits 0-14) is ever granted, so a rule never names a right the floor lacks.
+ */
+const LL_EXECUTE = 0x1
+const LL_WRITE_FILE = 0x2
+const LL_READ_FILE = 0x4
+const LL_READ_DIR = 0x8
+const LL_TRUNCATE = 0x4000
+const LL_ALL_ABI3 = 0x7fff
 const MAX_FILE_BYTES = 256 * 1024 * 1024
 const MAX_RUNTIME_BYTES = 512 * 1024 * 1024
 const FIXED_ENV = Object.freeze({
@@ -205,6 +220,8 @@ export function createProcessContainmentProfile(
   if (!directoryDescriptorsAvailable()) fail('platform_unavailable')
   const workspaceRoot = realpathSync(absolute(options.workspaceRoot))
   if (workspaceRoot === '/') fail('unrestricted_workspace')
+  if (within('/.cvg', workspaceRoot))
+    fail('runtime_workspace_or_private_mount_overlap')
   const rootFd = directory(workspaceRoot)
   let identity: string
   try {
@@ -233,7 +250,7 @@ export function createProcessContainmentProfile(
         within(workspaceRoot, source) ||
         within(workspaceRoot, destination) ||
         within(destination, workspaceRoot) ||
-        ['/tmp', '/proc', '/dev'].some((p) => within(p, destination))
+        ['/tmp', '/proc', '/dev', '/.cvg'].some((p) => within(p, destination))
       )
         fail('runtime_workspace_or_private_mount_overlap')
       const captured = capture(
@@ -267,13 +284,23 @@ export function createProcessContainmentProfile(
     bwrapSource,
     MAX_RUNTIME_BYTES - totalBytes
   )
+  let landlockHelper: PinnedFile | undefined
+  if (options.landlockHelperPath !== undefined) {
+    const source = realpathSync(absolute(options.landlockHelperPath))
+    if (within(workspaceRoot, source)) fail('landlock_helper_inside_workspace')
+    landlockHelper = capture(source, LANDLOCK_HELPER_DESTINATION)
+    if ((landlockHelper.mode & 0o111) === 0)
+      fail('landlock_helper_not_executable')
+  }
   const data = {
     schemaVersion: 'process-containment-profile-v1',
     workspaceRoot,
     workspaceIdentity: identity,
     bwrap,
     files,
-    executablePaths
+    executablePaths,
+    // Absent stays absent, so a profile without the helper keeps its earlier digest.
+    ...(landlockHelper ? { landlockHelper } : {})
   }
   const digest = createHash('sha256').update(JSON.stringify(data)).digest('hex')
   const profile = Object.freeze({ digest })
@@ -299,6 +326,15 @@ export function processProfileVersion(
   return `v1:${record.digest}`
 }
 
+/**
+ * SPEC 0288 §5.4: the helper's two private channels. The caller adds a 'pipe' stdio at each
+ * index (after the bubblewrap status pipe), writes `rules` to the rules pipe and ends it.
+ */
+export interface PreparedLandlockLaunch {
+  readonly statusFdIndex: number
+  readonly rulesFdIndex: number
+  readonly rules: string
+}
 export interface PreparedProcessLaunch {
   readonly executable: string
   readonly args: readonly string[]
@@ -306,7 +342,33 @@ export interface PreparedProcessLaunch {
   readonly fds: readonly number[]
   /** Child fd of the private `--json-status-fd` pipe; the caller adds a 'pipe' stdio at this index. */
   readonly statusFdIndex?: number
+  readonly landlock?: PreparedLandlockLaunch
   close(): void
+}
+
+/**
+ * SPEC 0288 §5.5: a closed list derived from the reviewed profile, never from the payload.
+ * Read and execute on each mounted runtime file, everything on the workspace and the launch
+ * tmp, and the device and proc nodes a payload reads. Anything else is denied.
+ */
+export function landlockRulesFor(profile: ProcessContainmentProfile): string {
+  const record = recordOf(profile)
+  const rules: Array<[number, string]> = [
+    ...record.files.map((f): [number, string] => [
+      LL_READ_FILE | LL_EXECUTE,
+      f.destination
+    ]),
+    [LL_ALL_ABI3, record.workspaceRoot],
+    [LL_ALL_ABI3, '/tmp'],
+    [LL_READ_FILE | LL_WRITE_FILE | LL_TRUNCATE, '/dev/null'],
+    [LL_READ_FILE, '/dev/zero'],
+    [LL_READ_FILE, '/dev/urandom'],
+    [LL_READ_FILE, '/dev/random'],
+    [LL_READ_FILE | LL_READ_DIR, '/proc']
+  ]
+  // The helper reads one rule per line; a path with a line break cannot be expressed.
+  for (const [, path] of rules) if (/[\n\r]/.test(path)) fail('invalid_path')
+  return rules.map(([mask, path]) => `${mask.toString(16)} ${path}\n`).join('')
 }
 
 /** Open and pin every mounted identity before a payload can be launched. */
@@ -320,8 +382,13 @@ export function prepareProcessLaunch(request: {
   readonly statusFd?: boolean
   /** Already validated by the process service; the profile's own variables always win. */
   readonly env?: Readonly<Record<string, string>>
+  /** SPEC 0288: run the payload through the profile's Landlock helper. */
+  readonly landlock?: boolean
 }): PreparedProcessLaunch {
   const record = recordOf(request.profile)
+  const helper = request.landlock === true ? record.landlockHelper : undefined
+  if (request.landlock === true && !helper) fail('landlock_helper_required')
+  const rules = helper ? landlockRulesFor(request.profile!) : undefined
   if (
     request.handle.mode !== 'PROCESS' ||
     !request.handle.allowSubprocess ||
@@ -355,6 +422,7 @@ export function prepareProcessLaunch(request: {
       fail('workspace_identity_changed')
     // Verify the current cwd without following an unvalidated name at mount time.
     closeQuietly(directory(cwd))
+    if (helper) fds.push(openPinned(helper))
     const backendFd = openPinned(record.bwrap)
     fds.push(backendFd)
     const args = [
@@ -395,14 +463,16 @@ export function prepareProcessLaunch(request: {
     for (const parent of workspaceParents.reverse())
       if (!parents.has(parent) || within('/tmp', parent))
         args.push('--dir', parent)
-    args.push(
-      '--bind-fd',
-      String(3 + rootIndex),
-      record.workspaceRoot,
-      '--chdir',
-      cwd,
-      '--clearenv'
-    )
+    args.push('--bind-fd', String(3 + rootIndex), record.workspaceRoot)
+    if (helper)
+      args.push(
+        '--dir',
+        dirname(LANDLOCK_HELPER_DESTINATION),
+        '--ro-bind-fd',
+        String(3 + rootIndex + 1),
+        LANDLOCK_HELPER_DESTINATION
+      )
+    args.push('--chdir', cwd, '--clearenv')
     for (const [name, value] of Object.entries({
       ...request.env,
       ...FIXED_ENV,
@@ -415,7 +485,24 @@ export function prepareProcessLaunch(request: {
     const statusFdIndex = request.statusFd ? 3 + fds.length : undefined
     if (statusFdIndex !== undefined)
       args.push('--json-status-fd', String(statusFdIndex))
-    args.push('--', ...request.argv)
+    // The helper's channels follow the bubblewrap status pipe; bubblewrap passes them through
+    // to the helper, which closes both before it executes the payload (XL06).
+    const next = 3 + fds.length + (statusFdIndex !== undefined ? 1 : 0)
+    const landlock =
+      helper && rules !== undefined
+        ? { statusFdIndex: next, rulesFdIndex: next + 1, rules }
+        : undefined
+    args.push('--')
+    if (landlock)
+      args.push(
+        LANDLOCK_HELPER_DESTINATION,
+        '--status-fd',
+        String(landlock.statusFdIndex),
+        '--rules-fd',
+        String(landlock.rulesFdIndex),
+        '--'
+      )
+    args.push(...request.argv)
     // Extra stdio entries are duplicated into child fd3,fd4,... before exec.
     return {
       executable: `/proc/self/fd/${3 + fds.length - 1}`,
@@ -423,6 +510,7 @@ export function prepareProcessLaunch(request: {
       env: FIXED_ENV,
       fds,
       ...(statusFdIndex !== undefined ? { statusFdIndex } : {}),
+      ...(landlock ? { landlock } : {}),
       close: () => {
         for (const fd of fds.splice(0)) closeQuietly(fd)
       }
