@@ -20,3 +20,7 @@ export class SpillStorageUnavailable extends SpillError {
 /** The outcome of a write is unknown; a repeat is safe because `put` is idempotent (I6). */
 export class SpillCommitUnknown extends SpillError {}
 export class SpillPolicyError extends SpillError {}
+/** No usable locator key was composed: nothing is stored (SPEC 0293 I14, fail-closed). */
+export class SpillKeyUnavailable extends SpillError {}
+/** The caller cancelled before the write began; nothing was written (I7). */
+export class SpillCancelled extends SpillError {}

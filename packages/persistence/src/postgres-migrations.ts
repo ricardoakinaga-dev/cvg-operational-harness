@@ -52,6 +52,7 @@ const defaultPostgresMigrations = [
   '0030_api_creation_receipts',
   // SPEC 0282: the "not before" of a rate-limited channel operation.
   '0031_channel_effect_retry_not_before'
+  // 0037_tool_output_spill (SPEC 0293) is opt-in (dedicated schema); not in the default run.
 ]
 
 /**

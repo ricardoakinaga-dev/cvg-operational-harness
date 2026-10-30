@@ -37,6 +37,6 @@ Ficam `it.fails`: `spill.read` (fatia 3), estabilidade do texto podado e poda do
    (HMAC de `(tenant, sessão, operationKey, sha256)` com chave de servidor) ou se o armazenamento guardar o localizador em claro. O depósito em memória guarda o localizador em claro (é um fixture). A fatia 2 (Postgres) precisa decidir; recomendo HMAC com chave do cofre/ambiente e comparação do hash.
 2. **Classificação.** `ToolDescriptor` não tem classificação; o padrão é `CONFIDENTIAL` e o anfitrião pode informar `classificationOf`. Mantido como D7 (sem promessa de cofre).
 3. **Poda do próprio motor de contexto.** Um item de ferramenta de até 8 KiB é cortado pelo orçamento de tokens do motor (`DefaultContextEngine`, 4 000 tokens) como qualquer item de prioridade baixa: o item some inteiro (comportamento anterior, não novo).
-   Com resultados maiores por item, essa pressão chega antes; o ajuste de orçamento é do anfitrião.
+   Com resultados maiores por item, essa pressão chega antes; o ajuste de orçamento é do anfitrião. **Cartão de acompanhamento ligado à 0224** (registrado no 0380, PAR-C03), sem mudança agora.
 4. **Quota, `purge` e validação de `offset`/`length` do depósito** ficam na fatia 3, como na SPEC §4; o fixture só cobre idempotência, isolamento e validade.
 5. `Observation.rendering` é novo no registro persistido do checkpoint; a leitura de checkpoints antigos não muda (campo opcional) e o digest do checkpoint não valida a forma.

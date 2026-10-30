@@ -439,6 +439,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Armazenamento de texto grande com localizador opaco, prévia de cabeça e cauda e poda de resultado de ferramenta.
 - Depende de: PAR-S01.
 - Aceite: O modelo recebe localizador e prévia com aviso de corte; falha de gravação nunca descarta conteúdo em silêncio.
+- Acompanhamento (D9, fatia 1 do BUILD, ligado à SPEC 0224): o orçamento de 4 000 tokens do `DefaultContextEngine` descarta itens de baixa prioridade inteiros; com resultados de ferramenta de até 8 KiB inline essa pressão chega antes. Decidir, junto com a admissão "completo ou recusa" da 0224, se o orçamento passa a ser do anfitrião ou se o item é reduzido a prévia em vez de sumir. Sem mudança agora.
 
 ### PAR-C04 — Descarregamento de imagens antigas
 
