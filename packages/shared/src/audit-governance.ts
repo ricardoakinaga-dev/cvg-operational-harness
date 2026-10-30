@@ -177,6 +177,7 @@ const outboxOutcomeReasons = new Set([
   'not_found',
   'operation_in_progress',
   'operation_uncertain',
+  'origin_mismatch',
   'outbox_failed',
   'outbox_pending',
   'payload_mismatch',

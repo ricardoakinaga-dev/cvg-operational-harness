@@ -331,6 +331,27 @@ describe('SPEC 0291 slice 1: the approval is executable only where it was asked'
     expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
   })
 
+  it('AP07 (S04): in a fork of the session, the original approvalId is origin_mismatch and the same action asks again', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    // The fork has its own session id (S04), and the host names its conversation after it.
+    const parent = { conversationId: 'sess_parent', sessionId: 'sess_parent' }
+    const fork = { conversationId: 'sess_fork', sessionId: 'sess_fork' }
+    const requested = await harness.runtime.runTurn(
+      turnInput({ ...parent, operatorId: 'op_1' })
+    )
+    const approvalId = requested.approvalId ?? ''
+    approveApproval(harness, approvalId)
+    const reused = await harness.runtime.runTurn(
+      turnInput({ ...fork, approvalId })
+    )
+    expect(reused.reason).toBe('origin_mismatch')
+    expect(harness.toolExecutor).not.toHaveBeenCalled()
+    const asksAgain = await harness.runtime.runTurn(turnInput({ ...fork }))
+    expect(asksAgain.outcome).toBe('approval_required')
+    expect(asksAgain.approvalId).not.toBe(approvalId)
+    expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
+  })
+
   it('AO-C: the operator is not part of the binding: another operator executes in the same conversation', async () => {
     const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
     const approvalId = await askAndApprove(harness)

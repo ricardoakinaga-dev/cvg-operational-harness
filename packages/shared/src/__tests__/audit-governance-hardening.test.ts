@@ -310,3 +310,21 @@ describe('outbox payload sanitization', () => {
     expect(sanitizeOutboxPayload(null).payload).toBeNull()
   })
 })
+
+describe('outbox outcome reasons (SPEC 0291 AP10)', () => {
+  it('lets origin_mismatch through as a known runtime code, and redacts any other text', () => {
+    const known = sanitizeOutboxPayload({
+      status: 'denied',
+      reason: 'origin_mismatch'
+    })
+    expect(known.payload).toMatchObject({
+      status: 'denied',
+      reason: 'origin_mismatch'
+    })
+    const unknown = sanitizeOutboxPayload({
+      status: 'denied',
+      reason: 'origin_mismatch_but_with_free_text'
+    })
+    expect(unknown.payload).toMatchObject({ reason: '[redacted-outbox-text]' })
+  })
+})
