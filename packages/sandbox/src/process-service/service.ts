@@ -93,6 +93,13 @@ function checkRequest(
     request.outputOverflow !== 'drop'
   )
     bad('outputOverflow')
+  // Review F2: dropping the excess is a compatibility exception of the shell tool only. Every
+  // other consumer, and any persistent launch, keeps the SPEC's ceiling and `output_limit`.
+  if (
+    request.outputOverflow === 'drop' &&
+    (request.consumer !== 'shell' || request.mode !== 'oneshot')
+  )
+    bad('outputOverflow for this consumer or mode')
   if (request.signal !== undefined && !(request.signal instanceof AbortSignal))
     bad('signal')
   const limits = validateProcessLimits(request.limits, caps)
@@ -352,8 +359,14 @@ function supervise(s: Supervision): Supervised {
   const settle = async (): Promise<void> => {
     if (child.stdin && !child.stdin.destroyed) child.stdin.destroy()
     // A held (back-pressured) stream would never end: tear-down releases it.
-    child.stdout?.resume()
-    child.stderr?.resume()
+    if (persistent) {
+      // Persistent streams are read with read(), where resume() has no effect: discard instead.
+      discarding = true
+      for (const read of readers) read()
+    } else {
+      child.stdout?.resume()
+      child.stderr?.resume()
+    }
     const deadline = Date.now() + limits.cleanupMs
     const alive = (): boolean =>
       !closed && child.exitCode === null && child.signalCode === null
@@ -491,48 +504,76 @@ function supervise(s: Supervision): Supervised {
   let held = false
   let finished = false
   let consumerGone = false
+  // Hard ceiling (review F3, I8): the queue never holds more than `maxOutputBytes`. The streams
+  // stay paused and are read with `read()`; a block larger than the room left is cut at the
+  // ceiling and the rest goes back to the stream's own buffer (`unshift`), so nothing is lost
+  // and nothing is copied past the ceiling. A reader that stalls holds the payload back until
+  // its lifetime (I7) ends it; persistent output is never truncated and has no `output_limit`.
+  const readers: Array<() => void> = []
+  let discarding = false
   const pump = (): void => {
     while (waiters.length > 0 && queue.length > 0) {
       const chunk = queue.shift()!
       queuedBytes -= chunk.bytes.length
       waiters.shift()!({ value: chunk, done: false })
     }
-    if (held && queuedBytes < limits.maxOutputBytes / 2) {
-      held = false
-      child.stdout?.resume()
-      child.stderr?.resume()
-    }
+    if (held && queuedBytes < limits.maxOutputBytes / 2) releaseHeld()
     if (finished && queue.length === 0)
       while (waiters.length > 0)
         waiters.shift()!({ value: undefined, done: true })
   }
-  const enqueue = (which: 'out' | 'err', chunk: Buffer): void => {
-    if (consumerGone || cleanupTask !== undefined) return
-    queue.push({
-      stream: which === 'out' ? 'stdout' : 'stderr',
-      bytes: new Uint8Array(chunk)
-    })
-    queuedBytes += chunk.length
-    pump()
-    if (queuedBytes >= limits.maxOutputBytes && !held) {
-      held = true
-      child.stdout?.pause()
-      child.stderr?.pause()
+  function releaseHeld(): void {
+    held = false
+    for (const read of readers) read()
+  }
+  const offer = (which: 'out' | 'err', stream: NodeJS.ReadableStream): void => {
+    const read = (): void => {
+      if (discarding || consumerGone || cleanupTask !== undefined) {
+        // Nobody reads, or the launch is being torn down: consume and discard.
+        while (stream.read() !== null) {
+          /* discarded */
+        }
+        return
+      }
+      while (!held) {
+        const room = limits.maxOutputBytes - queuedBytes
+        if (room <= 0) {
+          held = true
+          return
+        }
+        const chunk = stream.read() as Buffer | null
+        if (chunk === null) return
+        const kept = chunk.length > room ? chunk.subarray(0, room) : chunk
+        if (kept.length < chunk.length) stream.unshift(chunk.subarray(room))
+        queue.push({
+          stream: which === 'out' ? 'stdout' : 'stderr',
+          bytes: new Uint8Array(kept)
+        })
+        queuedBytes += kept.length
+        pump()
+        if (queuedBytes >= limits.maxOutputBytes) held = true
+      }
     }
+    readers.push(read)
+    stream.on('readable', read)
   }
   const output: AsyncIterable<ProcessChunk> = {
     [Symbol.asyncIterator]: () => ({
       next: () =>
         new Promise<IteratorResult<ProcessChunk>>((resolve) => {
+          if (consumerGone) return resolve({ value: undefined, done: true })
           waiters.push(resolve)
           pump()
         }),
       return: () => {
-        // The consumer left: nothing will read, so nothing is kept.
+        // The consumer left: nothing will read, so nothing is kept. The iterator is terminal:
+        // a pending or a later next() resolves done at once (review F4).
         consumerGone = true
         queue.length = 0
         queuedBytes = 0
-        pump()
+        while (waiters.length > 0)
+          waiters.shift()!({ value: undefined, done: true })
+        releaseHeld()
         return Promise.resolve({ value: undefined, done: true as const })
       }
     })
@@ -568,7 +609,6 @@ function supervise(s: Supervision): Supervised {
   }
 
   const take = (which: 'out' | 'err', chunk: Buffer): void => {
-    if (persistent) return enqueue(which, chunk)
     const sink = which === 'out' ? stdout : stderr
     let bytes = which === 'out' ? outBytes : errBytes
     const room = limits.maxOutputBytes - bytes
@@ -583,8 +623,13 @@ function supervise(s: Supervision): Supervised {
       if (s.request.outputOverflow !== 'drop') trigger('output_limit')
     }
   }
-  child.stdout?.on('data', (chunk: Buffer) => take('out', chunk))
-  child.stderr?.on('data', (chunk: Buffer) => take('err', chunk))
+  if (persistent) {
+    if (child.stdout) offer('out', child.stdout)
+    if (child.stderr) offer('err', child.stderr)
+  } else {
+    child.stdout?.on('data', (chunk: Buffer) => take('out', chunk))
+    child.stderr?.on('data', (chunk: Buffer) => take('err', chunk))
+  }
   // A Landlock launch has started only once the helper's proof is in, so a launch whose
   // proof never comes ends at the startup deadline instead of running unproven.
   let landlockProven = landlock === undefined

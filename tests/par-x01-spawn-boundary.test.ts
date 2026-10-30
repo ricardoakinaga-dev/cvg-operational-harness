@@ -9,12 +9,68 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 // PAR-X01 I1 (SPEC 0286, decision X-F): in packages/** and apps/** only the process service may
 // create a process. scripts/** (CI, build, smoke) is deliberately outside the rule.
-const SPAWN_SITE =
-  /(?:from\s+|import\s*\(\s*|require\s*\(\s*)['"](?:node:)?child_process['"]|\bBun\.spawn(?:Sync)?\b|(?:from\s+|require\s*\(\s*)['"]execa['"]/
+// Syntactic, not textual (review F1): a comment, a template literal, `process.getBuiltinModule`,
+// `createRequire` or `import x = require()` all name the module as a string literal, so any
+// such literal is a spawn site wherever it appears; comments never produce a literal. A name
+// built at run time ('child_' + 'process') is the one form a static scan cannot see; the
+// process service remains the only reviewed path and review keeps watching new native imports.
+const FORBIDDEN_MODULES = new Set([
+  'child_process',
+  'node:child_process',
+  'execa'
+])
+const SCRIPT_KIND: Record<string, ts.ScriptKind> = {
+  '.ts': ts.ScriptKind.TS,
+  '.mts': ts.ScriptKind.TS,
+  '.cts': ts.ScriptKind.TS,
+  '.tsx': ts.ScriptKind.TSX,
+  '.js': ts.ScriptKind.JS,
+  '.mjs': ts.ScriptKind.JS,
+  '.cjs': ts.ScriptKind.JS
+}
+function createsProcesses(path: string, text: string): boolean {
+  const kind =
+    SCRIPT_KIND[path.slice(path.lastIndexOf('.'))] ?? ts.ScriptKind.TS
+  const file = ts.createSourceFile(
+    path,
+    text,
+    ts.ScriptTarget.Latest,
+    false,
+    kind
+  )
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (
+      (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) &&
+      FORBIDDEN_MODULES.has(node.text)
+    )
+      found = true
+    else if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'Bun' &&
+      /^spawn(?:Sync)?$/.test(node.name.text)
+    )
+      found = true
+    else if (
+      ts.isElementAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'Bun' &&
+      ts.isStringLiteralLike(node.argumentExpression) &&
+      /^spawn(?:Sync)?$/.test(node.argumentExpression.text)
+    )
+      found = true
+    if (!found) ts.forEachChild(node, visit)
+  }
+  visit(file)
+  return found
+}
 const SKIPPED_DIRS = new Set([
   'node_modules',
   'dist',
@@ -47,7 +103,7 @@ export function findSpawnSites(
       } else if (
         /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/.test(entry.name) &&
         !/\.(?:test|spec)\./.test(entry.name) &&
-        SPAWN_SITE.test(readFileSync(path, 'utf8'))
+        createsProcesses(path, readFileSync(path, 'utf8'))
       )
         found.push(relative(root, path))
     }
@@ -74,6 +130,7 @@ describe('PAR-X01 I1: one path to create a process', () => {
       ['a dynamic import', "const cp = await import('node:child_process')"],
       ['Bun.spawn', 'const p = Bun.spawn(["ls"])'],
       ['Bun.spawnSync', 'const p = Bun.spawnSync(["ls"])'],
+      ['Bun["spawn"]', 'const p = Bun["spawn"](["ls"])'],
       ['execa', "import { execa } from 'execa'"]
     ])('detects %s in packages/ and in apps/', (_name, text) => {
       put('packages/x/src/a.ts', text)
@@ -84,6 +141,64 @@ describe('PAR-X01 I1: one path to create a process', () => {
       ])
       rmSync(join(root, 'packages'), { recursive: true })
       rmSync(join(root, 'apps'), { recursive: true })
+    })
+    const cleanup = (): void => {
+      rmSync(join(root, 'packages'), { recursive: true, force: true })
+      rmSync(join(root, 'apps'), { recursive: true, force: true })
+    }
+    it.each([
+      [
+        'process.getBuiltinModule',
+        "process.getBuiltinModule('child_process').spawn('/usr/bin/true')"
+      ],
+      [
+        'getBuiltinModule with the node: scheme and a computed name',
+        'const cp = process[\'getBuiltinModule\']("node:child_process")'
+      ],
+      [
+        'a comment between from and the module',
+        "import { spawn } from /* process API */ 'node:child_process'"
+      ],
+      [
+        'a line comment inside an import',
+        "import {\n  spawn // go\n} from\n  'child_process'"
+      ],
+      [
+        'a comment inside a dynamic import',
+        "const cp = await import(/* c */ 'node:child_process')"
+      ],
+      ['import = require', "import cp = require('node:child_process')"],
+      [
+        'a template literal without substitutions',
+        'const cp = require(`child_process`)'
+      ],
+      [
+        'createRequire',
+        "const cp = createRequire(import.meta.url)('child_process')"
+      ],
+      ['an export-from', "export { spawn } from 'node:child_process'"]
+    ])('F1: detects %s', (_name, text) => {
+      put('packages/x/src/native.ts', text)
+      expect(findSpawnSites(root)).toEqual(['packages/x/src/native.ts'])
+      cleanup()
+    })
+    it.each([
+      [
+        'a comment that only names the module',
+        '// uses child_process? no\n/* node:child_process */ const a = 1'
+      ],
+      [
+        'an identifier and a longer string',
+        "const child_process = 1; const s = 'child_processing'"
+      ],
+      [
+        'a URL with slashes in a string',
+        "const u = 'https://example.org/child'; const v = 2"
+      ]
+    ])('F1: does not flag %s', (_name, text) => {
+      put('packages/x/src/native.ts', text)
+      expect(findSpawnSites(root)).toEqual([])
+      cleanup()
     })
     it('ignores scripts/, tests, build output and dependencies (X-F)', () => {
       const text = "import { spawn } from 'node:child_process'"

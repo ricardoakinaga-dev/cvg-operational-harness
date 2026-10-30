@@ -296,6 +296,92 @@ describe('PAR-X01 slice 4: persistent mode and disposal', () => {
     }, 30_000)
   })
 
+  describe('Codex review 21601: F2-F4', () => {
+    const silent = 'setInterval(()=>{},1000)'
+    it('F2: the drop opt-out is refused for every consumer but the shell oneshot, before anything runs', async () => {
+      const service = createProcessService({})
+      const flood64k = "process.stdout.write('a'.repeat(65536))"
+      for (const [consumer, mode] of [
+        ['document-conversion', 'oneshot'],
+        ['mcp-stdio', 'persistent'],
+        ['lsp', 'oneshot'],
+        ['shell', 'persistent']
+      ] as const)
+        await expect(
+          service.launch(
+            request(flood64k, {
+              consumer,
+              mode,
+              outputOverflow: 'drop',
+              limits: limits({ maxOutputBytes: 4 })
+            })
+          )
+        ).rejects.toMatchObject({ code: 'invalid_request' })
+      // The legacy shell compatibility path keeps working.
+      const shell = await service.launch(
+        request(flood64k, {
+          consumer: 'shell',
+          mode: 'oneshot',
+          outputOverflow: 'drop',
+          limits: limits({ maxOutputBytes: 4 })
+        })
+      )
+      const outcome = await shell.wait()
+      expect(outcome.cause).toBe('exit')
+      expect(outcome.truncated).toBe(true)
+    }, 30_000)
+
+    it('F3: the output queue has a hard ceiling, a block larger than it is delivered in pieces and nothing is lost', async () => {
+      const launched = await createProcessService({}).launch(
+        request(
+          `process.stdout.write('a'.repeat(65536));setTimeout(()=>{},1500)`,
+          { limits: limits({ maxOutputBytes: 4 }) }
+        )
+      )
+      // Nobody reads while the producer writes its block.
+      await new Promise((r) => setTimeout(r, 400))
+      const iterator = launched.output![Symbol.asyncIterator]()
+      let total = 0
+      let largest = 0
+      while (total < 65536) {
+        const r = await iterator.next()
+        if (r.done) break
+        largest = Math.max(largest, r.value.bytes.length)
+        total += r.value.bytes.length
+      }
+      expect(largest).toBeLessThanOrEqual(4)
+      expect(total).toBe(65536)
+      clean(await launched.stop())
+    }, 60_000)
+
+    it('F3 (decision): a persistent payload that outproduces a stalled reader is held back until its lifetime ends; it is never truncated and never reports output_limit', async () => {
+      const launched = await createProcessService({}).launch(
+        request("for(;;){process.stdout.write('a'.repeat(1024))}", {
+          limits: limits({ maxOutputBytes: 4, lifetimeMs: 600 })
+        })
+      )
+      const outcome = await launched.wait()
+      expect(outcome.cause).toBe('timeout')
+      expect(outcome.truncated).toBe(false)
+      clean(outcome)
+    }, 30_000)
+
+    it('F4: after return() the iterator is terminal: a later next() and a pending next() resolve done at once', async () => {
+      const launched = await createProcessService({}).launch(request(silent))
+      const iterator = launched.output![Symbol.asyncIterator]()
+      const pending = iterator.next()
+      await iterator.return!()
+      const resolved = (p: Promise<IteratorResult<ProcessChunk>>) =>
+        Promise.race([
+          p,
+          new Promise<'pending'>((r) => setTimeout(() => r('pending'), 150))
+        ])
+      expect(await resolved(pending)).toMatchObject({ done: true })
+      expect(await resolved(iterator.next())).toMatchObject({ done: true })
+      clean(await launched.stop())
+    }, 30_000)
+  })
+
   describe('disposal (I10)', () => {
     it('stops every live launch with cause dispose and reports them', async () => {
       const service = createProcessService({})
