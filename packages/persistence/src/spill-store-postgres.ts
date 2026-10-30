@@ -35,6 +35,8 @@ const MIGRATION = '0037_tool_output_spill'
 const SCHEMA = /^[a-z][a-z0-9_]{0,62}$/
 const LOCATOR = /^spill_[A-Za-z0-9_-]{43}$/
 const MIN_KEY_BYTES = 32
+/** How long a cancel that is already being sent may take before the writer's connection is discarded. */
+const CANCEL_SETTLE_MS = 2_000
 
 /** Run as migration authority in a dedicated schema, never in request serving. */
 export async function runSpillMigrations(
@@ -139,16 +141,49 @@ export class PostgresSpillStore implements SpillStore {
     return `spill_${mac}`
   }
 
-  /** Best effort, from a second connection: stop the statement the aborted writer waits in. */
-  async #cancelBackend(pid: number): Promise<void> {
-    let other: PostgresPoolClient | undefined
-    try {
-      other = await this.#pool.connect()
-      await other.query('SELECT pg_cancel_backend($1)', [pid])
-    } catch {
-      // the lock/statement timeouts still bound the wait
-    } finally {
-      other?.release()
+  /**
+   * Best effort, from a second connection of the pool: stop the statement the aborted writer
+   * waits in. The task belongs to the writer's connection and to nothing else: it is revoked
+   * and joined before the writer is released (`revoke`), so a late acquisition never signals a
+   * backend that already serves someone else. `revoke` answers whether it is now certain that
+   * no cancel can still reach the writer's backend.
+   */
+  #startCancel(pid: number): { revoke(): Promise<boolean> } {
+    let revoked = false
+    let sending: Promise<void> | undefined
+    const connecting = this.#pool.connect()
+    // whatever connection arrives, however late, goes back to the pool
+    void connecting
+      .then(async (other) => {
+        try {
+          if (revoked) return
+          sending = other
+            .query('SELECT pg_cancel_backend($1)', [pid])
+            .then(() => undefined)
+          await sending
+        } finally {
+          other.release()
+        }
+      })
+      .catch(() => undefined)
+    return {
+      revoke: async () => {
+        revoked = true
+        // not yet holding a connection (a saturated pool): nothing can be sent any more
+        if (!sending) return true
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const settled = await Promise.race([
+          sending.then(
+            () => true,
+            () => true
+          ),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), CANCEL_SETTLE_MS)
+          })
+        ])
+        clearTimeout(timer)
+        return settled
+      }
     }
   }
 
@@ -167,6 +202,19 @@ export class PostgresSpillStore implements SpillStore {
     let committing = false
     let inFlight = false
     let onAbort: (() => void) | undefined
+    let cancel: { revoke(): Promise<boolean> } | undefined
+    // Before anything else is sent on this connection (COMMIT, ROLLBACK) and before it goes
+    // back to the pool, no cancel may be pending or able to arrive: it would hit whoever is
+    // served by this backend next. When that cannot be known, the connection is discarded.
+    const settleCancel = async () => {
+      inFlight = false
+      if (onAbort) signal?.removeEventListener('abort', onAbort)
+      const pending = cancel
+      cancel = undefined
+      if (pending && !(await pending.revoke())) {
+        releaseError = new Error('Spill cancel did not settle')
+      }
+    }
     try {
       await client.query(readOnly ? 'BEGIN READ ONLY' : 'BEGIN')
       await client.query("SET LOCAL statement_timeout = '5s'")
@@ -189,21 +237,21 @@ export class PostgresSpillStore implements SpillStore {
         )
         inFlight = true
         onAbort = () => {
-          if (inFlight && Number.isSafeInteger(pid))
-            void this.#cancelBackend(pid)
+          if (inFlight && cancel === undefined && Number.isSafeInteger(pid))
+            cancel = this.#startCancel(pid)
         }
         signal.addEventListener('abort', onAbort, { once: true })
         if (signal.aborted) onAbort()
       }
       const value = await operation(client)
       // the last point where an abort still means "nothing stored"
-      inFlight = false
+      await settleCancel()
       if (signal?.aborted) throw new SpillCancelled('Spill write cancelled')
       committing = true
       await client.query('COMMIT')
       return value
     } catch (error) {
-      inFlight = false
+      if (!committing) await settleCancel()
       try {
         await client.query('ROLLBACK')
       } catch {
@@ -220,6 +268,7 @@ export class PostgresSpillStore implements SpillStore {
       }
       throw new SpillStorageUnavailable('Spill transaction failed')
     } finally {
+      // the commit phase never had a cancel in flight; any other exit has settled it
       if (onAbort) signal?.removeEventListener('abort', onAbort)
       client.release(releaseError)
     }

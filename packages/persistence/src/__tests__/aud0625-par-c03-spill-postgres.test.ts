@@ -903,6 +903,218 @@ describe.skipIf(!url)('PAR-C03 slice 2 — PostgreSQL spill store', () => {
         expect(await rowsFor(content)).toBe(0)
       })
 
+      describe('R1-F01: a pending cancel never outlives the writer connection', () => {
+        const roleUrl2 = () => {
+          const u = new URL(url!)
+          u.username = role
+          u.password = password
+          return u.toString()
+        }
+        const waitFor = async (probe: () => Promise<boolean>, what: string) => {
+          for (let i = 0; i < 200; i += 1) {
+            if (await probe()) return
+            await new Promise((r) => setTimeout(r, 10))
+          }
+          throw new Error(`never observed: ${what}`)
+        }
+
+        it('a cancel queued behind an unrelated query does not hit it when the backend is reused (real pg.Pool, max 2)', async () => {
+          const tenantId = `r1-a-${suffix}`
+          const tiny = new Pool({ connectionString: roleUrl2(), max: 2 })
+          const spare = await tiny.connect()
+          const holder = new Client({ connectionString: url })
+          await holder.connect()
+          await holder.query('BEGIN')
+          await holder.query(
+            'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+            [`spill:${tenantId}`]
+          )
+          const controller = new AbortController()
+          const operation = store(tiny, { tenantId })
+            .put(
+              put({
+                tenantId,
+                content: `r1-a-${suffix}`,
+                signal: controller.signal
+              })
+            )
+            .then(
+              () => null,
+              (error: unknown) => error
+            )
+          let later: Promise<unknown> | undefined
+          let spareHeld = true
+          try {
+            await waitFor(async () => {
+              const r = await admin.query(
+                "SELECT 1 FROM pg_stat_activity WHERE usename=$1 AND wait_event='advisory' AND query LIKE '%pg_advisory_xact_lock%'",
+                [role]
+              )
+              return r.rowCount === 1
+            }, 'the writer waiting for the lock')
+            later = tiny.query('SELECT pg_sleep(1.5)').then(
+              () => null,
+              (error: unknown) => error
+            )
+            expect(tiny.waitingCount).toBe(1)
+            controller.abort()
+            await holder.query('COMMIT')
+            expect(await operation).toBeInstanceOf(SpillCancelled)
+            spare.release()
+            spareHeld = false
+            expect(
+              await later,
+              'the aborted writer must not cancel the next request served by its backend'
+            ).toBeNull()
+          } finally {
+            await holder.query('ROLLBACK').catch(() => undefined)
+            await holder.end()
+            if (spareHeld) spare.release()
+            await operation
+            await later
+            await tiny.end()
+          }
+          const stored = await admin.query(
+            `SELECT count(*)::int AS n FROM ${schema}.spill_objects WHERE tenant_id=$1`,
+            [tenantId]
+          )
+          expect(stored.rows[0].n).toBe(0)
+        }, 20000)
+
+        it('a pool of one connection cannot deadlock the abort: the put ends cancelled once the lock frees', async () => {
+          const tenantId = `r1-b-${suffix}`
+          const single = new Pool({ connectionString: roleUrl2(), max: 1 })
+          const holder = new Client({ connectionString: url })
+          await holder.connect()
+          await holder.query(lockSql, [tenantId])
+          try {
+            const abort = new AbortController()
+            const running = store(single, { tenantId })
+              .put(
+                put({
+                  tenantId,
+                  content: `r1-b-${suffix}`,
+                  signal: abort.signal
+                })
+              )
+              .then(
+                () => 'stored' as const,
+                (error: unknown) => error
+              )
+            await untilWaiting()
+            abort.abort()
+            await new Promise((r) => setTimeout(r, 100))
+            await holder.query(unlockSql, [tenantId])
+            expect(await running).toBeInstanceOf(SpillCancelled)
+            // the pool is usable afterwards: the dangling cancel connection was given back
+            const next = await single.query('SELECT 7::int AS n')
+            expect(next.rows[0].n).toBe(7)
+          } finally {
+            await holder.end()
+            await single.end()
+          }
+          expect(await rowsFor(`r1-b-${suffix}`)).toBe(0)
+        }, 20000)
+
+        it('a cancel that cannot be confirmed in time gets the writer connection discarded, not reused', async () => {
+          const tenantId = `r1-c-${suffix}`
+          const holder = new Client({ connectionString: url })
+          await holder.connect()
+          await holder.query(lockSql, [tenantId])
+          const releases: unknown[] = []
+          let connects = 0
+          const hanging = {
+            connect: async () => {
+              connects += 1
+              if (connects === 1) {
+                const client = await pool1.connect()
+                const release = client.release.bind(client)
+                ;(client as unknown as { release: unknown }).release = (
+                  err?: Error
+                ) => {
+                  releases.push(err)
+                  return release(err)
+                }
+                return client
+              }
+              // the cancel channel: its query never answers
+              return {
+                query: () => new Promise(() => undefined),
+                release: () => undefined
+              }
+            }
+          } as unknown as PostgresPoolLike
+          try {
+            const abort = new AbortController()
+            const running = store(hanging, { tenantId })
+              .put(
+                put({
+                  tenantId,
+                  content: `r1-c-${suffix}`,
+                  signal: abort.signal
+                })
+              )
+              .then(
+                () => 'stored' as const,
+                (error: unknown) => error
+              )
+            await untilWaiting()
+            abort.abort()
+            await new Promise((r) => setTimeout(r, 100))
+            await holder.query(unlockSql, [tenantId])
+            expect(await running).toBeInstanceOf(SpillCancelled)
+          } finally {
+            await holder.end()
+          }
+          expect(releases).toHaveLength(1)
+          expect(releases[0]).toBeInstanceOf(Error)
+        }, 20000)
+
+        it('control: a settled cancel gives the connection back cleanly', async () => {
+          const tenantId = `r1-d-${suffix}`
+          const holder = new Client({ connectionString: url })
+          await holder.connect()
+          await holder.query(lockSql, [tenantId])
+          const releases: unknown[] = []
+          const spy = {
+            connect: async () => {
+              const client = await pool1.connect()
+              const release = client.release.bind(client)
+              ;(client as unknown as { release: unknown }).release = (
+                err?: Error
+              ) => {
+                releases.push(err)
+                return release(err)
+              }
+              return client
+            }
+          } as unknown as PostgresPoolLike
+          try {
+            const abort = new AbortController()
+            const running = store(spy, { tenantId })
+              .put(
+                put({
+                  tenantId,
+                  content: `r1-d-${suffix}`,
+                  signal: abort.signal
+                })
+              )
+              .then(
+                () => 'stored' as const,
+                (error: unknown) => error
+              )
+            await untilWaiting()
+            abort.abort()
+            expect(await running).toBeInstanceOf(SpillCancelled)
+          } finally {
+            await holder.query(unlockSql, [tenantId])
+            await holder.end()
+          }
+          expect(releases.length).toBeGreaterThanOrEqual(1)
+          expect(releases.every((r) => r === undefined)).toBe(true)
+        }, 20000)
+      })
+
       it('control: without an abort the same put commits', async () => {
         const tenantId = `f03-d-${suffix}`
         const content = `f03-d-${suffix}`
