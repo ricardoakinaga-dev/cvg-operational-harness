@@ -63,3 +63,7 @@ Achados:
 
 Não há depósito, porta ou migration de spill; a SPEC 0293 propõe os três. Os testes RED usam um `FakeSpillStore` com a forma proposta e passam a opção
 `spill` por cast (não existe). Nada foi executado fora do repositório; sem dado real.
+
+## 5. R2 (revisão da 07)
+
+A revisão não autora da 07 (`claude/aud0625-par-s04-07` @ `3126680ae`) confirmou as medições deste documento e pediu correções de especificação, tratadas na SPEC 0293 R2: `spill.read` fora do spill (P1), ponto de mudança do contexto, moldura não forjável, poda pura e estável, definição do orçamento, composição fail-closed e cinco P3. Nenhuma medição de §2 mudou.
