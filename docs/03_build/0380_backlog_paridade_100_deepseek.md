@@ -629,6 +629,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Paridade de superfície com o cliente TS e wheel verificável com matriz de versões.
 - Depende de: PAR-A06.
 - Aceite: Wheel instala num ambiente limpo e passa a suíte de cenários; hash publicado com a candidata.
+- Débito P3 (31/10/2026, achado da D9, registrado na onda 6): os testes do SDK Python (`packages/sdk/python/tests/run.py`, 33 testes) **não rodam na barra REM21** (nem `verify.yml` nem o ci-bar os chamam). Por isso o pin de `packages/contracts/src/contracts.ts` em `contract_v1.json` ficou velho desde a C01 fatia 2 (`ad7eeef80`) sem ninguém ver, e a unidade ficou em 32/33. A onda 6 refez o pin (`377e561f…`, sem mudança no `STOP_REASONS` espelhado) e a unidade voltou a 33/33. Pedido: ligar `python3 -I -B packages/sdk/python/tests/run.py` à barra (com `PYTHONDONTWRITEBYTECODE=1`, porque o teste de cópia falha se houver `__pycache__` na árvore) antes de qualquer outro cartão do SDK Python. Este débito não é um cartão contado: os totais acima não mudam; se o Ricardo quiser um cartão próprio, ele entra na F3 com os totais refeitos.
 
 ### PAR-A09 — Suíte de cenários equivalentes do SDK
 
