@@ -40,8 +40,13 @@ export const sessionWindowSql = (schema: string): string =>
     ORDER BY writer_lock_id::bigint DESC
     LIMIT $3`
 
-// the index is a property of the schema, not of a request: a verified schema is remembered
-const verifiedSchemas = new Set<string>()
+/**
+ * What the catalog must say about the required index: the tenant first, then the SAME expression
+ * the window orders by, on the session streams table of the schema, valid and ready, with no
+ * predicate. The name alone proves nothing: any index can carry it.
+ */
+const INDEX_DEFINITION =
+  /^CREATE INDEX session_streams_tenant_order_idx ON ("?[a-z][a-z0-9_]*"?)\.session_streams USING btree \(tenant_id, \(\(writer_lock_id\)::bigint\)\)$/
 
 /**
  * Reads up to `size` streams of the composition's tenant below a key, in descending key order,
@@ -86,6 +91,10 @@ export class PostgresSessionDirectory implements SessionDirectory {
         { cause }
       )
     }
+    if (input.signal?.aborted) {
+      client.release()
+      throw abortError()
+    }
     let releaseError: Error | undefined
     try {
       await client.query('BEGIN READ ONLY')
@@ -93,22 +102,40 @@ export class PostgresSessionDirectory implements SessionDirectory {
       await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
         this.#tenantId
       ])
-      if (!verifiedSchemas.has(this.#schema)) {
-        const found = await client.query(
-          'SELECT 1 FROM pg_indexes WHERE schemaname = $1 AND indexname = $2',
-          [this.#schema, SESSION_QUERY_INDEX]
+      // checked in the transaction that reads: the answer belongs to this database, now
+      const found = await client.query<{
+        valid: boolean
+        ready: boolean
+        definition: string
+      }>(
+        `SELECT i.indisvalid AS valid, i.indisready AS ready,
+                pg_get_indexdef(i.indexrelid) AS definition
+           FROM pg_index i
+           JOIN pg_class c ON c.oid = i.indexrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = $1 AND c.relname = $2`,
+        [this.#schema, SESSION_QUERY_INDEX]
+      )
+      const index = found.rows[0]
+      if (
+        found.rows.length !== 1 ||
+        !index?.valid ||
+        !index.ready ||
+        !INDEX_DEFINITION.test(index.definition) ||
+        index.definition
+          .split(' ON ')[1]
+          ?.split('.')[0]
+          ?.replaceAll('"', '') !== this.#schema
+      )
+        throw new SessionMigrationRequiredError(
+          'Session listing needs migration 0038_session_streams_tenant_order_index'
         )
-        if (found.rows.length !== 1)
-          throw new SessionMigrationRequiredError(
-            'Session listing needs migration 0038_session_streams_tenant_order_index'
-          )
-        verifiedSchemas.add(this.#schema)
-      }
       const result = await client.query<Row>(sessionWindowSql(this.#schema), [
         this.#tenantId,
         input.before ?? null,
         input.size
       ])
+      if (input.signal?.aborted) throw abortError()
       await client.query('COMMIT')
       return result.rows.map((row) => ({
         key: Number(row.key),
@@ -118,6 +145,7 @@ export class PostgresSessionDirectory implements SessionDirectory {
       await client.query('ROLLBACK').catch(() => {
         releaseError = new Error('Session listing cleanup failed')
       })
+      if (input.signal?.aborted) throw abortError()
       if (
         error instanceof SessionMigrationRequiredError ||
         error instanceof SessionPersistenceCorruptionError

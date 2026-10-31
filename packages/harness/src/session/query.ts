@@ -191,8 +191,10 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
     // 1. approvals: the root source for an approval id and for a key alike
     let found: readonly TraceApproval[]
     let operationKey: string | undefined
+    // a budget stop is the trace's own refusal, decided outside the source's try
+    if (!spendCall())
+      throw new SessionQueryError('unavailable', 'the trace budget is spent')
     try {
-      if (!spendCall()) throw new SessionQueryError('unavailable', 'budget')
       observed.approval = clock().toISOString()
       if (input.approvalId !== undefined) {
         const approval = await approvals.get(tenantId, input.approvalId, signal)
@@ -213,9 +215,9 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
           })
         operationKey = rootId
       }
-    } catch (error) {
+    } catch {
+      // whatever the source threw, its code and text never reach the caller
       checkAborted(signal)
-      if (error instanceof SessionQueryError) throw error
       throw new SessionQueryError('unavailable', 'the trace root source failed')
     }
     if (input.approvalId !== undefined && found.length === 0)
@@ -262,6 +264,7 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
           subject: { kind: 'effect', id: operationKey }
         })
       }
+      checkAborted(signal)
       if (effect === undefined)
         gaps.push({
           reason: 'effect_absent',
@@ -294,6 +297,9 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
       observed.events = clock().toISOString()
       await searchEvents(operationKey)
     }
+    // the last await may have outlived the caller or the deadline: say so before publishing
+    checkAborted(signal)
+    if (monotonicMs() - startedAt > budgets.deadlineMs) exhausted('deadline')
 
     // the root was an operation key with nothing behind it anywhere
     if (
@@ -415,6 +421,7 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
               afterSequence: after,
               limit: want
             })
+            checkAborted(signal)
           } catch {
             checkAborted(signal)
             // a session that vanished or cannot be read is a gap, never a failed trace
@@ -462,24 +469,32 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
         }
         if (stop) break
       }
-      // the links for what matched
+      // the links for what matched; a link the ceiling leaves out is always a gap
       const real = calls_.filter((c) => !c.inherited)
-      for (const c of calls_) {
+      const push = (link: TraceLink): boolean => {
         if (links.length >= budgets.links) {
           exhausted('links')
-          break
+          return false
         }
-        links.push({
-          kind: 'event',
-          sessionId: c.sessionId,
-          sequence: c.sequence,
-          eventId: c.eventId,
-          type: 'tool/call',
-          correlationId: c.correlationId,
-          toolId: c.toolId,
-          inherited: c.inherited
-        })
+        links.push(link)
+        return true
+      }
+      for (const c of calls_) {
+        if (
+          !push({
+            kind: 'event',
+            sessionId: c.sessionId,
+            sequence: c.sequence,
+            eventId: c.eventId,
+            type: 'tool/call',
+            correlationId: c.correlationId,
+            toolId: c.toolId,
+            inherited: c.inherited
+          })
+        )
+          break
         const slot = `${c.sessionId}\u0000${c.correlationId}\u0000${c.toolId}`
+        let room = true
         if (callsPerTurnTool.get(slot)! > 1)
           gaps.push({
             reason: 'tool_result_ambiguous',
@@ -487,8 +502,9 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
           })
         else
           for (const r of results.get(slot) ?? [])
-            if (r.sequence > c.sequence && links.length < budgets.links)
-              links.push({
+            if (
+              r.sequence > c.sequence &&
+              !(room = push({
                 kind: 'event',
                 sessionId: c.sessionId,
                 sequence: r.sequence,
@@ -499,10 +515,14 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
                 outcome: (r.payload as Record<string, unknown>)
                   .outcome as string,
                 inherited: c.inherited
-              })
+              }))
+            )
+              break
+        if (!room) break
         const end = ends.get(`${c.sessionId}\u0000${c.correlationId}`)
-        if (end && links.length < budgets.links)
-          links.push({
+        if (
+          end &&
+          !push({
             kind: 'event',
             sessionId: c.sessionId,
             sequence: end.sequence,
@@ -513,6 +533,8 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
               .stopReason as string,
             inherited: c.inherited
           })
+        )
+          break
       }
       if (real.length > 1)
         gaps.push({
