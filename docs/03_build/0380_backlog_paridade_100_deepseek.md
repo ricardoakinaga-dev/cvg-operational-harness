@@ -7,7 +7,7 @@
 
 ## Extensão Claude100 — 17/10/2026
 
-Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado dos 266 PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
+Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado das 272 capacidades do escopo PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
 
 Este 0380 permanece a fonte do estado e da execução dos PAR reaproveitados; o 0383 possui apenas o estado dos C100 e o encaminhamento dos aceites Claude. Uma implementação comum tem um único dono, claim e tarefa; serve aos dois catálogos somente depois de qualificada em cada um. Carriers opcionais não se tornam pré-requisitos por mera associação. A extensão não substitui 0379/0380, não concede BUILD T3/T4 e não altera a trilha de produção 0374.
 
@@ -29,6 +29,10 @@ Regras da carteira:
 3. Divergência deliberada só sai do denominador por decisão registrada (D2/D4 do roadmap), com nova versão da medida. Nada é excluído em silêncio.
 4. Um writer por arquivo compartilhado (schema, lockfile, contratos públicos, ledgers). Cartões paralelos têm caminhos disjuntos e claim próprio.
 5. Uma revisão independente por cartão e no máximo dois retrabalhos (proposta D3). Se a revisão rejeitar duas vezes, o cartão volta para replanejamento, sem novo ciclo de crítica.
+
+<a id="escopo-par-cap-vigente"></a>
+
+Escopo vigente em 31/10/2026: **272 capacidades**, pela emenda D1 do [recibo32](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-32.json), sobre a correção para 270 do [recibo30](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-30.json). A [medida r3-denominator-272](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/measure.json) publica o hash do [catálogo versionado](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/catalog-272.json.gz); os 270 IDs e descrições anteriores ficam verbatim, com G1/SPILL-03 e G1/SESSION-07 acrescentados. Totais atuais: G1=52, G2=71, G3=56, G4=47 e G5=46. O catálogo histórico de16/10 tinha 266 capacidades. A emenda não altera os 111 cartões PAR nem seus estados, dependências ou aceites: Q01/F01 continua aberto, 355 propostas aguardam revisão semântica e as 26 relações das duas capacidades novas permanecem propostas. Não há novo ciclo de crítica por inferência, PASS funcional, autorização de BUILD ou produção. Em WEB-02, o DNS pelo proxy é exceção documentada da referência; o CVG mantém validação/fixação universal ou proxy desligado, conforme o mesmo recibo32.
 
 ## Resumo
 
@@ -110,7 +114,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Fase F0 · prioridade P0 · tamanho M · trilha T1 · relevância hospitalar alta · estado `IN_PROGRESS`.
 - Origem: 266 capacidades da análise PARE100-GAP (G1–G5). Absorve: P100-003.
 - Hoje: Matriz de 44.132 folhas estáticas (30.586 STATIC, 13.546 UNKNOWN), sem nenhum PASS funcional; levantamento por capacidade feito em 16/10 por leitura.
-- Entrega: Revisar as 266 capacidades com fonte (caminho e commit da referência), relevância, classe (EQUIVALENTE, EQUIVALENTE_GOVERNADA ou DIVERGENTE_DECIDIDA) e procedimento de aceite. As folhas estáticas ficam como rastreabilidade, ligadas a uma capacidade.
+- Entrega: Revisar as 272 capacidades do escopo autorizado vigente com fonte (caminho e commit da referência), relevância, classe (EQUIVALENTE, EQUIVALENTE_GOVERNADA ou DIVERGENTE_DECIDIDA) e procedimento de aceite. As folhas estáticas ficam como rastreabilidade, ligadas a uma capacidade.
 - Depende de: PAR-G01.
 - Aceite: Nenhuma capacidade sem procedimento e cartão; denominador publicado com hash; qualquer mudança de escopo exige decisão registrada e nova versão da medida.
 
