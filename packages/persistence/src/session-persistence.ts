@@ -722,6 +722,11 @@ class PostgresSessionPersistence implements SessionPersistence {
       throw new SessionHeaderValidationError('Invalid session id')
     const signal = projectOptions.signal
     if (signal?.aborted) throw abortError()
+    // SPEC 0292 §4 step 0: the same admission as `read` (`#admit`), which looks at the signal once
+    // more one microtask after the call. An abort that arrives right after the call is refused
+    // here, whatever the origin (cache, incremental or rebuild) the work would have taken.
+    await Promise.resolve()
+    if (signal?.aborted) throw abortError()
     const schema = quote(this.options.schemaName)
     const tenant = this.options.tenantId
     let client: PostgresPoolClient
@@ -752,6 +757,8 @@ class PostgresSessionPersistence implements SessionPersistence {
       const meta = parseStream(row, id)
       let cache: SessionProjectionCacheState = 'absent'
       const checkpoint = await this.#readCheckpoint(client, id, meta)
+      // the work of every origin is admitted the same way: no origin answers an aborted call
+      if (signal?.aborted) throw abortError()
       if (checkpoint.state === 'valid') {
         try {
           const result = await this.#fromCheckpoint(
@@ -1076,6 +1083,12 @@ class PostgresSessionPersistence implements SessionPersistence {
       options: this.options
     })
   }
+}
+
+/** A statement that only waited too long: statement timeout (57014) or lock timeout (55P03). */
+function isContention(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code
+  return code === '57014' || code === '55P03'
 }
 
 function isAbort(error: unknown): boolean {
@@ -1431,9 +1444,18 @@ class PostgresSessionHandle implements SessionHandle {
     return { events: out }
   }
 
-  /** Runs one short transaction on the owner connection; COMMIT outcome unknown = terminal. */
+  /**
+   * Runs one short transaction on the owner connection; COMMIT outcome unknown = terminal.
+   *
+   * `derived` marks a write of data the log does not depend on (the projection checkpoint, SPEC
+   * 0292 I8). A statement that only waited too long (`57014` statement timeout, `55P03` lock
+   * timeout) and whose ROLLBACK went through leaves the connection, and so the ownership, as it
+   * was: the failure is the cache's, not the writer's. Anything else, and every failure of a
+   * canonical write, keeps the terminal classification.
+   */
   async #transaction<T>(
-    body: (lease: PhysicalSessionLease) => Promise<T>
+    body: (lease: PhysicalSessionLease) => Promise<T>,
+    derived = false
   ): Promise<T> {
     const lease = this.#s.lease as PhysicalSessionLease
     const refusal = this.#lost
@@ -1458,6 +1480,12 @@ class PostgresSessionHandle implements SessionHandle {
       } catch (cause) {
         throw this.#lose(cause)
       }
+      if (derived && isContention(error))
+        throw new SessionStorageUnavailableError(
+          'Session derived write timed out',
+          this.id,
+          { cause: error }
+        )
       throw this.#classify(error)
     }
     try {
@@ -1656,7 +1684,7 @@ class PostgresSessionHandle implements SessionHandle {
           row.stateDigest
         ]
       )
-    })
+    }, true)
   }
 
   /**
