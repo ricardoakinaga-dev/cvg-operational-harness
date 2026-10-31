@@ -231,9 +231,15 @@ describe('PAR-A01 R1 witnesses with a real listener (fail until the BUILD)', () 
           abort.signal
         )
         expect(first.status).toBe(200)
+        // R3 (D11): the transient refusal is in band, so the native EventSource keeps retrying
         const second = await open(base, '/v1/sessions/s1/events/stream')
-        expect(second.status).toBe(429)
-        await second.body?.cancel()
+        expect(second.status).toBe(200)
+        const refused = await second.text()
+        expect(refused).toContain('retry: ')
+        expect(refused).toContain('event: end')
+        expect(refused).toContain('too_many_streams')
+        expect(ids(refused)).toEqual([])
+        expect(refused).not.toContain('event: session')
         abort.abort()
         await new Promise((r) => setTimeout(r, 100))
         const third = await open(
@@ -333,6 +339,67 @@ describe('PAR-A01 R1 witnesses with a real listener (fail until the BUILD)', () 
       expect(res.body).toContain('payloadOmitted')
     }
   )
+  it.fails(
+    'RED-12: an EventSource-like reader survives a full limit and resumes without loss or duplication (R3, D11)',
+    async () => {
+      const { app, base } = await listen(
+        store({ [`${TENANT_A}|s1`]: [1, 2, 3, 4, 5, 6, 7, 8] }, TENANT_A),
+        { limits: { perOperator: 1 } }
+      )
+      // Native EventSource: any non-200 closes the object for good; it reconnects (same URL,
+      // Last-Event-ID) only after a 200 connection that was closed, after `retry:`.
+      type Round = { status: number; ids: number[]; text: string }
+      let lastId: string | undefined
+      const received: number[] = []
+      const connect = async (): Promise<Round> => {
+        const res = await fetch(
+          `${base}/v1/sessions/s1/events/stream?maxEvents=3`,
+          {
+            headers: {
+              ...OPERATOR,
+              ...(lastId ? { 'last-event-id': lastId } : {})
+            }
+          }
+        )
+        const text = res.status === 200 ? await res.text() : ''
+        const got = ids(text)
+        for (const n of got) {
+          received.push(n)
+          lastId = String(n)
+        }
+        return { status: res.status, ids: got, text }
+      }
+      try {
+        const first = await connect()
+        expect(first.status).toBe(200)
+        expect(first.ids).toEqual([1, 2, 3])
+        // another connection of the same operator holds the only slot
+        const holder = new AbortController()
+        const held = await open(
+          base,
+          '/v1/sessions/s1/events/stream?after=8',
+          holder.signal
+        )
+        expect(held.status).toBe(200)
+        const refused = await connect()
+        expect(refused.status).toBe(200)
+        expect(refused.ids).toEqual([])
+        expect(refused.text).toContain('retry: ')
+        expect(refused.text).toContain('event: end')
+        expect(refused.text).toContain('too_many_streams')
+        holder.abort()
+        await new Promise((r) => setTimeout(r, 100))
+        const resumed = await connect()
+        expect(resumed.ids).toEqual([4, 5, 6])
+        const last = await connect()
+        expect(last.ids).toEqual([7, 8])
+        expect(received).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+      } finally {
+        await app.close()
+      }
+    }
+  )
+
   it.fails(
     'RED-11: a reconnection with the same URL and the last id resumes after it (real listener)',
     async () => {
