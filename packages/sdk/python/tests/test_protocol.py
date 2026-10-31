@@ -146,10 +146,20 @@ print(json.dumps({'protocol':cvg_sdk.SDK_PROTOCOL_VERSION,'methods':cvg_sdk.SDK_
                 'sessions': False, 'events': True, 'methods': list(SDK_METHODS)}}},
             {'result': {'protocolVersion': 1, 'capabilities': {
                 'sessions': True, 'events': True, 'methods': list(SDK_METHODS) + ['sdk.hello']}}},
+            {'result': {'protocolVersion': 1, 'capabilities': {
+                'sessions': True, 'events': True, 'methods': list(SDK_METHODS) + ['__proto__']}}},
+            {'result': {'protocolVersion': 1, 'capabilities': {
+                'sessions': True, 'events': True, 'methods': list(SDK_METHODS) + ['session.li st']}}},
+            {'result': {'protocolVersion': 1, 'capabilities': {
+                'sessions': True, 'events': True, 'methods': list(SDK_METHODS) + [['session']]}}},
         ]
         for delta in mutations:
             with self.subTest(delta=delta), self.assertRaises(Invalid):
                 validate_response(hello(), {**response(), **delta}, 't')
+        for extra in ('session.fork', 'toString', 'a.b.c1'):
+            with self.subTest(extra=extra):
+                validate_response(hello(), response(result={'protocolVersion': 1, 'capabilities': {
+                    'sessions': True, 'events': True, 'methods': list(SDK_METHODS) + [extra]}}), 't')
         for code, message in ((True, 'bad'), (1.1, 'bad'), (1, ''), (1, '🌿' * 257)):
             with self.subTest(code=code, message=message[:10]), self.assertRaises(Invalid):
                 validate_response(hello(), {'jsonrpc': '2.0', 'id': 1, 'error': {'code': code, 'message': message}}, 't')

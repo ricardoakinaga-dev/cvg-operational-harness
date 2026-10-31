@@ -40,6 +40,9 @@ export function validRpcId(value: unknown): value is string | number {
   )
 }
 
+/** Shape of a method name in `sdk.hello`: dotted identifiers, bounded. */
+const METHOD_NAME = /^[A-Za-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*$/
+
 export function isSdkMethod(value: string): value is SdkMethod {
   return SDK_METHODS.some((method) => method === value)
 }
@@ -176,10 +179,11 @@ function validResult(
         typeof c.events !== 'boolean' ||
         !Array.isArray(c.methods) ||
         !c.methods.every(
-          (m: unknown) => typeof m === 'string' && isSdkMethod(m)
+          (m: unknown) => typeof m === 'string' && METHOD_NAME.test(m)
         )
       )
         return false
+      // a well-formed name this client does not know is ignored and never called: v1 is additive
       const methods = new Set<string>(c.methods)
       return (
         methods.size === c.methods.length &&
