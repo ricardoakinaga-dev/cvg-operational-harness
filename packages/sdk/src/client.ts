@@ -6,6 +6,10 @@ import {
   type SdkHelloResult,
   type SessionOpenResult,
   type SdkMethod,
+  type SessionListParams,
+  type SessionListResult,
+  type SessionTraceParams,
+  type SessionTraceResult,
   type TurnSendResult
 } from './protocol.ts'
 import type { SdkServer } from './server.ts'
@@ -42,6 +46,10 @@ export interface SdkClient {
     sessionId: string,
     options?: SdkReadEventsOptions
   ): Promise<readonly SessionEvent[]>
+  /** SPEC 0295: only when `hello()` advertises `session.list`. */
+  listSessions(params?: SessionListParams): Promise<SessionListResult>
+  /** SPEC 0295: exactly one of `approvalId` and `operationKey`. */
+  traceSession(params: SessionTraceParams): Promise<SessionTraceResult>
 }
 
 export function createInProcessTransport(server: SdkServer): SdkTransport {
@@ -90,6 +98,8 @@ export function createSdkClient(transport: SdkTransport): SdkClient {
         ...options
       })
       return result.events
-    }
+    },
+    listSessions: async (params = {}) => await call('session.list', params),
+    traceSession: async (params) => await call('session.trace', params)
   }
 }

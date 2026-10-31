@@ -73,7 +73,10 @@ describe('PDSH-023 SDK protocol v1', () => {
     expect(hello.capabilities).toEqual({
       sessions: true,
       events: true,
-      methods: SDK_METHODS
+      // no session query port in this composition: listing and trace are not advertised
+      methods: SDK_METHODS.filter(
+        (method) => method !== 'session.list' && method !== 'session.trace'
+      )
     })
     expect(sdk.server.capabilities.sessions).toBe(true)
   })

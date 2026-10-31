@@ -1,5 +1,9 @@
 import { STOP_REASONS } from '@cvg/harness-contracts'
-import { validateSessionEvent } from '@cvg/harness'
+import {
+  canonicalSessionFilter,
+  sessionListLimit,
+  validateSessionEvent
+} from '@cvg/harness'
 import {
   SDK_METHODS,
   SDK_PROTOCOL_VERSION,
@@ -9,7 +13,9 @@ import {
   type SdkHelloResult,
   type SessionOpenResult,
   type TurnSendResult,
-  type SessionEventsResult
+  type SessionEventsResult,
+  type SessionListResult,
+  type SessionTraceResult
 } from './protocol.ts'
 
 export function record(value: unknown): Record<string, unknown> | undefined {
@@ -82,6 +88,45 @@ export function validParams(request: JsonRpcRequest): boolean {
         ((p.limit ?? 100) as number) >= 1 &&
         ((p.limit ?? 100) as number) <= 500
       )
+    case 'session.list':
+      return (
+        onlyKeys(p, ['filter', 'cursor', 'limit']) &&
+        (p.cursor === undefined ||
+          (typeof p.cursor === 'string' &&
+            p.cursor.length >= 1 &&
+            p.cursor.length <= 512)) &&
+        refusesNothing(() => {
+          sessionListLimit(p.limit)
+          canonicalSessionFilter(p.filter)
+        })
+      )
+    case 'session.trace': {
+      const roots = [p.approvalId, p.operationKey].filter(
+        (v) => v !== undefined
+      )
+      return (
+        onlyKeys(p, ['approvalId', 'operationKey']) &&
+        roots.length === 1 &&
+        typeof roots[0] === 'string' &&
+        roots[0].length >= 1 &&
+        roots[0].length <= 4096 &&
+        !roots[0].includes('\u0000')
+      )
+    }
+  }
+}
+
+function onlyKeys(p: Record<string, unknown>, allowed: string[]): boolean {
+  return Object.keys(p).every((key) => allowed.includes(key))
+}
+
+/** True when the pure rules of the harness accept; they throw on a refusal. */
+function refusesNothing(check: () => void): boolean {
+  try {
+    check()
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -109,6 +154,8 @@ interface Results {
   'session.open': SessionOpenResult
   'turn.send': TurnSendResult
   'session.events': SessionEventsResult
+  'session.list': SessionListResult
+  'session.trace': SessionTraceResult
 }
 
 function validResult(
@@ -133,9 +180,10 @@ function validResult(
         )
       )
         return false
-      const methods = new Set(c.methods)
+      const methods = new Set<string>(c.methods)
       return (
         methods.size === c.methods.length &&
+        methods.has('session.list') === methods.has('session.trace') &&
         methods.has('sdk.hello') &&
         methods.has('turn.send') &&
         methods.has('session.open') === c.sessions &&
@@ -196,9 +244,156 @@ function validResult(
       }
       return true
     }
+    case 'session.list':
+      return validList(r, p)
+    case 'session.trace':
+      return validTrace(r, p)
     default:
       return false
   }
+}
+
+const GAP_REASONS = new Set([
+  'approval_not_found',
+  'ambiguous_approval',
+  'candidates_capped',
+  'effect_absent',
+  'execution_ref_mismatch',
+  'origin_unbound',
+  'event_not_found',
+  'multiple_event_candidates',
+  'tool_result_ambiguous',
+  'source_conflict',
+  'source_unavailable',
+  'budget_exhausted'
+])
+const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0
+const optionalText = (v: unknown): boolean => v === undefined || text(v)
+
+function validList(
+  r: Record<string, unknown>,
+  p: Record<string, unknown>
+): boolean {
+  if (
+    !Array.isArray(r.items) ||
+    r.items.length > sessionListLimit(p.limit) ||
+    !(
+      r.nextCursor === null ||
+      (text(r.nextCursor) && r.nextCursor.length <= 512)
+    ) ||
+    !natural(r.examined) ||
+    r.examined > 1000 ||
+    !natural(r.skippedUnadopted) ||
+    r.skippedUnadopted > r.examined
+  )
+    return false
+  const filter = canonicalSessionFilter(p.filter)
+  const ids = new Set<string>()
+  for (const value of r.items) {
+    const item = record(value)
+    if (
+      !item ||
+      !validIdentifier(item.sessionId) ||
+      ids.has(item.sessionId) ||
+      !natural(item.createdAt) ||
+      typeof item.isSeeded !== 'boolean' ||
+      !natural(item.inheritedEventCount) ||
+      !optionalText(item.parentSession) ||
+      !optionalText(item.agentPreset) ||
+      !(item.origin === undefined || item.origin === 'subagent') ||
+      (filter.parentSession !== undefined &&
+        item.parentSession !== filter.parentSession) ||
+      (filter.agentPreset !== undefined &&
+        item.agentPreset !== filter.agentPreset) ||
+      (filter.origin !== undefined && item.origin !== filter.origin) ||
+      (filter.isSeeded !== undefined && item.isSeeded !== filter.isSeeded) ||
+      (filter.createdAfter !== undefined &&
+        item.createdAt < filter.createdAfter) ||
+      (filter.createdBefore !== undefined &&
+        item.createdAt >= filter.createdBefore)
+    )
+      return false
+    ids.add(item.sessionId)
+  }
+  return true
+}
+
+function validTrace(
+  r: Record<string, unknown>,
+  p: Record<string, unknown>
+): boolean {
+  const root = record(r.root)
+  const expected =
+    p.approvalId !== undefined
+      ? { kind: 'approval', id: p.approvalId }
+      : { kind: 'operationKey', id: p.operationKey }
+  if (
+    !root ||
+    root.kind !== expected.kind ||
+    root.id !== expected.id ||
+    !Array.isArray(r.links) ||
+    r.links.length > 100 ||
+    !Array.isArray(r.gaps) ||
+    typeof r.truncated !== 'boolean'
+  )
+    return false
+  const observed = record(r.observed)
+  if (
+    !observed ||
+    !Object.entries(observed).every(
+      ([key, value]) =>
+        ['approval', 'effect', 'events'].includes(key) &&
+        typeof value === 'string' &&
+        !Number.isNaN(Date.parse(value))
+    )
+  )
+    return false
+  const linksOk = r.links.every((value: unknown) => {
+    const link = record(value)
+    if (!link) return false
+    switch (link.kind) {
+      case 'approval':
+        return (
+          text(link.approvalId) &&
+          text(link.status) &&
+          optionalText(link.executionRef) &&
+          optionalText(link.originSessionId)
+        )
+      case 'effect':
+        return (
+          text(link.operationKey) &&
+          text(link.state) &&
+          optionalText(link.executionRef)
+        )
+      case 'event':
+        return (
+          text(link.sessionId) &&
+          natural(link.sequence) &&
+          link.sequence >= 1 &&
+          text(link.eventId) &&
+          text(link.type) &&
+          text(link.correlationId) &&
+          optionalText(link.toolId) &&
+          optionalText(link.outcome) &&
+          typeof link.inherited === 'boolean'
+        )
+      default:
+        return false
+    }
+  })
+  const gapsOk = r.gaps.every((value: unknown) => {
+    const gap = record(value)
+    if (!gap || typeof gap.reason !== 'string' || !GAP_REASONS.has(gap.reason))
+      return false
+    if (gap.subject === undefined) return true
+    const subject = record(gap.subject)
+    return !!subject && text(subject.kind) && text(subject.id)
+  })
+  // a truncated trace says which budget; a complete one never claims it
+  const exhausted = r.gaps.some(
+    (g: unknown) => record(g)?.reason === 'budget_exhausted'
+  )
+  return linksOk && gapsOk && r.truncated === exhausted
 }
 
 /** Validation precedes settlement; returns the unmodified result. */

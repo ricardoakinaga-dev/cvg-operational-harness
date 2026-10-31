@@ -11,7 +11,7 @@ import { SessionEventError } from '@cvg/harness'
 import { SDK_ERROR_CODES, SDK_METHODS, createSdkServer } from '../index.ts'
 
 // SPEC 0295 (PAR-S05), phase-1 RED witnesses. The controls pass today and pin what the SPEC
-// keeps; the `it.fails` cases name the behaviour the BUILD must deliver and fail until then.
+// keeps; the former `it.fails` witnesses are plain assertions since slice 4 delivered them.
 const TENANT = 'tenant_s05_a'
 const OTHER = 'tenant_s05_b'
 
@@ -110,69 +110,59 @@ describe('PAR-S05 baseline controls (pass today, kept by the SPEC)', () => {
     expect(fields('tool/result')).not.toContain('operationKey')
   })
 
-  it('the method vocabulary has no listing or trace today', () => {
+  it('the method vocabulary gains listing and trace and keeps the v1 four in place', () => {
     expect(SDK_METHODS).toEqual([
       'sdk.hello',
       'session.open',
       'turn.send',
-      'session.events'
+      'session.events',
+      'session.list',
+      'session.trace'
     ])
   })
 })
 
-describe('PAR-S05 RED witnesses (fail until the BUILD)', () => {
-  it.fails(
-    'RED-1: session.list returns only the sessions of the bound tenant, newest first, with a cursor',
-    async () => {
-      const sessionQuery = {
-        list: async () => ({
-          items: [{ sessionId: 's2' }, { sessionId: 's1' }],
-          nextCursor: null
-        })
-      }
-      const s = server(store(), { sessionQuery })
-      const res = await call(s, 'session.list', { limit: 10 })
-      expect(res.error).toBeUndefined()
-      expect((res.result as { items: unknown[] }).items).toHaveLength(2)
-    }
-  )
-
-  it.fails(
-    'RED-2: a forged or foreign-filter cursor is invalid_params, not a silent restart',
-    async () => {
-      const s = server(store(), {
-        sessionQuery: { list: async () => ({ items: [], nextCursor: null }) }
+describe('PAR-S05 RED witnesses (delivered by slice 4)', () => {
+  it('RED-1: session.list returns only the sessions of the bound tenant, newest first, with a cursor', async () => {
+    const sessionQuery = {
+      list: async () => ({
+        items: [{ sessionId: 's2' }, { sessionId: 's1' }],
+        nextCursor: null
       })
-      const res = await call(s, 'session.list', { cursor: 'not-a-cursor' })
-      expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
     }
-  )
+    const s = server(store(), { sessionQuery })
+    const res = await call(s, 'session.list', { limit: 10 })
+    expect(res.error).toBeUndefined()
+    expect((res.result as { items: unknown[] }).items).toHaveLength(2)
+  })
 
-  it.fails(
-    'RED-3: session.trace of an approval names the effect and the origin event, with explicit gaps',
-    async () => {
-      const trace = async () => ({
-        root: { kind: 'approval', id: 'appr_1' },
-        links: [
-          { kind: 'effect', id: 'op_1', via: 'operationKey' },
-          { kind: 'event', sessionId: 's1', sequence: 3, via: 'operationKey' }
-        ],
-        gaps: []
-      })
-      const s = server(store(), { sessionQuery: { trace } })
-      const res = await call(s, 'session.trace', { approvalId: 'appr_1' })
-      expect(res.error).toBeUndefined()
-      expect((res.result as { links: unknown[] }).links).toHaveLength(2)
-    }
-  )
+  it('RED-2: a forged or foreign-filter cursor is invalid_params, not a silent restart', async () => {
+    const s = server(store(), {
+      sessionQuery: { list: async () => ({ items: [], nextCursor: null }) }
+    })
+    const res = await call(s, 'session.list', { cursor: 'not-a-cursor' })
+    expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
+  })
 
-  it.fails(
-    'RED-4: session.list is capability_not_available when the composition has no query port',
-    async () => {
-      const res = await call(server(store()), 'session.list', {})
-      expect(res.error?.code).toBe(SDK_ERROR_CODES.capability_not_available)
-    }
-  )
+  it('RED-3: session.trace of an approval names the effect and the origin event, with explicit gaps', async () => {
+    const trace = async () => ({
+      root: { kind: 'approval', id: 'appr_1' },
+      links: [
+        { kind: 'effect', id: 'op_1', via: 'operationKey' },
+        { kind: 'event', sessionId: 's1', sequence: 3, via: 'operationKey' }
+      ],
+      gaps: []
+    })
+    const s = server(store(), { sessionQuery: { trace } })
+    const res = await call(s, 'session.trace', { approvalId: 'appr_1' })
+    expect(res.error).toBeUndefined()
+    expect((res.result as { links: unknown[] }).links).toHaveLength(2)
+  })
+
+  it('RED-4: session.list is capability_not_available when the composition has no query port', async () => {
+    const res = await call(server(store()), 'session.list', {})
+    expect(res.error?.code).toBe(SDK_ERROR_CODES.capability_not_available)
+  })
 })
 
 // R1 (review F01-F05): behaviour witnesses at the SDK. They fail today with `method_not_found`
@@ -209,98 +199,80 @@ const countingPort = (
   }
 }
 
-describe('PAR-S05 R1 behaviour witnesses (fail until the BUILD)', () => {
-  it.fails(
-    'RED-5: a foreign and a missing trace root answer identically with session_not_found',
-    async () => {
-      const { port } = countingPort({
-        trace: () => {
-          throw new QueryError('not_found')
-        }
-      })
-      const s = server(store(), { sessionQuery: port })
-      const foreign = await call(s, 'session.trace', { approvalId: 'foreign' })
-      const missing = await call(s, 'session.trace', { approvalId: 'missing' })
-      expect(foreign.error?.code).toBe(SDK_ERROR_CODES.session_not_found)
-      expect(JSON.stringify(foreign.error)).toBe(JSON.stringify(missing.error))
-    }
-  )
+describe('PAR-S05 R1 behaviour witnesses (delivered by slice 4)', () => {
+  it('RED-5: a foreign and a missing trace root answer identically with session_not_found', async () => {
+    const { port } = countingPort({
+      trace: () => {
+        throw new QueryError('not_found')
+      }
+    })
+    const s = server(store(), { sessionQuery: port })
+    const foreign = await call(s, 'session.trace', { approvalId: 'foreign' })
+    const missing = await call(s, 'session.trace', { approvalId: 'missing' })
+    expect(foreign.error?.code).toBe(SDK_ERROR_CODES.session_not_found)
+    expect(JSON.stringify(foreign.error)).toBe(JSON.stringify(missing.error))
+  })
 
-  it.fails(
-    'RED-6: a failing root source is an internal error, never not_found nor an empty trace',
-    async () => {
-      const { port } = countingPort({
-        trace: () => {
-          throw new QueryError('unavailable')
-        }
-      })
-      const res = await call(
-        server(store(), { sessionQuery: port }),
-        'session.trace',
-        {
-          approvalId: 'a1'
-        }
-      )
-      expect(res.error?.code).toBe(SDK_ERROR_CODES.internal_error)
-    }
-  )
+  it('RED-6: a failing root source is an internal error, never not_found nor an empty trace', async () => {
+    const { port } = countingPort({
+      trace: () => {
+        throw new QueryError('unavailable')
+      }
+    })
+    const res = await call(
+      server(store(), { sessionQuery: port }),
+      'session.trace',
+      {
+        approvalId: 'a1'
+      }
+    )
+    expect(res.error?.code).toBe(SDK_ERROR_CODES.internal_error)
+  })
 
-  it.fails(
-    'RED-7: an inverted date filter is invalid_params and never reaches the port',
-    async () => {
-      const { port, calls } = countingPort()
-      const res = await call(
-        server(store(), { sessionQuery: port }),
-        'session.list',
-        {
-          filter: { createdAfter: 20, createdBefore: 10 }
-        }
-      )
-      expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
-      expect(calls).toEqual([])
-    }
-  )
+  it('RED-7: an inverted date filter is invalid_params and never reaches the port', async () => {
+    const { port, calls } = countingPort()
+    const res = await call(
+      server(store(), { sessionQuery: port }),
+      'session.list',
+      {
+        filter: { createdAfter: 20, createdBefore: 10 }
+      }
+    )
+    expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
+    expect(calls).toEqual([])
+  })
 
-  it.fails(
-    'RED-8: a cursor over 512 characters is invalid_params and never reaches the port',
-    async () => {
-      const { port, calls } = countingPort()
-      const res = await call(
-        server(store(), { sessionQuery: port }),
-        'session.list',
-        {
-          cursor: 'a'.repeat(513)
-        }
-      )
-      expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
-      expect(calls).toEqual([])
-    }
-  )
+  it('RED-8: a cursor over 512 characters is invalid_params and never reaches the port', async () => {
+    const { port, calls } = countingPort()
+    const res = await call(
+      server(store(), { sessionQuery: port }),
+      'session.list',
+      {
+        cursor: 'a'.repeat(513)
+      }
+    )
+    expect(res.error?.code).toBe(SDK_ERROR_CODES.invalid_params)
+    expect(calls).toEqual([])
+  })
 
-  it.fails(
-    'RED-9: limit 101 is invalid_params; an absent limit reaches the port as 50',
-    async () => {
-      const { port, calls } = countingPort()
-      const s = server(store(), { sessionQuery: port })
-      expect((await call(s, 'session.list', { limit: 101 })).error?.code).toBe(
+  it('RED-9: limit 101 is invalid_params; an absent limit reaches the port as 50', async () => {
+    const { port, calls } = countingPort()
+    const s = server(store(), { sessionQuery: port })
+    expect((await call(s, 'session.list', { limit: 101 })).error?.code).toBe(
+      SDK_ERROR_CODES.invalid_params
+    )
+    expect(calls).toEqual([])
+    await call(s, 'session.list', {})
+    expect(calls[0]).toContain('"limit":50')
+  })
+
+  it('RED-10: a trace needs exactly one root: both or none is invalid_params', async () => {
+    const { port, calls } = countingPort()
+    const s = server(store(), { sessionQuery: port })
+    for (const params of [{}, { approvalId: 'a', operationKey: 'k' }])
+      expect((await call(s, 'session.trace', params)).error?.code).toBe(
         SDK_ERROR_CODES.invalid_params
       )
-      expect(calls).toEqual([])
-      await call(s, 'session.list', {})
-      expect(calls[0]).toContain('"limit":50')
-    }
-  )
-
-  it.fails(
-    'RED-10: a trace needs exactly one root: both or none is invalid_params',
-    async () => {
-      const { port, calls } = countingPort()
-      const s = server(store(), { sessionQuery: port })
-      for (const params of [{}, { approvalId: 'a', operationKey: 'k' }])
-        expect((await call(s, 'session.trace', params)).error?.code).toBe(
-          SDK_ERROR_CODES.invalid_params
-        )
-      expect(calls).toEqual([])
-    }
-  )
+    expect(calls).toEqual([])
+  })
 })
