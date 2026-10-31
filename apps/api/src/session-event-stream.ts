@@ -644,6 +644,14 @@ export function installSessionEventStream(deps: SessionStreamDependencies): {
     }
   })
 
+  // `return503OnClosing` is off so that the stream route can answer in band while closing; every
+  // other route keeps the 503 Fastify would have given it (SPEC 0296 A13).
+  app.addHook('onRequest', async (request, reply) => {
+    if (!closing || request.routeOptions.url === SESSION_STREAM_ROUTE) return
+    reply.code(503).header('connection', 'close')
+    return reply.send({ error: 'Service Unavailable' })
+  })
+
   // The HEAD derived by Fastify would run the loop and hold a slot; this one answers and stops.
   app.route({
     method: 'HEAD',

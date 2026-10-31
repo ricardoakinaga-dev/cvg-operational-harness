@@ -1397,6 +1397,7 @@ describe('PAR-A01 repair: a client that stops reading, closing, HEAD during an o
         limits: { ...SMALL, slowConsumerMs: 60_000, closeGraceMs: 600 }
       }
     } as never)
+    withStreams.get('/other-route', async () => 'other')
     const base = await withStreams.listen({ port: 0, host: '127.0.0.1' })
     const socket = await stalledClient(
       base,
@@ -1407,6 +1408,10 @@ describe('PAR-A01 repair: a client that stops reading, closing, HEAD during an o
       await settle(200)
       const closing = withStreams.close()
       await settle(100)
+      // any other route keeps the 503 of a closing server, and the connection is not kept
+      const other = await fetch(`${base}/other-route`, { headers })
+      expect(other.status).toBe(503)
+      expect(other.headers.get('connection')).toBe('close')
       const late = await fetch(`${base}/v1/sessions/s1/events/stream`, {
         headers
       })

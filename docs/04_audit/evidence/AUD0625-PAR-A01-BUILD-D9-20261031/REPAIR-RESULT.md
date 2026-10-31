@@ -16,3 +16,7 @@ Revisão: CHANGES_REQUESTED, P2 ×2, P3 ×6. Este commit repara todos, na `claud
 Gates: typecheck, eslint, prettier, docs:check-links; 100% por arquivo em `session-event-stream.ts`, `session-event-frames.ts`, `event-tail.ts`; suíte `apps/api` 864 passed. Mutantes em `mutations-repair.json` / `mutation-results-repair.json`: 9/9 mortos.
 
 Limite: a mudança de `return503OnClosing` vale para o servidor inteiro quando `sessionEventStreams` está configurado; as outras rotas passam a terminar durante a espera do `preClose` como as requisições em voo.
+
+## P3 da conferência da DF: o desligamento das outras rotas
+
+`return503OnClosing: false` valia para todas as rotas. Agora um `onRequest` (instalado junto com o stream) responde `503` com `connection: close` a toda rota que não seja a do stream enquanto o `preClose` espera; o stream segue recebendo `200` + `end(server_closing)`. Teste no servidor real: rota comum ⇒ 503 + `connection: close` durante o `preClose`, stream ⇒ 200 + `server_closing`. Mutantes O1–O3 (`mutations-onrequest.json`) mortos.
