@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import {
   SessionEventError,
+  canonicalSessionFilter,
   createOperationalHarness,
-  createSessionKernelLog
+  createSessionKernelLog,
+  decodeSessionCursor,
+  sessionListLimit
 } from '@cvg/harness'
 import type {
   AgentProfile,
@@ -18,6 +21,7 @@ import type {
   SessionEvent,
   SessionEventStore,
   SessionId,
+  SessionQuery,
   TelemetrySink,
   TenantId,
   ToolRegistry,
@@ -32,7 +36,12 @@ import {
   type JsonRpcSuccess,
   type SdkCapabilities
 } from './protocol.ts'
-import { isRequest, validRpcId } from './validators.ts'
+import {
+  isRequest,
+  projectSessionList,
+  projectSessionTrace,
+  validRpcId
+} from './validators.ts'
 
 /** Deterministic fallback budget for one SDK turn. */
 export const SDK_DEFAULT_BUDGET: ExecutionBudget = {
@@ -65,6 +74,11 @@ export interface SdkServerOptions {
   readonly telemetry?: TelemetrySink
   /** Enables `session.open`/`session.events` when provided. */
   readonly sessions?: SessionEventStore
+  /**
+   * Enables `session.list`/`session.trace` (SPEC 0295). The port is bound to this composition's
+   * tenant by the host; it is never exposed to a transport without that decision (D8).
+   */
+  readonly sessionQuery?: SessionQuery
   readonly budget?: ExecutionBudget
   readonly clock?: () => Date
   readonly newEventId?: () => string
@@ -114,6 +128,7 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
     options.newCorrelationId ?? (() => `sdk_correlation_${randomUUID()}`)
   const newTraceId = options.newTraceId ?? (() => `sdk_trace_${randomUUID()}`)
   const sessions = options.sessions
+  const sessionQuery = options.sessionQuery
   const budget = options.budget ?? SDK_DEFAULT_BUDGET
   const tools = options.tools ?? EMPTY_TOOLS
   const audit = options.audit ?? NOOP_AUDIT
@@ -131,12 +146,12 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
   const capabilities: SdkCapabilities = {
     sessions: sessions !== undefined,
     events: sessions !== undefined,
-    methods:
-      sessions !== undefined
-        ? SDK_METHODS
-        : SDK_METHODS.filter(
-            (method) => method === 'sdk.hello' || method === 'turn.send'
-          )
+    methods: SDK_METHODS.filter((method) => {
+      if (method === 'sdk.hello' || method === 'turn.send') return true
+      if (method === 'session.list' || method === 'session.trace')
+        return sessionQuery !== undefined
+      return sessions !== undefined
+    })
   }
 
   function requestError(code: number, message: string): SdkRequestError {
@@ -376,6 +391,126 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
     return { events }
   }
 
+  /** The ports throw their own error class or a plain one; only the code is read, never the text. */
+  function mapQueryError(error: unknown): SdkRequestError {
+    const code = asRecord(error)?.code
+    switch (code) {
+      case 'invalid_params':
+      case 'invalid_cursor':
+        return requestError(
+          SDK_ERROR_CODES.invalid_params,
+          'Invalid session query parameters'
+        )
+      case 'not_found':
+        return requestError(SDK_ERROR_CODES.session_not_found, 'Not found')
+      case 'unsupported':
+        return requestError(
+          SDK_ERROR_CODES.capability_not_available,
+          'Session query is not available'
+        )
+      default:
+        return requestError(
+          SDK_ERROR_CODES.internal_error,
+          'Session query failed'
+        )
+    }
+  }
+
+  function queryPort(method: string): SessionQuery {
+    if (sessionQuery === undefined) {
+      throw requestError(
+        SDK_ERROR_CODES.capability_not_available,
+        `${method} requires a composition with a session query port`
+      )
+    }
+    return sessionQuery
+  }
+
+  /** Strict object: no key outside `allowed`; a refusal never reaches the port. */
+  function queryParams(
+    method: string,
+    params: unknown,
+    allowed: readonly string[]
+  ): Record<string, unknown> {
+    const record = asRecord(params)
+    if (
+      record === undefined ||
+      Object.keys(record).some((k) => !allowed.includes(k))
+    ) {
+      throw requestError(
+        SDK_ERROR_CODES.invalid_params,
+        `${method} accepts only ${allowed.join(', ')}`
+      )
+    }
+    return record
+  }
+
+  async function handleSessionList(params: unknown): Promise<unknown> {
+    const port = queryPort('session.list')
+    const record = queryParams('session.list', params, [
+      'filter',
+      'cursor',
+      'limit'
+    ])
+    let input
+    try {
+      const filter = canonicalSessionFilter(record.filter)
+      const limit = sessionListLimit(record.limit)
+      if (record.cursor !== undefined) {
+        if (typeof record.cursor !== 'string')
+          throw requestError(SDK_ERROR_CODES.invalid_params, 'cursor')
+        decodeSessionCursor(record.cursor, filter, options.tenantId)
+      }
+      input = {
+        filter,
+        limit,
+        ...(record.cursor !== undefined ? { cursor: record.cursor } : {})
+      }
+    } catch (error) {
+      throw error instanceof SdkRequestError ? error : mapQueryError(error)
+    }
+    try {
+      return projectSessionList(await port.list(input))
+    } catch (error) {
+      throw mapQueryError(error)
+    }
+  }
+
+  async function handleSessionTrace(params: unknown): Promise<unknown> {
+    const port = queryPort('session.trace')
+    const record = queryParams('session.trace', params, [
+      'approvalId',
+      'operationKey'
+    ])
+    const roots = [record.approvalId, record.operationKey].filter(
+      (v) => v !== undefined
+    )
+    const root = roots[0]
+    if (
+      roots.length !== 1 ||
+      typeof root !== 'string' ||
+      root.length < 1 ||
+      root.length > 4096 ||
+      root.includes('\u0000')
+    ) {
+      throw requestError(
+        SDK_ERROR_CODES.invalid_params,
+        'session.trace needs exactly one of approvalId and operationKey'
+      )
+    }
+    try {
+      return projectSessionTrace(
+        await port.trace(
+          record.approvalId !== undefined
+            ? { approvalId: root }
+            : { operationKey: root }
+        )
+      )
+    } catch (error) {
+      throw mapQueryError(error)
+    }
+  }
+
   function success(id: string | number, result: unknown): JsonRpcSuccess {
     return { jsonrpc: '2.0', id, result }
   }
@@ -404,7 +539,9 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
         'sdk.hello': handleHello,
         'session.open': handleOpenSession,
         'turn.send': handleTurnSend,
-        'session.events': handleSessionEvents
+        'session.events': handleSessionEvents,
+        'session.list': handleSessionList,
+        'session.trace': handleSessionTrace
       }
       const handler = Object.hasOwn(handlers, payload.method)
         ? handlers[payload.method]

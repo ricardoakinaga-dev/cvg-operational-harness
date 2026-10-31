@@ -1,4 +1,9 @@
-import type { SessionEvent } from '@cvg/harness-contracts'
+import type {
+  SessionEvent,
+  SessionListFilter,
+  SessionListPage,
+  SessionTrace
+} from '@cvg/harness-contracts'
 
 /**
  * PDSH-023 / SPEC 0204: versioned JSON-RPC 2.0 protocol for integrator SDKs.
@@ -12,7 +17,9 @@ export const SDK_METHODS = [
   'sdk.hello',
   'session.open',
   'turn.send',
-  'session.events'
+  'session.events',
+  'session.list',
+  'session.trace'
 ] as const
 export type SdkMethod = (typeof SDK_METHODS)[number]
 
@@ -106,3 +113,19 @@ export interface SessionEventsParams {
 export interface SessionEventsResult {
   readonly events: readonly SessionEvent[]
 }
+
+/** SPEC 0295: additive in v1, advertised by `sdk.hello` only when the composition has the port. */
+export interface SessionListParams {
+  readonly filter?: SessionListFilter
+  readonly cursor?: string
+  readonly limit?: number
+}
+
+export type SessionListResult = SessionListPage
+
+export interface SessionTraceParams {
+  readonly approvalId?: string
+  readonly operationKey?: string
+}
+
+export type SessionTraceResult = SessionTrace

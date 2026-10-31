@@ -1,0 +1,331 @@
+[
+ {
+  "id": "C1",
+  "what": "filter keys not checked",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "    if (!FILTER_KEYS.has(key)) invalid(`unknown filter key ${key}`)\n",
+  "new": ""
+ },
+ {
+  "id": "C2",
+  "what": "inverted range tolerated",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "(out.createdAfter as number) >= (out.createdBefore as number)",
+  "new": "(out.createdAfter as number) > (out.createdBefore as number)"
+ },
+ {
+  "id": "C3",
+  "what": "limit upper bound off by one",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "limit > SESSION_QUERY_MAX_LIMIT",
+  "new": "limit > SESSION_QUERY_MAX_LIMIT + 1"
+ },
+ {
+  "id": "C4",
+  "what": "limit zero accepted",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "limit < 1 ||",
+  "new": "limit < 0 ||"
+ },
+ {
+  "id": "C5",
+  "what": "default limit changes",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "if (limit === undefined) return SESSION_QUERY_DEFAULT_LIMIT",
+  "new": "if (limit === undefined) return 10"
+ },
+ {
+  "id": "C6",
+  "what": "createdAfter exclusive",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "summary.createdAt >= filter.createdAfter",
+  "new": "summary.createdAt > filter.createdAfter"
+ },
+ {
+  "id": "C7",
+  "what": "createdBefore inclusive",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "summary.createdAt < filter.createdBefore",
+  "new": "summary.createdAt <= filter.createdBefore"
+ },
+ {
+  "id": "C8",
+  "what": "origin ignored by the filter",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "(filter.origin === undefined || summary.origin === filter.origin) &&",
+  "new": "true &&"
+ },
+ {
+  "id": "C9",
+  "what": "isSeeded ignored by the filter",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "(filter.isSeeded === undefined || summary.isSeeded === filter.isSeeded) &&",
+  "new": "true &&"
+ },
+ {
+  "id": "C10",
+  "what": "cursor length not capped",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "  if (cursor.length > SESSION_QUERY_CURSOR_MAX_CHARS)\n    return bad('cursor is too long')\n",
+  "new": ""
+ },
+ {
+  "id": "C14",
+  "what": "cursor position zero accepted",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "    body.k < 1 ||",
+  "new": "    body.k < 0 ||"
+ },
+ {
+  "id": "C15",
+  "what": "cursor not bound to the filter or tenant",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "  if (encodeSessionCursor(body.k, filter, tenantId) !== cursor) {",
+  "new": "  if (false as boolean) {"
+ },
+ {
+  "id": "C16",
+  "what": "tenant digest ignores the tenant",
+  "file": "packages/harness/src/session/query-cursor.ts",
+  "old": "sha256(`tenant:${tenantId}`)",
+  "new": "sha256('tenant:')"
+ },
+ {
+  "id": "Q1",
+  "what": "the window is filtered before it is cut",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      size: SESSION_QUERY_EXAMINE_CAP,",
+  "new": "      size: SESSION_QUERY_EXAMINE_CAP + 1,"
+ },
+ {
+  "id": "Q2",
+  "what": "a full window gives no cursor",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "        fullWindow && rows.length > 0",
+  "new": "        false && rows.length > 0"
+ },
+ {
+  "id": "Q3",
+  "what": "a fill at the end of a short window keeps a cursor",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "const lastOfShortWindow = index === rows.length - 1 && !fullWindow",
+  "new": "const lastOfShortWindow = false"
+ },
+ {
+  "id": "Q5",
+  "what": "unadopted streams are not counted",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "if (row.summary === null) skippedUnadopted += 1",
+  "new": "if (row.summary === null) examined += 0"
+ },
+ {
+  "id": "Q6",
+  "what": "the cursor of a filled page is the next candidate",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "            : encodeSessionCursor(row.key, filter, tenantId),",
+  "new": "            : encodeSessionCursor(row.key - 1, filter, tenantId),"
+ },
+ {
+  "id": "Q7",
+  "what": "the page is not cut at the limit",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      if (items.length === limit) {",
+  "new": "      if (items.length === limit + 1000) {"
+ },
+ {
+  "id": "T1",
+  "what": "both roots accepted",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    if (roots.length !== 1)",
+  "new": "    if (roots.length > 2)"
+ },
+ {
+  "id": "T2",
+  "what": "the tenant of the request would be used (ports get another tenant)",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "await approvals.get(tenantId, input.approvalId, signal)",
+  "new": "await approvals.get('other', input.approvalId, signal)"
+ },
+ {
+  "id": "T3",
+  "what": "a missing approval is not an error",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    if (input.approvalId !== undefined && found.length === 0)\n      throw new SessionQueryError('not_found', 'trace root not found')\n",
+  "new": ""
+ },
+ {
+  "id": "T4",
+  "what": "a failing root source becomes not_found",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      throw new SessionQueryError('unavailable', 'the trace root source failed')",
+  "new": "      throw new SessionQueryError('not_found', 'the trace root source failed')"
+ },
+ {
+  "id": "T5",
+  "what": "candidates are not capped",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "found = candidates.slice(0, budgets.approvalCandidates)",
+  "new": "found = candidates"
+ },
+ {
+  "id": "T6",
+  "what": "ambiguity not reported",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    if (found.length > 1)\n      gaps.push({\n        reason: 'ambiguous_approval',",
+  "new": "    if (found.length > 99)\n      gaps.push({\n        reason: 'ambiguous_approval',"
+ },
+ {
+  "id": "T7",
+  "what": "execution ref mismatch not reported",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "            approval.executionRef !== effect.executionRef\n",
+  "new": "            false\n"
+ },
+ {
+  "id": "T8",
+  "what": "an unbound origin is not reported",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      if (approval.originSessionId === undefined)\n        gaps.push({\n          reason: 'origin_unbound',",
+  "new": "      if (false as boolean)\n        gaps.push({\n          reason: 'origin_unbound',"
+ },
+ {
+  "id": "T9",
+  "what": "events are not searched",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    if (operationKey !== undefined && !truncated) {",
+  "new": "    if (false as boolean) {"
+ },
+ {
+  "id": "T10",
+  "what": "a nothing-behind-it key is a trace",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    if (\n      input.approvalId === undefined &&\n      found.length === 0 &&\n      effect === undefined &&",
+  "new": "    if (\n      false &&\n      found.length === 0 &&\n      effect === undefined &&"
+ },
+ {
+  "id": "T11",
+  "what": "the missing approval gap is never added",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    if (input.approvalId === undefined && found.length === 0)\n      gaps.push({",
+  "new": "    if (false as boolean)\n      gaps.push({"
+ },
+ {
+  "id": "T12",
+  "what": "byte budget counts UTF-16 units",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "Buffer.byteLength(JSON.stringify(event), 'utf8')",
+  "new": "JSON.stringify(event).length"
+ },
+ {
+  "id": "T13",
+  "what": "byte budget lets the crossing event in",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "if (bytes + size > budgets.bytes) {",
+  "new": "if (bytes > budgets.bytes) {"
+ },
+ {
+  "id": "T14",
+  "what": "event budget ignored",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "if (eventCount >= budgets.events) {",
+  "new": "if (eventCount >= budgets.events + 1000000) {"
+ },
+ {
+  "id": "T15",
+  "what": "session budget ignored",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "if (scannedSessions >= budgets.sessions) {",
+  "new": "if (scannedSessions >= budgets.sessions + 1000) {"
+ },
+ {
+  "id": "T16",
+  "what": "call budget ignored",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      if (calls >= budgets.calls) {",
+  "new": "      if (calls >= budgets.calls + 1000) {"
+ },
+ {
+  "id": "T17",
+  "what": "deadline ignored",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "if (monotonicMs() - startedAt > budgets.deadlineMs) {",
+  "new": "if (false as boolean) {"
+ },
+ {
+  "id": "T18",
+  "what": "link budget ignored",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "        if (links.length >= budgets.links) {",
+  "new": "        if (links.length >= budgets.links + 1000) {"
+ },
+ {
+  "id": "T19",
+  "what": "an inherited copy counts as a candidate",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      const real = calls_.filter((c) => !c.inherited)",
+  "new": "      const real = calls_"
+ },
+ {
+  "id": "T20",
+  "what": "inheritance is never detected",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "                inherited:\n                  event.sequence <=\n                  (summaries.get(sessionId)?.inheritedEventCount ?? 0)",
+  "new": "                inherited: false"
+ },
+ {
+  "id": "T21",
+  "what": "the abort is swallowed as a gap in the event read",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "          } catch {\n            checkAborted(signal)\n            // a session that vanished",
+  "new": "          } catch {\n            // a session that vanished"
+ },
+ {
+  "id": "T22",
+  "what": "the origin hint is not used first",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      hinted.forEach(add)\n",
+  "new": ""
+ },
+ {
+  "id": "T23",
+  "what": "the result is paired with an earlier event",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "if (r.sequence > c.sequence && links.length < budgets.links)",
+  "new": "if (links.length < budgets.links)"
+ },
+ {
+  "id": "T24",
+  "what": "ambiguous results are paired anyway",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "        if (callsPerTurnTool.get(slot)! > 1)",
+  "new": "        if (callsPerTurnTool.get(slot)! > 100)"
+ },
+ {
+  "id": "T25",
+  "what": "multiple candidates not reported",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      if (real.length > 1)",
+  "new": "      if (real.length > 100)"
+ },
+ {
+  "id": "T26",
+  "what": "no event found is not reported",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "      if (matched === 0 && !truncated)",
+  "new": "      if (false as boolean)"
+ },
+ {
+  "id": "T27",
+  "what": "the links are not sorted",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "    const ordered = [...links].sort((a, b) =>\n      linkOrder(a) < linkOrder(b) ? -1 : 1\n    )",
+  "new": "    const ordered = [...links]"
+ },
+ {
+  "id": "T28",
+  "what": "gaps are not deduplicated",
+  "file": "packages/harness/src/session/query.ts",
+  "old": "        if (seen.has(key)) return false\n",
+  "new": ""
+ }
+]

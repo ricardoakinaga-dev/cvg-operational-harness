@@ -201,6 +201,9 @@ def encode(value, cap):
     return frame
 
 
+METHOD_NAME = re.compile(r'[A-Za-z][A-Za-z0-9]*(\.[A-Za-z][A-Za-z0-9]*)*')
+
+
 def validate_request(r):
     require(type(r) is dict and r.get('jsonrpc') == '2.0' and valid_id(r.get('id')))
     require(type(r.get('method')) is str and len(r['method']) > 0)
@@ -343,7 +346,8 @@ def validate_response(request, response, tenant):
         require(integer(v.get('protocolVersion'), 1, 1) and type(c) is dict)
         require(type(c.get('sessions')) is bool and type(c.get('events')) is bool)
         methods = c.get('methods')
-        require(type(methods) is list and all(type(x) is str and x in SDK_METHODS for x in methods))
+        # additive v1: a well-formed name this client does not know is ignored and never called
+        require(type(methods) is list and all(type(x) is str and METHOD_NAME.fullmatch(x) for x in methods))
         require(len(set(methods)) == len(methods) and {'sdk.hello', 'turn.send'} <= set(methods))
         require(('session.open' in methods) == c['sessions'])
         require(('session.events' in methods) == c['events'] and (not c['events'] or c['sessions']))
