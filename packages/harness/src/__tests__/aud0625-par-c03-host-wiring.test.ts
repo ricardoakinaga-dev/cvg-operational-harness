@@ -34,6 +34,7 @@ import {
   phase3AgentProfile,
   phase3RuntimeInput
 } from './fixtures/phase3-fixtures.ts'
+import { coreHook } from '../kernel/hook-authority.ts'
 
 /** PAR-C03 host wiring (SPEC 0293 I11): the spill.read of a run survives the compaction of the next request. Synthetic data only. */
 
@@ -126,17 +127,20 @@ async function compact(
     name: 'owned.history',
     kind: 'control',
     apply(ctx) {
-      ctx.on('model/before-call', async (call, next) => {
-        const request = call.request as {
-          messages: readonly { role: string; content: string }[]
-        }
-        request.messages = [
-          ...request.messages.slice(0, 1),
-          ...messages,
-          ...request.messages.slice(1)
-        ]
-        return next()
-      })
+      ctx.on(
+        'model/before-call',
+        coreHook('model/before-call', async (call, next) => {
+          const request = call.request as {
+            messages: readonly { role: string; content: string }[]
+          }
+          request.messages = [
+            ...request.messages.slice(0, 1),
+            ...messages,
+            ...request.messages.slice(1)
+          ]
+          return next()
+        })
+      )
     }
   }
   const kernel = createKernelRuntime({

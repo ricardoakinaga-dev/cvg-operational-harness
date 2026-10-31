@@ -29,6 +29,7 @@ import {
   phase3RuntimeInput
 } from './fixtures/phase3-fixtures.ts'
 import { SinglePassOrchestrator } from '@cvg/harness-orchestrator'
+import { coreHook } from '../kernel/hook-authority.ts'
 
 /**
  * PAR-C03 / SPEC 0293 phase 1 (RED). A large tool output must not be cut
@@ -264,18 +265,21 @@ describe('PAR-C03 target: pruning old tool results before compaction', () => {
       name: 'owned.tool-history',
       kind: 'control',
       apply(ctx) {
-        ctx.on('model/before-call', async (call, next) => {
-          const request = call.request as {
-            messages: readonly ModelRequest['messages'][number][]
-          }
-          request.messages = [
-            ...request.messages.slice(0, 1),
-            { role: 'tool', content: BIG },
-            { role: 'assistant', content: 'resposta anterior' },
-            ...request.messages.slice(1)
-          ]
-          return next()
-        })
+        ctx.on(
+          'model/before-call',
+          coreHook('model/before-call', async (call, next) => {
+            const request = call.request as {
+              messages: readonly ModelRequest['messages'][number][]
+            }
+            request.messages = [
+              ...request.messages.slice(0, 1),
+              { role: 'tool', content: BIG },
+              { role: 'assistant', content: 'resposta anterior' },
+              ...request.messages.slice(1)
+            ]
+            return next()
+          })
+        )
       }
     }
     const kernel = createKernelRuntime({
@@ -464,18 +468,21 @@ describe('PAR-C03 R2 targets (review of the 07)', () => {
             name: 'owned.tool-history',
             kind: 'control',
             apply(ctx) {
-              ctx.on('model/before-call', async (call, next) => {
-                const request = call.request as {
-                  messages: readonly ModelRequest['messages'][number][]
-                }
-                request.messages = [
-                  ...request.messages.slice(0, 1),
-                  { role: 'tool', content: BIG },
-                  { role: 'assistant', content: 'resposta anterior' },
-                  ...request.messages.slice(1)
-                ]
-                return next()
-              })
+              ctx.on(
+                'model/before-call',
+                coreHook('model/before-call', async (call, next) => {
+                  const request = call.request as {
+                    messages: readonly ModelRequest['messages'][number][]
+                  }
+                  request.messages = [
+                    ...request.messages.slice(0, 1),
+                    { role: 'tool', content: BIG },
+                    { role: 'assistant', content: 'resposta anterior' },
+                    ...request.messages.slice(1)
+                  ]
+                  return next()
+                })
+              )
             }
           },
           createModelCompactionControl({

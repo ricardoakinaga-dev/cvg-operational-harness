@@ -27,6 +27,7 @@ import {
   phase3AgentProfile,
   phase3RuntimeInput
 } from './fixtures/phase3-fixtures.ts'
+import { coreHook } from '../kernel/hook-authority.ts'
 
 /** PAR-C03 / SPEC 0293 slice 4: old tool results leave the compaction prefix as a preview plus locator. Synthetic data only. */
 
@@ -72,17 +73,20 @@ const history = (
   name: 'owned.history',
   kind: 'control',
   apply(ctx) {
-    ctx.on('model/before-call', async (call, next) => {
-      const request = call.request as {
-        messages: readonly { role: string; content: string }[]
-      }
-      request.messages = [
-        ...request.messages.slice(0, 1),
-        ...messages,
-        ...request.messages.slice(1)
-      ]
-      return next()
-    })
+    ctx.on(
+      'model/before-call',
+      coreHook('model/before-call', async (call, next) => {
+        const request = call.request as {
+          messages: readonly { role: string; content: string }[]
+        }
+        request.messages = [
+          ...request.messages.slice(0, 1),
+          ...messages,
+          ...request.messages.slice(1)
+        ]
+        return next()
+      })
+    )
   }
 })
 

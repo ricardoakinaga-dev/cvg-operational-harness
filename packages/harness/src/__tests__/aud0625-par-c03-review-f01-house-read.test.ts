@@ -25,6 +25,7 @@ import {
   phase3AgentProfile,
   phase3RuntimeInput
 } from './fixtures/phase3-fixtures.ts'
+import { coreHook } from '../kernel/hook-authority.ts'
 
 /** PAR-C03 review F01 (Codex, I11): the house spill.read result is never stored again nor cut by the compaction prefix. Synthetic data only. */
 
@@ -54,15 +55,18 @@ const history = (messages: Msg[]): KernelPlugin => ({
   name: 'owned.history',
   kind: 'control',
   apply(ctx) {
-    ctx.on('model/before-call', async (call, next) => {
-      const request = call.request as { messages: readonly Msg[] }
-      request.messages = [
-        ...request.messages.slice(0, 1),
-        ...messages,
-        ...request.messages.slice(1)
-      ]
-      return next()
-    })
+    ctx.on(
+      'model/before-call',
+      coreHook('model/before-call', async (call, next) => {
+        const request = call.request as { messages: readonly Msg[] }
+        request.messages = [
+          ...request.messages.slice(0, 1),
+          ...messages,
+          ...request.messages.slice(1)
+        ]
+        return next()
+      })
+    )
   }
 })
 

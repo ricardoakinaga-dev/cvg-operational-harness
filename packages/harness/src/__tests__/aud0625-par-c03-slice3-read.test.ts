@@ -210,7 +210,7 @@ describe('createSpillReadTool: the house read', () => {
       },
       read: async (input: { signal?: AbortSignal }) => {
         seen.push(input.signal)
-        throw new SpillStorageUnavailable('postgres://user:secret@host')
+        throw new SpillStorageUnavailable('dsn://user:secret@host')
       }
     }
     const tool = createSpillReadTool({ store: store as never })
