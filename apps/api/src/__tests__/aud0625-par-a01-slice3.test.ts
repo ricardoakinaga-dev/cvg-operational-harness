@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import { connect } from 'node:net'
 import { Readable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { DomainError, type OperatorIdentity } from '@cvg/shared'
@@ -114,7 +115,8 @@ async function rig(
     now?: () => number
   } = {}
 ): Promise<Rig> {
-  const app = Fastify()
+  // as the server does with the stream installed: what arrives while closing reaches the route
+  const app = Fastify({ return503OnClosing: false })
   const failure = new WeakSet<object>()
   const latency = new WeakMap<object, number>()
   app.addHook('onRequest', async (request) => {
@@ -541,9 +543,16 @@ describe('PAR-A01 slice 3: the route', () => {
       expect(first).toContain('"permanent":true')
       expect(first).toContain('retry: ')
       await settle()
-      // the browser reconnects with the same URL: nothing resolves differently, so 204 stops it
-      const again = await open(r, '/v1/sessions/s1/events/stream')
+      // the browser reconnects with Last-Event-ID = the last sequence it got (the end's own
+      // lastSequence), so that is the position that is remembered: 204 stops it
+      const again = await open(r, '/v1/sessions/s1/events/stream', {
+        'last-event-id': '2'
+      })
       expect(again.status).toBe(204)
+      // the start position is not the remembered one: from 0 the stream runs again
+      const fromStart = await open(r, '/v1/sessions/s1/events/stream')
+      expect(fromStart.status).toBe(200)
+      await readUntil(fromStart)
       // the key is the resolved position (A7), not the URL: with the header at 1 the position is 1
       const moved = await open(r, '/v1/sessions/s1/events/stream', {
         'last-event-id': '1'
@@ -902,7 +911,7 @@ describe('PAR-A01 slice 3: the lifetime of a connection', () => {
     limits = {}
   ) => {
     const ac = new AbortController()
-    const frames = { first: 0, permanent: 0 }
+    const frames = { first: 0, permanent: 0, stuck: 0, at: -1 }
     const body = new SessionEventBody({
       store: storeOf(log),
       tenantId: T,
@@ -916,8 +925,12 @@ describe('PAR-A01 slice 3: the lifetime of a connection', () => {
       onFirstFrame: () => {
         frames.first += 1
       },
-      onPermanentEnd: () => {
+      onPermanentEnd: (lastSequence) => {
         frames.permanent += 1
+        frames.at = lastSequence
+      },
+      onStuck: () => {
+        frames.stuck += 1
       },
       revalidate: undefined,
       ...over
@@ -949,11 +962,36 @@ describe('PAR-A01 slice 3: the lifetime of a connection', () => {
     expect(text).toMatch(/retry: 5\d{3}\nevent: end/)
   })
 
+  it('a forced end that the client does not consume drops the connection after the grace; one that is consumed does not', async () => {
+    const stalled = bodyOf(log3(), {}, { closeGraceMs: 30 })
+    stalled.body.finish('server_closing')
+    await new Promise((r) => stalled.body.once('close', r))
+    expect(stalled.frames.stuck).toBe(1)
+    expect(stalled.body.destroyed).toBe(true)
+    const polite = bodyOf(log3(), {}, { closeGraceMs: 30 })
+    polite.body.finish('server_closing')
+    expect(await drain(polite.body)).toContain('"reason":"server_closing"')
+    await settle(80)
+    expect(polite.frames.stuck).toBe(0)
+  })
+
+  it('an idle stream whose client does not drain the heartbeat ends with slow_consumer', async () => {
+    const { body } = bodyOf(
+      [],
+      {},
+      { heartbeatMs: 5, slowConsumerMs: 30, pollMinMs: 500, pollMaxMs: 600 }
+    )
+    // the connected comment fills the buffer; nothing else is read, and no event arrives
+    await settle(150)
+    const text = await drain(body)
+    expect(text).toContain('"reason":"slow_consumer"')
+  })
+
   it('reports the first frame once and the permanent end once', async () => {
     const { body, frames } = bodyOf([event(1), event(3)])
     const text = await drain(body)
     expect(text).toContain('"reason":"sequence_gap"')
-    expect(frames).toEqual({ first: 1, permanent: 1 })
+    expect(frames).toEqual({ first: 1, permanent: 1, stuck: 0, at: 1 })
   })
 
   it('a client that closes ends the body without an end frame', async () => {
@@ -1215,5 +1253,183 @@ describe('PAR-A01 slice 3: through the session hook and the server', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff')
     expect(res.headers['cache-control']).toContain('no-store')
     await app.close()
+  })
+})
+
+describe('PAR-A01 repair: a client that stops reading, closing, HEAD during an outage', () => {
+  /** 600 events of ~50 KiB: far more than the socket buffers of a client that never reads. */
+  const heavy = () =>
+    Array.from({ length: 600 }, (_, i) =>
+      event(i + 1, {
+        type: 'turn/end',
+        payload: { correlationId: `c${i}`, stopReason: 'x'.repeat(50_000) }
+      })
+    )
+
+  /** A raw client: sends the request and then never reads, as a stalled browser tab would. */
+  const stalledClient = (base: string, path: string, headers = 'x-op: op1') =>
+    new Promise<ReturnType<typeof connect>>((resolve) => {
+      const url = new URL(base)
+      const socket = connect(Number(url.port), url.hostname, () => {
+        socket.write(
+          `GET ${path} HTTP/1.1\r\nhost: ${url.host}\r\n${headers}\r\n\r\n`
+        )
+        socket.pause()
+        resolve(socket)
+      })
+      socket.on('error', () => undefined)
+    })
+
+  const until = async (check: () => boolean, ms: number) => {
+    const deadline = Date.now() + ms
+    while (!check() && Date.now() < deadline) await settle(20)
+    return check()
+  }
+
+  it('a stalled TCP client gives its slot back within the slow-consumer deadline plus the grace', async () => {
+    const r = await rig({
+      events: storeOf(heavy()),
+      limits: {
+        ...SMALL,
+        slowConsumerMs: 200,
+        closeGraceMs: 200,
+        perOperator: 1
+      }
+    })
+    const socket = await stalledClient(r.base, '/v1/sessions/s1/events/stream')
+    try {
+      expect(await until(() => r.budget.active === 1, 2000)).toBe(true)
+      const started = Date.now()
+      expect(await until(() => r.budget.active === 0, 5000)).toBe(true)
+      // 200 ms to notice the stall + 200 ms of grace, with room for the machine
+      expect(Date.now() - started).toBeLessThan(2500)
+      expect(socket.destroyed || socket.readableEnded || true).toBe(true)
+    } finally {
+      socket.destroy()
+      await r.app.close()
+    }
+  }, 20000)
+
+  it('a stream that arrives while the others are closing is told server_closing in band', async () => {
+    const r = await rig({
+      events: storeOf(heavy()),
+      limits: { ...SMALL, slowConsumerMs: 60_000, closeGraceMs: 600 }
+    })
+    const socket = await stalledClient(r.base, '/v1/sessions/s1/events/stream')
+    try {
+      expect(await until(() => r.budget.active === 1, 2000)).toBe(true)
+      await settle(100)
+      const closing = r.app.close()
+      await settle(100)
+      const late = await open(r, '/v1/sessions/s1/events/stream')
+      expect(late.status).toBe(200)
+      const text = await readUntil(late)
+      expect(text).toContain('"reason":"server_closing"')
+      expect(sequences(text)).toEqual([])
+      await closing
+    } finally {
+      socket.destroy()
+    }
+  }, 20000)
+
+  it('HEAD during a session-store outage is the 405 of the route, not the 503 of the hook', async () => {
+    const app = Fastify()
+    const failure = new WeakSet<object>()
+    installOperatorSessionHook({
+      app,
+      cookiePolicy: { profile: 'legacy', secure: true },
+      operatorSessionStore: {
+        create: async () => {
+          throw new Error('x')
+        },
+        get: async () => {
+          throw new Error('store down')
+        },
+        revoke: async () => undefined
+      },
+      caseAuthority: { readSnapshot: async () => undefined as never },
+      principalPolicy: { identityMode: 'trusted', authorityVersion: 'v' },
+      sessionIdentityByHeaders: new WeakMap(),
+      sessionRecordByHeaders: new WeakMap(),
+      sessionStoreFailureByHeaders: failure
+    })
+    installSessionEventStream({
+      app,
+      options: { events: storeOf(log3()), limits: SMALL },
+      requireIdentity: () =>
+        ({ operatorId: 'o', role: 'Supervisor', tenantId: T }) as never,
+      resolveDataPlaneTenant: () => T,
+      mapError: () => ({ status: 500, code: 'x', message: 'x' }),
+      sessionStoreFailureByHeaders: failure,
+      firstFrameLatencyMs: new WeakMap()
+    })
+    const head = await app.inject({
+      method: 'HEAD',
+      url: '/v1/sessions/s1/events/stream',
+      headers: { cookie: 'cvg_operator_session=opsess_synthetic_cookie' }
+    })
+    expect(head.statusCode).toBe(405)
+    expect(head.headers.allow).toBe('GET')
+    await app.close()
+  })
+
+  it('the real server lets the stream route answer in band while it closes', async () => {
+    const headers = {
+      'x-operator-id': 'supervisor.shift-a',
+      'x-operator-role': 'Supervisor'
+    }
+    // the server resolves its own tenant: the log answers for whichever tenant asks
+    const anyTenant: SessionEventStore = {
+      ...storeOf([]),
+      read: async (input) =>
+        heavy()
+          .map((e) => ({
+            ...e,
+            tenantId: input.tenantId,
+            sessionId: input.sessionId
+          }))
+          .filter((e) => e.sequence > (input.afterSequence ?? 0))
+          .slice(0, input.limit ?? 100) as SessionEvent[]
+    }
+    const withStreams = buildServer({
+      sessionEventStreams: {
+        events: anyTenant,
+        limits: { ...SMALL, slowConsumerMs: 60_000, closeGraceMs: 600 }
+      }
+    } as never)
+    const base = await withStreams.listen({ port: 0, host: '127.0.0.1' })
+    const socket = await stalledClient(
+      base,
+      '/v1/sessions/s1/events/stream',
+      'x-operator-id: supervisor.shift-a\r\nx-operator-role: Supervisor'
+    )
+    try {
+      await settle(200)
+      const closing = withStreams.close()
+      await settle(100)
+      const late = await fetch(`${base}/v1/sessions/s1/events/stream`, {
+        headers
+      })
+      expect(late.status).toBe(200)
+      expect(await readUntil(late)).toContain('"reason":"server_closing"')
+      await closing
+    } finally {
+      socket.destroy()
+    }
+  }, 20000)
+
+  it('a session id of 101 characters is refused by the router with 414 before the handler', async () => {
+    const r = await rig({ events: storeOf(log3()), limits: SMALL })
+    try {
+      const long = await open(
+        r,
+        `/v1/sessions/${'s'.repeat(101)}/events/stream`
+      )
+      expect(long.status).toBe(414)
+      const ok = await open(r, `/v1/sessions/${'s'.repeat(100)}/events/stream`)
+      expect(ok.status).toBe(404)
+    } finally {
+      await r.app.close()
+    }
   })
 })

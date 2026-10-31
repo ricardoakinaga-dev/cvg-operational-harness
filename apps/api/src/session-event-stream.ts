@@ -212,7 +212,10 @@ export interface SessionEventBodyOptions {
   readonly random: () => number
   readonly signal: AbortSignal
   readonly onFirstFrame: () => void
-  readonly onPermanentEnd: () => void
+  /** Receives the `lastSequence` of the `end`: the position a reconnection will present. */
+  readonly onPermanentEnd: (lastSequence: number) => void
+  /** The client has not consumed a forced `end` within the grace: the socket is dropped. */
+  readonly onStuck: () => void
   readonly revalidate: (() => Promise<OperatorSessionRevalidation>) | undefined
 }
 
@@ -253,7 +256,8 @@ export class SessionEventBody extends Readable {
       lifetimeMs: options.limits.lifetimeMs,
       pollMinMs: options.limits.pollMinMs,
       pollMaxMs: options.limits.pollMaxMs,
-      random: options.random
+      random: options.random,
+      frameOf: formatEventFrame
     })
     this.#every(options.limits.heartbeatMs, () => {
       if (
@@ -261,7 +265,7 @@ export class SessionEventBody extends Readable {
         this.#slowTimer === undefined &&
         Date.now() - this.#lastPush >= options.limits.heartbeatMs
       )
-        this.#write(HEARTBEAT_FRAME)
+        if (!this.#write(HEARTBEAT_FRAME)) this.#armSlowConsumer()
     })
     if (options.revalidate) this.#scheduleRevalidation(options.revalidate)
     // an immediate comment flushes the headers, so a client sees the connection open (onopen)
@@ -326,8 +330,28 @@ export class SessionEventBody extends Readable {
         random: this.#o.random
       })
     )
-    if (permanent ?? policy.permanent) this.#o.onPermanentEnd()
+    if (permanent ?? policy.permanent)
+      this.#o.onPermanentEnd(this.#lastSequence)
     this.push(null)
+    // a client that stopped reading would keep the slot and the socket for ever (SPEC 0296 A9)
+    const grace = setTimeout(() => {
+      this.#timers.delete(grace)
+      if (this.readableEnded) return
+      this.#o.onStuck()
+      this.destroy()
+    }, this.#o.limits.closeGraceMs)
+    grace.unref()
+    this.#timers.add(grace)
+  }
+
+  /** The client does not drain: if it stays so for `slowConsumerMs` the stream ends. */
+  #armSlowConsumer(): void {
+    if (this.#slowTimer !== undefined) return
+    this.#slowTimer = setTimeout(() => {
+      this.#slowTimer = undefined
+      this.finish('slow_consumer')
+    }, this.#o.limits.slowConsumerMs)
+    this.#slowTimer.unref()
   }
 
   /** Ends the stream with a reason that is not the tail's own (closing, revoked, slow, outage). */
@@ -383,14 +407,16 @@ export class SessionEventBody extends Readable {
           this.#emitEnd(this.#forced ?? item.reason, item.permanent)
           return
         }
-        this.#lastSequence = item.event.sequence
-        if (!this.#write(formatEventFrame(item.event))) {
+        const sequence =
+          item.kind === 'frame' ? item.sequence : item.event.sequence
+        this.#lastSequence = sequence
+        if (
+          !this.#write(
+            item.kind === 'frame' ? item.frame : formatEventFrame(item.event)
+          )
+        ) {
           // the client has not drained: wait for the next _read, with a deadline
-          this.#slowTimer = setTimeout(() => {
-            this.#slowTimer = undefined
-            this.finish('slow_consumer')
-          }, this.#o.limits.slowConsumerMs)
-          this.#slowTimer.unref()
+          this.#armSlowConsumer()
           return
         }
       }
@@ -445,6 +471,10 @@ export interface SessionStreamDependencies {
   readonly random?: () => number
 }
 
+/**
+ * The name is the catalog's: the permission is tenant-wide read of the conversation record
+ * (decision D8-a), there is no per-session assignment behind it (SPEC 0296 A4).
+ */
 export const SESSION_STREAM_READ_PERMISSION = 'conversation:view_assigned'
 
 export function installSessionEventStream(deps: SessionStreamDependencies): {
@@ -466,6 +496,8 @@ export function installSessionEventStream(deps: SessionStreamDependencies): {
     now
   )
   const active = new Set<SessionEventBody>()
+  // set by `preClose`: a stream that arrives while the others are saying goodbye is told so in band
+  let closing = false
   // the store is built per request with the tenant of the identity: no registry, no cache (A4)
   const storeFor = (tenantId: string): SessionEventStore =>
     options.events ??
@@ -486,7 +518,7 @@ export function installSessionEventStream(deps: SessionStreamDependencies): {
   /** A transient refusal travels inside a 200, because an EventSource never retries a non-200 (D11). */
   const refuseInBand = (
     reply: FastifyReply,
-    reason: 'too_many_streams' | 'source_unavailable',
+    reason: 'too_many_streams' | 'source_unavailable' | 'server_closing',
     position: number
   ) =>
     sse(reply).send(
@@ -539,11 +571,11 @@ export function installSessionEventStream(deps: SessionStreamDependencies): {
       const sessionId = params.sessionId
       // the session store was unreachable for this cookie: the client gets a retry, not a 503
       if (outage) return refuseInBand(reply, 'source_unavailable', parsed.after)
-      const permanentKey = PermanentEnds.key(tenantId, sessionId, parsed.after)
-      if (permanent.has(permanentKey)) {
+      if (permanent.has(PermanentEnds.key(tenantId, sessionId, parsed.after))) {
         reply.code(204).header('cache-control', 'no-store')
         return reply.send()
       }
+      if (closing) return refuseInBand(reply, 'server_closing', parsed.after)
       // the slot comes before any read, so a flood of attempts costs no database read (A8)
       const release = budget.reserve(identity!.operatorId, tenantId)
       if (release === undefined)
@@ -593,7 +625,9 @@ export function installSessionEventStream(deps: SessionStreamDependencies): {
         signal: closed.signal,
         onFirstFrame: () =>
           deps.firstFrameLatencyMs.set(request, performance.now() - startedAt),
-        onPermanentEnd: () => permanent.add(permanentKey),
+        onPermanentEnd: (lastSequence) =>
+          permanent.add(PermanentEnds.key(tenantId, sessionId, lastSequence)),
+        onStuck: () => reply.raw.destroy(),
         revalidate:
           deps.revalidation && sessionCookieId !== undefined
             ? () => deps.revalidation!.revalidate(sessionCookieId)
@@ -622,6 +656,7 @@ export function installSessionEventStream(deps: SessionStreamDependencies): {
 
   // Before `close()` waits for the active responses: say goodbye, then force after the grace.
   app.addHook('preClose', async () => {
+    closing = true
     if (active.size === 0) return
     for (const body of active) body.finish('server_closing')
     const deadline = Date.now() + limits.closeGraceMs

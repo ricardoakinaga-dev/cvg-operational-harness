@@ -563,7 +563,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         ? [...httpSecurity.trustedProxyAddresses]
         : false,
       bodyLimit: HTTP_REQUEST_BODY_LIMIT_BYTES,
-      routerOptions: { maxParamLength: HTTP_REQUEST_MAX_PARAM_LENGTH }
+      routerOptions: { maxParamLength: HTTP_REQUEST_MAX_PARAM_LENGTH },
+      // Fastify answers 503 to what arrives while it closes, before any hook; an `EventSource`
+      // that gets a 503 stops for good, so the stream route answers in band during the grace
+      // (SPEC 0296 A13) and the other routes finish like the requests already in flight.
+      return503OnClosing: !options.sessionEventStreams
     }),
     {
       persistence,

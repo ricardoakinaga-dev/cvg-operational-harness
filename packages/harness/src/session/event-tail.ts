@@ -40,6 +40,12 @@ export const TAIL_END_POLICY: Readonly<
 
 export type TailItem =
   | { readonly kind: 'event'; readonly event: SessionEvent }
+  /** With `frameOf`: the event as it leaves, built when the page was read (SPEC 0296 A9). */
+  | {
+      readonly kind: 'frame'
+      readonly sequence: number
+      readonly frame: string
+    }
   | {
       readonly kind: 'end'
       readonly reason: TailEndReason
@@ -175,6 +181,45 @@ export interface TailOptions extends TailRuntime {
   readonly readAttempts?: number
   readonly readTimeoutMs?: number
   readonly retryBackoffMs?: number
+  /**
+   * Builds what leaves for an event as soon as its page is read, so a page parked behind a slow
+   * client holds frames of bounded size and not up to `pageEvents` raw records of 1 MiB.
+   */
+  readonly frameOf?: (event: SessionEvent) => string
+}
+
+/** What the loop keeps of a page: the raw event, or only its identity and its frame. */
+interface PageEntry {
+  readonly sound: boolean
+  readonly sequence: number
+  readonly tenantId: string
+  readonly sessionId: string
+  readonly raw?: SessionEvent
+  readonly frame?: string
+}
+
+function compact(
+  page: readonly SessionEvent[],
+  frameOf: ((event: SessionEvent) => string) | undefined
+): PageEntry[] {
+  return page.map((candidate): PageEntry => {
+    const event: unknown = candidate
+    if (!sound(event))
+      return { sound: false, sequence: 0, tenantId: '', sessionId: '' }
+    const identity = {
+      sound: true,
+      sequence: event.sequence,
+      tenantId: event.tenantId,
+      sessionId: event.sessionId
+    }
+    if (!frameOf) return { ...identity, raw: event }
+    try {
+      return { ...identity, frame: frameOf(event) }
+    } catch {
+      // an event the projection cannot read is as unusable as one without an envelope
+      return { sound: false, sequence: 0, tenantId: '', sessionId: '' }
+    }
+  })
 }
 
 export function defaultTailSleep(
@@ -289,6 +334,35 @@ async function readPage(
     }
   }
   return { status: 'failed' }
+}
+
+type EntriesOutcome =
+  | {
+      readonly status: 'events'
+      readonly oversized: boolean
+      readonly entries: PageEntry[]
+    }
+  | { readonly status: 'not_open' | 'failed' | 'aborted' }
+
+/**
+ * Reads a page and keeps only its entries; the raw records stay in this frame, which is gone
+ * when it returns, so a generator parked at a `yield` does not hold them.
+ */
+async function readEntries(
+  settings: ReadSettings,
+  afterSequence: number,
+  limit: number,
+  frameOf: ((event: SessionEvent) => string) | undefined
+): Promise<EntriesOutcome> {
+  const outcome = await readPage(settings, afterSequence, limit)
+  if (outcome.status !== 'events') return { status: outcome.status }
+  if (outcome.events.length > limit)
+    return { status: 'events', oversized: true, entries: [] }
+  return {
+    status: 'events',
+    oversized: false,
+    entries: compact(outcome.events, frameOf)
+  }
 }
 
 function settingsOf(
@@ -409,13 +483,23 @@ export async function* tailSessionEvents(
       yield end('max_events')
       return
     }
-    const outcome = await readPage(settings, expected - 1, pageEvents)
-    if (options.signal.aborted || outcome.status === 'aborted') return
-    if (outcome.status !== 'events') {
+    const read = await readEntries(
+      settings,
+      expected - 1,
+      pageEvents,
+      options.frameOf
+    )
+    if (options.signal.aborted || read.status === 'aborted') return
+    if (read.status !== 'events') {
       yield end('source_unavailable')
       return
     }
-    const page = outcome.events
+    // a store that ignores the page size would put more than the budgeted bytes in flight
+    if (read.oversized) {
+      yield end('corrupt_event')
+      return
+    }
+    const page = read.entries
     if (page.length === 0) {
       try {
         await sleep(jittered(Math.max(poll, observedWait)), options.signal)
@@ -425,34 +509,34 @@ export async function* tailSessionEvents(
       poll = Math.min(poll * 2, pollMax)
       continue
     }
-    // a store that ignores the page size would put more than the budgeted bytes in flight
-    if (page.length > pageEvents) {
-      yield end('corrupt_event')
-      return
-    }
     poll = pollMin
     for (const candidate of page) {
       if (emitted >= maxEvents) {
         yield end('max_events')
         return
       }
-      const event: SessionEvent = candidate
-      if (!sound(event)) {
+      if (!candidate.sound) {
         yield end('corrupt_event')
         return
       }
       if (
-        event.tenantId !== options.tenantId ||
-        event.sessionId !== options.sessionId
+        candidate.tenantId !== options.tenantId ||
+        candidate.sessionId !== options.sessionId
       ) {
         yield end('corrupt_event')
         return
       }
-      if (event.sequence !== expected) {
+      if (candidate.sequence !== expected) {
         yield end('sequence_gap')
         return
       }
-      yield { kind: 'event', event }
+      yield candidate.frame !== undefined
+        ? {
+            kind: 'frame',
+            sequence: candidate.sequence,
+            frame: candidate.frame
+          }
+        : { kind: 'event', event: candidate.raw! }
       expected += 1
       emitted += 1
       if (options.signal.aborted) return
