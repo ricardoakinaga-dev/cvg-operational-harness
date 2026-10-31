@@ -95,6 +95,33 @@ Prettier.
   `cvg_auth` → `cvg_auth_owner`.
 - **Quem:** operação executa.
 
+## C3a — roll-forward da 0035 (origem da aprovação, SPEC 0291)
+
+- **Efeito:** a 0035 só acrescenta colunas anuláveis e o gatilho de
+  imutabilidade; aprovações anteriores ficam sem origem. Um registro sem
+  origem **e** com `execution_ref` é negado com `origin_mismatch` (SPEC 0291,
+  I2-c), logo um legado em voo não pode ser recuperado nem repetido pelo
+  replay: fica negado até expirar ou ser resolvido à mão. O drill `rem21-010`
+  cobre só linhas sem execução.
+- **Antes da migração:** drenar o worker ou resolver à mão as aprovações em
+  voo. A consulta que as identifica (somente leitura):
+
+  ```sql
+  SELECT tenant_id, approval_id, status, execution_ref, expires_at
+  FROM runtime_approvals
+  WHERE status IN ('RESERVED','EXECUTING','UNCERTAIN')
+    AND origin_conversation_id IS NULL
+  ORDER BY tenant_id, requested_at;
+  ```
+
+  Em um banco ainda sem a 0035, omita a linha `origin_conversation_id`:
+  naquele ponto todo registro é legado.
+
+- **Resolução:** `RESERVED`/`EXECUTING`: esperar o worker concluir (drenar)
+  ou resolver à mão; `UNCERTAIN`: reconciliar o efeito, nunca retry cego.
+  Registre o que foi feito por aprovação.
+- **Quem:** operação executa; o resultado fica na evidência da janela.
+
 ## C4 — segredos no cofre
 
 - **No repositório:** formatos exigidos pelo código, comandos de geração,

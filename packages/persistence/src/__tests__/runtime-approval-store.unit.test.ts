@@ -67,7 +67,9 @@ const persistedColumns = [
   'capability',
   'data_classification',
   'proposal_payload',
-  'operation_key'
+  'operation_key',
+  'origin_conversation_id',
+  'origin_session_id'
 ] as const
 
 type FakeRow = RuntimeApprovalRow

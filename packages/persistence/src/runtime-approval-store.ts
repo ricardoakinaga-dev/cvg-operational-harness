@@ -512,6 +512,12 @@ export class PostgresApprovalAuthority implements ApprovalAuthority {
     )
   }
 
+  /**
+   * @internal Latent primitive with no production caller. It does NOT check the approval origin
+   * (SPEC 0291, I2): the runtime checks it in `#runExecutionTurn` before any reservation. A caller
+   * added here must bring the origin check with it; `aud0625-approval-origin-guard.test.ts` fails
+   * when one appears.
+   */
   verifyAndConsume(input: {
     tenantId: string
     approvalId: string

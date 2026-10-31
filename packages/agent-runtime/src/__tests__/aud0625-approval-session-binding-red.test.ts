@@ -331,6 +331,22 @@ describe('SPEC 0291 slice 1: the approval is executable only where it was asked'
     expect(harness.approvals.get(TENANT, approvalId).status).toBe('APPROVED')
   })
 
+  it('AP11b: a legacy record left UNCERTAIN by an execution (executionRef, no origin) is denied and stays UNCERTAIN, never replayed', async () => {
+    const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
+    const approvalId = await askAndApprove(harness)
+    storeWithoutOrigin(harness, approvalId, {
+      executionRef: 'exec_legacy_1',
+      status: 'UNCERTAIN'
+    })
+    const result = await harness.runtime.runTurn(
+      turnInput({ ...asked, approvalId })
+    )
+    expect(result.outcome).toBe('denied')
+    expect(result.reason).toBe('origin_mismatch')
+    expect(harness.toolExecutor).not.toHaveBeenCalled()
+    expect(harness.approvals.get(TENANT, approvalId).status).toBe('UNCERTAIN')
+  })
+
   it('AP07 (S04): in a fork of the session, the original approvalId is origin_mismatch and the same action asks again', async () => {
     const harness = buildHarness({ effectScopes: FAKE_CANCEL_SCOPE })
     // The fork has its own session id (S04), and the host names its conversation after it.
