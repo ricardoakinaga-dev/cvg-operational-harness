@@ -1,8 +1,7 @@
 # Diagnóstico de delegação — SPEC0294 fatia1
 
 O template e a entrada são artefatos para revisão. Não são instalados, habilitados
-ou iniciados automaticamente. A entrada não aceita payload; observa a própria
-unit e termina. `candidate`, exit0, significa somente pré-requisitos observados:
+ou iniciados automaticamente. A entrada não aceita payload; observa a localização observada no cgroup e termina. `candidate`, exit0, significa somente pré-requisitos observados:
 `qualified` permanece false. Não conserva uma unit capaz de receber workloads.
 
 O operador precisa conferir o recibo human26, a SPEC0294 R2 SHA256
@@ -39,3 +38,18 @@ freezes próprios. Não inferir B ou ownerIndependent:true destes arquivos.
 Não alterar Delegate/sysctl do user manager nem instalar bwrap/helper na imagem
 de produção. KillMode=control-group só limita uma parada externa da unit;
 ela não é prova de cleanup de um workload. Produção permanece NO_GO.
+
+A entrada deriva o ControlGroup esperado do próprio `/proc/self/cgroup`;
+`ownerInSupervisor` neste caminho é uma conferência de forma, não autenticação
+da unit pelo manager. O diagnóstico ainda não ancora RuntimeDirectory em
+`/run/user/<uid>/` nem confere o pai: essa admissão e uma marca nominal de B
+com construtor exclusivo do guardião pertencem à fatia 2, antes de B real.
+As leituras síncronas limitadas do preflight não devem rodar no caminho do
+agente; a entrada usa import profundo, sem exportar diagnóstico no índice.
+
+A recusa pré-lançamento de B é do serviço. A segunda barreira do adapter
+confere um resultado já retornado, não prova ausência de execução. Contenção
+inconsistente é omitida do resultado recusado. Contenção coerente com cleanup
+não provado devolve `cleanup_failed`: `shell.run` informa
+`effect_uncertain: cleanup_incomplete` e não sugere que o comando deixou de
+ser lançado. Não repetir automaticamente um comando com efeito incerto.

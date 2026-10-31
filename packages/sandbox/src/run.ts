@@ -4,7 +4,10 @@ import type { SandboxHandle } from '@cvg/harness-contracts'
 import type { ProcessContainmentProfile } from './process-profile.ts'
 import { createProcessService } from './process-service/service.ts'
 import { ProcessAdmissionError } from './process-service/errors.ts'
-import { verifiedProcessOutcome } from './process-service/containment.ts'
+import {
+  consistentProcessContainment,
+  verifiedProcessOutcome
+} from './process-service/containment.ts'
 import type {
   ProcessAdmissionReason,
   ProcessContainmentV1
@@ -38,7 +41,12 @@ export interface ContainedRunRequest {
 export interface ContainedRunResult {
   readonly containment?: ProcessContainmentV1
   readonly admissionReason?: ProcessAdmissionReason
-  readonly exitCode: number | 'timeout' | 'spawn_failed' | 'cancelled'
+  readonly exitCode:
+    | number
+    | 'timeout'
+    | 'spawn_failed'
+    | 'cancelled'
+    | 'cleanup_failed'
   readonly stdout: string
   readonly stderr: string
   readonly truncated: boolean
@@ -148,17 +156,17 @@ export function runContained(
     }
     const detail = {
       cleanup: outcome.cleanup,
-      cause: outcome.cause,
-      containment: outcome.containment
+      cause: outcome.cause
     }
     const text = {
       stdout: outcome.stdout ?? '',
       stderr: outcome.stderr ?? '',
       truncated: outcome.truncated
     }
+    // This checks a returned result, after launch; pre-launch B admission belongs to the service.
     // A cached or faulty service cannot satisfy an explicit B requirement with an A result.
     if (
-      !verifiedProcessOutcome(outcome) ||
+      !consistentProcessContainment(outcome) ||
       (request.requiredContainment === 'cgroup-guardian' &&
         outcome.containment.profile !== 'cgroup-guardian')
     ) {
@@ -169,18 +177,28 @@ export function runContained(
         ...detail
       }
     }
+    if (!verifiedProcessOutcome(outcome)) {
+      // A launched command may have effects even when its tree is not proven quiescent.
+      return {
+        exitCode: 'cleanup_failed',
+        ...text,
+        ...detail,
+        containment: outcome.containment
+      }
+    }
+    const verifiedDetail = { ...detail, containment: outcome.containment }
     switch (outcome.cause) {
       case 'exit':
         return {
           exitCode: outcome.exitCode ?? 'spawn_failed',
           ...text,
-          ...detail
+          ...verifiedDetail
         }
       case 'timeout':
-        return { exitCode: 'timeout', ...text, ...detail }
+        return { exitCode: 'timeout', ...text, ...verifiedDetail }
       case 'cancelled':
       case 'dispose':
-        return { exitCode: 'cancelled', ...text, ...detail }
+        return { exitCode: 'cancelled', ...text, ...verifiedDetail }
       default:
         // spawn_failed, startup_timeout, signal, output_limit: containment or launcher
         // faults, never a normal exit status. The reason is the launcher's, not the payload's.
@@ -188,7 +206,7 @@ export function runContained(
           exitCode: 'spawn_failed',
           ...text,
           stderr: text.stderr || outcome.secondaryErrors.join('; '),
-          ...detail
+          ...verifiedDetail
         }
     }
   })()

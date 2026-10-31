@@ -265,17 +265,23 @@ export function processIoctlDev(report: ProcessLandlockReport) {
   })
 }
 
-/** A consistency check for an internal service outcome, not authentication of native proof. */
+/** Both coherent containment and proven cleanup are required to accept success. */
 export function verifiedProcessOutcome(outcome: ProcessOutcome): boolean {
+  return (
+    consistentProcessContainment(outcome) &&
+    outcome.cleanup?.state === 'clean' &&
+    outcome.cleanup.leftover === 0 &&
+    outcome.cleanup.unverified === 0
+  )
+}
+
+/** Internal consistency only, not native proof or evidence of cleanup. */
+export function consistentProcessContainment(outcome: ProcessOutcome): boolean {
   const c = outcome.containment
   if (
     !c ||
     c.version !== 1 ||
     c.status !== 'observed' ||
-    !outcome.cleanup ||
-    outcome.cleanup.state !== 'clean' ||
-    outcome.cleanup.leftover !== 0 ||
-    outcome.cleanup.unverified !== 0 ||
     outcome.profile !== c.profile ||
     outcome.ownerIndependent !== c.ownerIndependent ||
     !validResources(c.resources) ||

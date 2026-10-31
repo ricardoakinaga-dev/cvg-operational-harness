@@ -1,0 +1,95 @@
+# Revisão não autora da BUILD da fatia 1 da SPEC 0294 (PAR-X03, contenção por cgroup) — sessão 07
+
+Revisor: Claude Sonnet 5.5, sessão 07 (autora do serviço X01 que a fatia estende; não autora desta fatia). Alvo:
+`codex/aud0625-par-x03-s1-20261030` @ `f1abe6294`, sobre `9a8ab4c7a`. Worktree de revisão separada, nada alterado no código da Codex.
+
+## Veredito
+
+**APROVADA PARA INTEGRAÇÃO COM 1 P2 A CORRIGIR ANTES DE QUALQUER USO DO CAMINHO B.** P1: nenhum. P2: 1. P3: 6.
+A fatia faz o que promete: não entrega nenhuma capacidade B, recusa B antes de slot, profile e `spawn`, e o preflight é
+somente leitura e nunca devolve `qualified: true`. O P2 está no adapter (`runContained`) e muda o que o `shell.run` diz ao
+modelo; hoje é um defeito de mensagem e de decisão de repetição, não de contenção.
+
+## O que rodei
+
+- Worktree própria em `f1abe6294`, `node_modules` por `cp -al`.
+- Seleção ampla do sandbox em série: `packages/sandbox` e os testes `tests/` do processo, perfil, cancelamento e X01 (22 arquivos,
+  385 testes): 383 passam, 2 falham (ver "Falhas que não são da fatia").
+- Duas sondagens próprias do adapter (`probes/`), com o serviço trocado por um dublê, como o teste da Codex faz.
+- Leitura integral de `containment.ts`, `cgroup-preflight.ts`, do diff de `service.ts`, `run.ts`, `types.ts`, `errors.ts`, da unit,
+  da entrada `.mjs` e do README.
+
+## Foco pedido: o adapter e o serviço do X01
+
+| Pergunta | Resultado |
+|---|---|
+| O adapter aceita A em cache para um pedido B? | **Não.** `requiredContainment: 'cgroup-guardian'` é repassado ao serviço, que recusa com `ProcessAdmissionError('qualification_missing')` depois de `checkRequest` e `validateProcessEnv` e **antes** da reserva de slot, da preparação do profile e do `spawn`. Se um serviço antigo ou falso ignorar o requisito e devolver A, o adapter devolve `spawn_failed`/`process_containment_unverified`. Esta segunda barreira atua **depois** de o processo ter rodado; é defesa em profundidade, não prevenção (P3-1). |
+| Relatório inválido vira `exit 0`? | **Não.** `verifiedProcessOutcome` roda antes do `switch (cause)`. Recusa versão desconhecida, `status: 'unverified'`, perfil/espelhos divergentes, limites aplicados inválidos, contadores e seccomp malformados, landlock divergente e limpeza que não seja `clean`. Os 4 caminhos do teste da Codex e as minhas variações dão `spawn_failed`. |
+| Valor inválido em `requiredContainment`? | `checkRequest` recusa com `invalid_request`. Ausente é tratado como A (`shell.run` nunca pede B hoje). |
+| B em modo persistente? | Recusado no mesmo ponto, antes de tudo. |
+
+## P2
+
+**P2-1 — `cleanup_failed` agora vira `spawn_failed`, e `shell.run` traduz isso como "não pôde ser lançado".**
+`runContained` aplica `verifiedProcessOutcome` antes do `switch`, e essa função exige `cleanup.state === 'clean'` (e
+`leftover === 0`, `unverified === 0`). Qualquer comando que **rodou** e deixou resíduo (sucesso, saída não zero ou `timeout`) volta
+com `exitCode: 'spawn_failed'`, e o `stderr` verdadeiro é trocado por `process_containment_unverified`. Reproduzido: sondagem
+`probes/probe-cleanup-failed.test.ts.txt`, causas `exit/0` e `timeout`, ambas `spawn_failed`.
+`packages/sandbox/src/shell-tool.ts:362-365` mapeia `spawn_failed` para "containment failed: the command could not be launched
+inside the sandbox". A ferramenta é `sideEffect: 'WRITE'` e `idempotent: false`. Dizer ao modelo que o comando não foi lançado,
+quando ele rodou e pode ter processos vivos, convida a repetir um comando que tem efeito. O próprio código já tem a resposta certa
+para "executou, mas não provamos o fim": `effect_uncertain: cleanup_incomplete` (linhas 347, 359 e 372).
+Antes da fatia, `exit 0` com limpeza falha voltava como sucesso (o resíduo ficava só no detalhe); o endurecimento está certo, o
+código de saída escolhido não. `cause` e `cleanup` seguem no resultado, mas o `shell.run` não os lê.
+Pedido: o adapter separa "nunca lançado ou proveniência inválida" (`spawn_failed`) de "lançado, resíduo não provado" e este
+último vira um código próprio (por exemplo `cleanup_failed`) que o `shell.run` mapeia para `effect_uncertain`; teste no
+`shell.run` real (não só no adapter) com `exit/0`, `timeout` e `cancelled` + `cleanup_failed`. Mutante: voltar ao `spawn_failed`.
+
+## P3
+
+1. **A segunda barreira do adapter age depois da execução.** Documentar que a recusa de B é do serviço (antes do `spawn`) e que a do
+   adapter só impede aceitar o resultado; o teste "cached A cannot satisfy B" prova o resultado, não a ausência de execução.
+2. **O relatório rejeitado ainda sai em `result.containment`.** Sondagem `probes/probe-unverified-containment.test.ts.txt`: um
+   relatório com `profile: 'cgroup-guardian'` e `ownerIndependent: true` recusado pela verificação volta no resultado com
+   `exitCode: 'spawn_failed'`. Um consumidor que leia `result.containment` sem olhar o código de saída acredita em
+   `ownerIndependent: true`. Substituir por um relatório `unverified` (o tipo já existe) ou omitir.
+3. **`ProcessContainmentV1` do tipo B é construível por qualquer código do pacote** (objeto literal; sem marca nominal nem
+   construtor exclusivo do guardião). A verificação é consistência interna, declarada assim no código. Registrar para a fatia 2: o
+   construtor do B vive só no módulo do guardião e o tipo leva uma marca.
+4. **A entrada deriva o valor esperado do próprio observado.** `qualification-entry.mjs` lê `/proc/self/cgroup`, exige o sufixo
+   `/supervisor` e calcula `expectedControlGroup` a partir dele; o teste `ownerInSupervisor` do preflight passa a ser tautológico
+   nesse caminho, e quem estiver numa subárvore delegada com os nomes certos produz `candidate`. Como o resultado é diagnóstico
+   (`qualified: false` sempre), é aceitável; o README não deve dizer "observa a própria unit" como prova de identidade.
+5. **`runtimeDirectory` não é ancorado em `/run/user/<uid>/`.** Qualquer diretório `…/cvg-process-qualification/<instância>` em
+   tmpfs, do usuário e 0700, passa; o diretório pai não é verificado (dono, modo). A admissão nativa futura precisa ancorar.
+   Na unit, `RuntimeDirectoryPreserve=yes` não tem utilidade para um diagnóstico de uma passada e deixa estado entre execuções;
+   falta ao menos `NoNewPrivileges=yes`.
+6. **Superfície pública.** `inspectProcessDelegation` e `assessProcessDelegation` foram exportadas do índice do pacote
+   (`index.ts`); um diagnóstico de host não deveria ser importável pelo código de agente. Manter por import profundo, como a
+   entrada faz. Menor: em `errors.ts` o `import` de `ProcessAdmissionReason` ficou depois da classe; e as leituras do preflight
+   são síncronas dentro de uma função `async` (cerca de 20 arquivos de pseudoarquivos), o que bloqueia o laço de eventos do dono
+   se o cgroup travar.
+
+## O que conferi e está correto
+
+- **Preflight somente leitura e fail-closed:** `absolute()` exige caminho normalizado (rejeita `..`), a raiz precisa estar sob
+  `/sys/fs/cgroup/`, `noSymlinks` faz `lstat` de cada componente, `small()` abre com `O_NOFOLLOW|O_NONBLOCK`, lê no máximo 8 KiB e
+  recusa maior, erro de `close` invalida a leitura. Todo erro vira "falso"; `assessProcessDelegation` usa `!== true`, então fatos
+  forjados nunca produzem `qualified: true`. A subida pelos ancestrais termina em `/sys/fs/cgroup`.
+- **Espelhos:** `containmentMirrors` deriva `profile`, `ownerIndependent` e `landlock` do mesmo relatório; a verificação compara
+  os dois.
+- **Artefato compilado:** o `.js` emitido reescreve as extensões (`./errors.js`), então a entrada `.mjs` carrega; a evidência da
+  Codex mostra o diagnóstico descartável (recusa, exit 78) sem instalar nada.
+- **Unit:** `Type=oneshot`, sem `[Install]`, `Delegate=cpu memory pids`, `DelegateSubgroup=supervisor` (piso systemd 254 declarado),
+  `RuntimeDirectoryMode=0700`, sem `Restart`. Nada é instalado ou ativado.
+
+## Falhas que não são da fatia
+
+Duas falhas no meu run da base `9a8ab4c7a` e uma no `product-boundary` são as da onda 5 já corrigidas em `e05d0452e`:
+`par-x01-process-persistent` XP08 (2 testes; corrida do arquivo `flood` do fixture) e `tests/product-boundary.test.js` (a conta de
+probes do host, 1 para 5). A fatia não as toca; somem ao recompor sobre a ponta da onda 5. As outras 383 passam.
+
+## Limites
+
+Não rodei a cobertura canônica nem o `typecheck` completo; a Codex declara cobertura parcial (preflight 97,33/95,52/100/98,55) e
+suítes nativas NOT_RUN. Não validei a unit contra um systemd real. Nada aqui libera B, `cgroup-guardian` ou produção.

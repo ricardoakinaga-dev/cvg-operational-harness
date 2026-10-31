@@ -62,10 +62,6 @@ export {
   ProcessServiceError,
   ProcessAdmissionError
 } from './process-service/errors.ts'
-export {
-  inspectProcessDelegation,
-  assessProcessDelegation
-} from './process-service/cgroup-preflight.ts'
 export type {
   ProcessDelegationInput,
   ProcessDelegationFacts,

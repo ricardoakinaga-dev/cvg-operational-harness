@@ -63,12 +63,11 @@ it('a cached A service cannot satisfy an explicit B requirement', async () => {
     stderr: 'process_containment_unverified'
   })
 })
-it('does not return success on unknown version, unverified containment or failed cleanup; keeps cause', async () => {
+it('does not return success on unknown version, unverified containment; keeps cause', async () => {
   const o = out()
   for (const patch of [
     { containment: { ...o.containment, version: 9 } },
-    { containment: { ...o.containment, status: 'unverified' } },
-    { cleanup: { ...o.cleanup, state: 'cleanup_failed' } }
+    { containment: { ...o.containment, status: 'unverified' } }
   ]) {
     seam.launch.mockResolvedValue({ wait: async () => ({ ...o, ...patch }) })
     expect(await runContained(request)).toMatchObject({

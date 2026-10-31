@@ -1,3 +1,5 @@
+import type { ProcessAdmissionReason } from './containment.ts'
+
 export type ProcessServiceErrorCode =
   | 'invalid_request'
   | 'invalid_env'
@@ -19,7 +21,6 @@ export class ProcessServiceError extends Error {
     this.name = 'ProcessServiceError'
   }
 }
-import type { ProcessAdmissionReason } from './containment.ts'
 
 export class ProcessAdmissionError extends ProcessServiceError {
   constructor(readonly reason: ProcessAdmissionReason) {
