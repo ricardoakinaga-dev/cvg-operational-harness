@@ -171,6 +171,11 @@ import {
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
+import { revalidateOperatorSession } from './operator-session-revalidation.ts'
+import {
+  installSessionEventStream,
+  type SessionEventStreamOptions
+} from './session-event-stream.ts'
 import {
   installOperatorPrincipalGuard,
   recordRegisteredRoutes
@@ -326,6 +331,11 @@ export interface BuildServerOptions {
   httpSecurity?: HttpSecurityOptions
   requestMetrics?: ControlledRequestMetrics
   requestMetricsEnabled?: boolean
+  /**
+   * SPEC 0296: the SSE stream of session events. Absent = the route does not exist (404, D7).
+   * The store is built per request with the tenant of the identity.
+   */
+  sessionEventStreams?: SessionEventStreamOptions
   /**
    * Queue inbound work for the durable worker contract. Inline execution stays
    * the default for existing controlled fixtures until this flag is enabled.
@@ -646,12 +656,16 @@ export function buildServer(options: BuildServerOptions = {}) {
       registry: routeRegistry
     })
   }
+  const firstFrameLatencyMs = new WeakMap<object, number>()
   app.addHook('onRequest', async (request) => {
     requestStartedAt.set(request, performance.now())
   })
   app.addHook('onResponse', async (request, reply) => {
     const startedAt = requestStartedAt.get(request) ?? performance.now()
-    const latencyMs = Math.max(0, performance.now() - startedAt)
+    // a stream lives for minutes: its latency is the time to the first frame (SPEC 0296)
+    const latencyMs =
+      firstFrameLatencyMs.get(request) ??
+      Math.max(0, performance.now() - startedAt)
     requestMetrics.record({
       method: request.method,
       routeTemplate: request.routeOptions.url,
@@ -4227,6 +4241,47 @@ export function buildServer(options: BuildServerOptions = {}) {
       return fail(safeError.code, safeError.message, correlationId)
     }
   })
+
+  if (options.sessionEventStreams) {
+    installSessionEventStream({
+      app,
+      options: options.sessionEventStreams,
+      requireIdentity,
+      resolveDataPlaneTenant,
+      mapError: (error) => {
+        const safe = toSafeError(error)
+        return {
+          status: statusCodeForError(safe.code),
+          code: safe.code,
+          message: safe.message
+        }
+      },
+      ...(identityMode === 'trusted' && options.operatorSessionStore
+        ? {
+            revalidation: {
+              sessionIdOf: (headers: Record<string, unknown>) =>
+                parseOperatorSessionCookie(
+                  typeof headers.cookie === 'string'
+                    ? headers.cookie
+                    : undefined,
+                  operatorCookiePolicy
+                ) ?? undefined,
+              revalidate: (sessionId: string) =>
+                revalidateOperatorSession(
+                  {
+                    operatorSessionStore: options.operatorSessionStore!,
+                    caseAuthority,
+                    principalPolicy
+                  },
+                  sessionId
+                )
+            }
+          }
+        : {}),
+      sessionStoreFailureByHeaders,
+      firstFrameLatencyMs
+    })
+  }
 
   return app
 }

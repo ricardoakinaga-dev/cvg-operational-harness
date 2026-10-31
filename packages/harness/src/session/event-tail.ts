@@ -1,5 +1,5 @@
 import type { SessionEvent, SessionEventStore } from '@cvg/harness-contracts'
-import { SessionEventError, validateSessionEvent } from './events.ts'
+import { SessionEventError } from './events.ts'
 
 /**
  * SPEC 0296 section 4: the transport-independent core of the session event stream. Given a
@@ -59,6 +59,31 @@ export const TAIL_DEFAULTS = Object.freeze({
   readTimeoutMs: 5000,
   retryBackoffMs: 100
 })
+
+const nonEmpty = (value: unknown): boolean =>
+  typeof value === 'string' && value.length > 0
+
+/**
+ * The envelope of an event, and nothing of its payload: the stream must not skip an event it does
+ * not know (a type of a later catalog), so the payload is never judged here; the projection
+ * (SPEC 0296 A11) decides what leaves and denies by default. The store has already validated
+ * against the catalog it serves.
+ */
+function sound(event: unknown): event is SessionEvent {
+  if (typeof event !== 'object' || event === null) return false
+  const e = event as Record<string, unknown>
+  return (
+    Number.isSafeInteger(e.sequence) &&
+    (e.sequence as number) >= 1 &&
+    nonEmpty(e.tenantId) &&
+    nonEmpty(e.sessionId) &&
+    nonEmpty(e.eventId) &&
+    nonEmpty(e.type) &&
+    nonEmpty(e.timestamp) &&
+    nonEmpty(e.correlationId) &&
+    nonEmpty(e.traceId)
+  )
+}
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason
 
@@ -327,16 +352,12 @@ export async function verifyTailCursor(
   if (options.after === 0) return 'ok'
   const [event] = outcome.events
   if (event === undefined) return 'cursor_ahead'
-  try {
-    const checked = validateSessionEvent(event)
-    return checked.sequence === options.after &&
-      checked.tenantId === options.tenantId &&
-      checked.sessionId === options.sessionId
-      ? 'ok'
-      : 'unavailable'
-  } catch {
-    return 'unavailable'
-  }
+  return sound(event) &&
+    event.sequence === options.after &&
+    event.tenantId === options.tenantId &&
+    event.sessionId === options.sessionId
+    ? 'ok'
+    : 'unavailable'
 }
 
 /**
@@ -415,10 +436,8 @@ export async function* tailSessionEvents(
         yield end('max_events')
         return
       }
-      let event: SessionEvent
-      try {
-        event = validateSessionEvent(candidate)
-      } catch {
+      const event: SessionEvent = candidate
+      if (!sound(event)) {
         yield end('corrupt_event')
         return
       }

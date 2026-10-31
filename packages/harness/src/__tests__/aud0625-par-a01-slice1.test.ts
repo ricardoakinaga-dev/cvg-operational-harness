@@ -173,7 +173,7 @@ describe('PAR-A01 slice 1: order, density and the end', () => {
   })
 
   it('an invalid event, an event of another session and an oversized page are corrupt_event', async () => {
-    const bad = { ...ev(1), type: 'not/a/type' } as unknown as SessionEvent
+    const bad = { ...ev(1), eventId: '' } as SessionEvent
     for (const events of [
       [bad],
       [ev(1, 'another-tenant')],
@@ -199,6 +199,28 @@ describe('PAR-A01 slice 1: order, density and the end', () => {
     )
     expect(seqs(items)).toEqual([])
     expect(last(items)).toMatchObject({ reason: 'corrupt_event' })
+  })
+
+  it('an event of a type this build does not know, or with extra payload fields, flows through: the payload is the projection’s business', async () => {
+    const unknown = { ...ev(1), type: 'turn/paused', payload: { reason: 'x' } }
+    const extra = { ...ev(2), payload: { correlationId: 'c2', surprise: 1 } }
+    const { store } = fake([unknown, extra] as unknown as SessionEvent[])
+    const items = await collect(
+      tailSessionEvents(options(store, { maxEvents: 2 }))
+    )
+    expect(seqs(items)).toEqual([1, 2])
+  })
+
+  it('an event with a malformed envelope is corrupt_event', async () => {
+    for (const broken of [
+      { ...ev(1), sequence: 1.5 },
+      { ...ev(1), timestamp: '' },
+      { ...ev(1), traceId: undefined }
+    ]) {
+      const { store } = fake([broken as unknown as SessionEvent])
+      const items = await collect(tailSessionEvents(options(store)))
+      expect(last(items)).toMatchObject({ reason: 'corrupt_event' })
+    }
   })
 
   it('the end policy table matches the SPEC', () => {
@@ -676,7 +698,7 @@ describe('PAR-A01 slice 1: verifyTailCursor (SPEC 0296 A6)', () => {
       ...fake().store,
       read: async () => events
     })
-    expect(await verify(answer([{ ...ev(3), type: 'x' } as never]), 3)).toBe(
+    expect(await verify(answer([{ ...ev(3), eventId: '' } as never]), 3)).toBe(
       'unavailable'
     )
     expect(await verify(answer([ev(3, 'other-tenant')]), 3)).toBe('unavailable')
@@ -684,6 +706,7 @@ describe('PAR-A01 slice 1: verifyTailCursor (SPEC 0296 A6)', () => {
       'unavailable'
     )
     expect(await verify(answer([ev(2)]), 3)).toBe('unavailable')
+    expect(await verify(answer([null as never]), 3)).toBe('unavailable')
   })
 
   it('goes through the read permits like any read', async () => {

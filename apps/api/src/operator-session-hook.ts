@@ -10,6 +10,7 @@ import {
 import { healthRoute, liveRoute, readyRoute } from './routes/health.ts'
 import type { CaseAuthorityPort } from '@cvg/persistence'
 import { revalidateOperatorSession } from './operator-session-revalidation.ts'
+import { SESSION_STREAM_ROUTE } from './session-event-frames.ts'
 import type { CasePrincipalPolicy } from './case-authorization/case-routes.ts'
 
 const sessionIndependentProbePaths = new Set([
@@ -73,6 +74,8 @@ export function installOperatorSessionHook(
     if (revalidation.status === 'unavailable') {
       sessionStoreFailureByHeaders.add(request.headers)
       if (rawPath === '/v1/session' || rawPath === '/v1/session/logout') return
+      // SPEC 0296 (07 P3): the event stream answers an outage in band, so an EventSource retries
+      if (request.routeOptions.url === SESSION_STREAM_ROUTE) return
       reply.code(503).header('cache-control', 'no-store')
       return reply.send(
         fail(
