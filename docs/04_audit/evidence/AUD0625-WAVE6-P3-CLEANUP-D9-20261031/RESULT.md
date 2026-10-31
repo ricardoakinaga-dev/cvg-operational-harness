@@ -13,3 +13,7 @@ Branch `claude/aud0625-wave6-p3-cleanup-d9`, base `claude/aud0625-wave6` @ `7042
 - Gates (Node 22.23.2): typecheck, eslint nos 4 arquivos, prettier, `skip:governance` PASS, `mutation:guard` PASS, links limpos, `apps/worker` inteiro com PG: 39 arquivos, 311 testes.
 
 Produção NO_GO; dados sintéticos.
+
+## Reparo do P2 da revisão da 07 (guarda do gatilho)
+
+`assertApprovalOriginGuard` passa a conferir também `tgqual IS NULL` (sem `WHEN`), `tgnargs = 0` e `tgattr` vazio (sem lista `UPDATE OF`). Três danos novos no teste de PG real (`UPDATE OF status`, `WHEN (false)`, argumento no gatilho), cada um recusado; três mutantes (remover cada checagem) mortos, original passa. Limite registrado (P3, sem ação): só o worker do kernel confere; dono e esquema da função não são conferidos.
