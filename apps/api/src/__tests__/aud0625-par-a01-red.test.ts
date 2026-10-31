@@ -151,13 +151,21 @@ describe('PAR-A01 RED witnesses (fail until the BUILD)', () => {
   )
 
   it.fails(
-    'RED-5: two different cursors are invalid, and a cursor ahead of the log is a conflict',
+    'RED-5: the header is the resume position when it is not below ?after=; a header below it is invalid; a cursor ahead of the log is a conflict',
     async () => {
-      const app = server(store({ [`${TENANT_A}|s1`]: [1, 2, 3] }, TENANT_A))
-      const both = await get(app, '/v1/sessions/s1/events/stream?after=1', {
-        'last-event-id': '2'
+      const app = server(store({ [`${TENANT_A}|s1`]: [1, 2, 3, 4] }, TENANT_A))
+      // the EventSource reconnection: same URL (?after=1) plus the last id seen (2)
+      const resumed = await get(
+        app,
+        '/v1/sessions/s1/events/stream?after=1&maxEvents=2',
+        { 'last-event-id': '2' }
+      )
+      expect(resumed.statusCode).toBe(200)
+      expect(ids(resumed.body)).toEqual([3, 4])
+      const below = await get(app, '/v1/sessions/s1/events/stream?after=2', {
+        'last-event-id': '1'
       })
-      expect(both.statusCode).toBe(400)
+      expect(below.statusCode).toBe(400)
       const ahead = await get(app, '/v1/sessions/s1/events/stream?after=9')
       expect(ahead.statusCode).toBe(409)
     }
@@ -323,6 +331,33 @@ describe('PAR-A01 R1 witnesses with a real listener (fail until the BUILD)', () 
       ])
         expect(res.body).not.toContain(secret)
       expect(res.body).toContain('payloadOmitted')
+    }
+  )
+  it.fails(
+    'RED-11: a reconnection with the same URL and the last id resumes after it (real listener)',
+    async () => {
+      const { app, base } = await listen(
+        store({ [`${TENANT_A}|s1`]: [1, 2, 3, 4, 5, 6, 7, 8] }, TENANT_A)
+      )
+      try {
+        const first = await open(
+          base,
+          '/v1/sessions/s1/events/stream?after=2&maxEvents=3'
+        )
+        expect(first.status).toBe(200)
+        expect(ids(await first.text())).toEqual([3, 4, 5])
+        // the browser reuses the URL and adds the header with the last id it received
+        const again = await fetch(
+          `${base}/v1/sessions/s1/events/stream?after=2&maxEvents=3`,
+          {
+            headers: { ...OPERATOR, 'last-event-id': '5' }
+          }
+        )
+        expect(again.status).toBe(200)
+        expect(ids(await again.text())).toEqual([6, 7, 8])
+      } finally {
+        await app.close()
+      }
     }
   )
 })
