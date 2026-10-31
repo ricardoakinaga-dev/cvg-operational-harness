@@ -2,7 +2,7 @@
 
 R3, 31/10/2026 (R0 `de3067b1b`; R1 `b528a392a` respondeu a revisão `5ef8ca368`; R2 `80ef8a1ac` respondeu a conferência `919ee9329`; R3 responde a conferência da R2, `5dea5d17a`: 1 P2 e 3 P3, em [R3-RESPONSE](../04_audit/evidence/AUD0625-PAR-A01-SPEC-D9-20261031/R3-RESPONSE.md)). Task `AUD0625-PAR-A01-SPEC-D9-20261031` (Claude Sonnet 5.5, D9), cartão PAR-A01 ([0380](../03_build/0380_backlog_paridade_100_deepseek.md); F3, P0, G, T3; depende de PAR-S01 e PAR-M01), capacidades PAR-CAP API-02, API-03 e WEB-01. Estado `AUTHOR_REPAIRED_PENDING_NON_AUTHOR_CONFERENCE_AND_HUMAN_T3`: não há BUILD, não há aceite e nada aqui libera produção.
 
-Evidência: [DISCOVERY](../04_audit/evidence/AUD0625-PAR-A01-SPEC-D9-20261031/DISCOVERY.md) e o RED `apps/api/src/__tests__/aud0625-par-a01-red.test.ts` (2 controles verdes, 6 `it.fails`). Consumidores: SPEC [0295](0295_par_s05_session_query_and_trace.md) (consulta), S02 [0292](../03_build/0380_backlog_paridade_100_deepseek.md) (projeções), A02, A03, A05.
+Evidência: [DISCOVERY](../04_audit/evidence/AUD0625-PAR-A01-SPEC-D9-20261031/DISCOVERY.md) e o RED `apps/api/src/__tests__/aud0625-par-a01-red.test.ts` (2 controles verdes, 6 `it.fails`). Consumidores: SPEC 0295 (PAR-S05, na branch `claude/aud0625-par-s05-build-d9`) (consulta), S02 [0292](../03_build/0380_backlog_paridade_100_deepseek.md) (projeções), A02, A03, A05.
 
 ## 1. Problema
 
