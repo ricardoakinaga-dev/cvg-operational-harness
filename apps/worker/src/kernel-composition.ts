@@ -53,6 +53,7 @@ import {
   sanitizeAuditEvidencePayload
 } from '@cvg/shared'
 import type { ControlledWorkerHandlers } from './controlled-worker.ts'
+import { assertApprovalOriginGuard } from './approval-origin-guard.ts'
 import { NonRetryableOutboxError } from './jobs/process-outbox-event.ts'
 import {
   assertTenantIsolatedTables,
@@ -287,6 +288,8 @@ export async function assertPostgresKernelPrerequisites(
         [tenantId]
       )
       await assertTenantIsolatedTables(client, KERNEL_DURABLE_TABLES)
+      // SPEC 0291: the origin of an approval is immutable; refuse to start without its guard
+      await assertApprovalOriginGuard(client, tenantId)
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
