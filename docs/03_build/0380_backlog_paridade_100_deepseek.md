@@ -168,8 +168,8 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 | PAR-K07 | Ferramentas paralelas com limite                           | M    | P2    | `TODO`        | PAR-K03    |
 | PAR-K08 | Guardas de repetição e timeout cooperativo                 | M    | P1    | `TODO`        | PAR-K01    |
 | PAR-K09 | Hooks configuráveis sob controle                           | M    | P2    | `TODO`        | PAR-K04    |
-| PAR-X01 | Serviço único de subprocesso e ambiente do filho           | M    | P0    | `TODO`        | PAR-G01    |
-| PAR-X02 | Landlock real e relatório honesto de contenção             | G    | P0    | `TODO`        | PAR-X01    |
+| PAR-X01 | Serviço único de subprocesso e ambiente do filho           | M    | P0    | `DONE`        | PAR-G01    |
+| PAR-X02 | Landlock real e relatório honesto de contenção             | G    | P0    | `DONE`        | PAR-X01    |
 | PAR-X03 | Testes nativos de contenção e limites de recurso           | M    | P0    | `TODO`        | PAR-X02    |
 | PAR-X04 | Enforcement por efeito e política de sandbox por sessão    | M    | P1    | `TODO`        | PAR-X02    |
 
@@ -257,7 +257,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-X01 — Serviço único de subprocesso e ambiente do filho
 
-- Fase F1 · prioridade P0 · tamanho M · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F1 · prioridade P0 · tamanho M · trilha T3 · relevância hospitalar alta · estado `DONE` (escopo local/CI, onda 5 mesclada em #36 `49d43c06e`; produção `NO_GO`).
 - Origem: G2/SUB-01..04 (subprocess), G2/SH-06. Absorve: P100-023.
 - Hoje: `runContained` executa bwrap com timeout e limite de saída; não há serviço único, kill de descendentes comprovado nem allowlist de ambiente.
 - Entrega: Serviço de spawn, grupo, kill, wait e dispose usado por shell, MCP stdio, LSP e conversão de documentos; ambiente do filho por allowlist.
@@ -266,7 +266,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-X02 — Landlock real e relatório honesto de contenção
 
-- Fase F1 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F1 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `DONE` (escopo local/CI, onda 5 mesclada em #36 `49d43c06e`; produção `NO_GO`).
 - Origem: G2/SBX-03, SBX-07. Absorve: P100-024, AUD0611-G02.
 - Hoje: `landlock` é inferido de `os.release() >= 5.13`; nenhum ruleset é aplicado; `requireLandlock` não prova nada.
 - Entrega: Probe de ABI por syscall e ruleset aplicado no processo filho (helper nativo pequeno); o campo deixa de afirmar suporte só pela versão.
@@ -298,17 +298,17 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 | Cartão  | Título                                         | Tam. | Prio. | Estado        | Depende de       |
 | ------- | ---------------------------------------------- | ---- | ----- | ------------- | ---------------- |
 | PAR-M01 | Streaming no gateway com um resultado terminal | M    | P0    | `TODO`        | PAR-K03          |
-| PAR-M02 | Requisição congelada antes do adaptador        | P    | P2    | `TODO`        | PAR-M01          |
+| PAR-M02 | Requisição congelada antes do adaptador        | P    | P2    | `DONE`        | PAR-M01          |
 | PAR-M03 | Entrada multimodal de imagem                   | M    | P1    | `TODO`        | PAR-M01, PAR-T04 |
 | PAR-M05 | Modelo padrão e seleção por sessão             | P    | P2    | `TODO`        | PAR-K05          |
-| PAR-S01 | Persistência pública de sessão entre processos | G    | P0    | `TODO`        | PAR-K03          |
+| PAR-S01 | Persistência pública de sessão entre processos | G    | P0    | `DONE`        | PAR-K03          |
 | PAR-S02 | Projeções de sessão com cache                  | M    | P1    | `IN_PROGRESS` | PAR-S01          |
 | PAR-S03 | Estatísticas, esboço de turnos e título        | M    | P2    | `TODO`        | PAR-S02          |
-| PAR-S04 | Fork e retomada de sessão                      | M    | P1    | `TODO`        | PAR-S01          |
+| PAR-S04 | Fork e retomada de sessão                      | M    | P1    | `DONE`        | PAR-S01          |
 | PAR-S05 | Consulta de sessões com rastreio               | M    | P1    | `TODO`        | PAR-S01          |
 | PAR-S06 | Busca textual nas sessões                      | G    | P2    | `TODO`        | PAR-S05          |
 | PAR-S07 | Formatos novos e export/import versionado      | M    | P2    | `TODO`        | PAR-S02          |
-| PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `TODO`        | PAR-M01, PAR-K03 |
+| PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `DONE`        | PAR-M01, PAR-K03 |
 | PAR-C02 | Pressão de tokens antes do dispatch            | P    | P1    | `TODO`        | PAR-M01          |
 | PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `TODO`        | PAR-S01          |
 | PAR-C04 | Descarregamento de imagens antigas             | M    | P2    | `TODO`        | PAR-C03, PAR-M03 |
@@ -325,7 +325,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-M02 — Requisição congelada antes do adaptador
 
-- Fase F2 · prioridade P2 · tamanho P · trilha T3 · relevância hospitalar baixa · estado `TODO`.
+- Fase F2 · prioridade P2 · tamanho P · trilha T3 · relevância hospitalar baixa · estado `DONE` (escopo local/CI, onda 5 mesclada em #36 `49d43c06e`; produção `NO_GO`).
 - Origem: G1/LLM-02. Absorve: P100-014.
 - Hoje: Gateway valida contratos, mas não congela a requisição montada.
 - Entrega: Requisição imutável e reconstruível pelo log antes de chegar ao adaptador.
@@ -352,7 +352,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-S01 — Persistência pública de sessão entre processos
 
-- Fase F2 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F2 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `DONE` (escopo local/CI, onda 5 mesclada em #36 `49d43c06e`; produção `NO_GO`).
 - Origem: G1/SESSION-01 (presente) e ownership entre processos. Absorve: P100-015, P100-020; SPEC0221 pendente.
 - Hoje: Store append-only em PostgreSQL com RLS e catálogo v1 existe; ownership entre processos e transição com writers antigos não existem.
 - Entrega: Mesmo log v1 com ownership entre processos, adoção explícita de metadata e recusa de writer antigo.
@@ -380,7 +380,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-S04 — Fork e retomada de sessão
 
-- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar média · estado `TODO`.
+- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar média · estado `DONE` (escopo local/CI, onda 5 mesclada em #36 `49d43c06e`; produção `NO_GO`).
 - Origem: P100-020; G5/CL-02; G3/SUB-03. Absorve: P100-020.
 - Hoje: Retomada existe por execução; fork não existe.
 - Entrega: Fork semeado com turnos concluídos, sem herdar aprovações pendentes.
@@ -416,7 +416,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-C01 — Compactação por modelo sob pressão
 
-- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `DONE` (escopo local/CI, onda 5 mesclada em #36 `49d43c06e`; produção `NO_GO`).
 - Origem: G1/COMP-01. Absorve: P100-021.
 - Hoje: Resumo heurístico de até 512 caracteres e estimativa de 4 caracteres por token.
 - Entrega: Condensação com requisição de modelo sob pressão de tokens, nova tentativa após overflow, preservando fatos, obrigações e aprovações.
