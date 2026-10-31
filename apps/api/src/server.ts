@@ -171,6 +171,11 @@ import {
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
+import { revalidateOperatorSession } from './operator-session-revalidation.ts'
+import {
+  installSessionEventStream,
+  type SessionEventStreamOptions
+} from './session-event-stream.ts'
 import {
   installOperatorPrincipalGuard,
   recordRegisteredRoutes
@@ -326,6 +331,11 @@ export interface BuildServerOptions {
   httpSecurity?: HttpSecurityOptions
   requestMetrics?: ControlledRequestMetrics
   requestMetricsEnabled?: boolean
+  /**
+   * SPEC 0296: the SSE stream of session events. Absent = the route does not exist (404, D7).
+   * The store is built per request with the tenant of the identity.
+   */
+  sessionEventStreams?: SessionEventStreamOptions
   /**
    * Queue inbound work for the durable worker contract. Inline execution stays
    * the default for existing controlled fixtures until this flag is enabled.
@@ -553,7 +563,11 @@ export function buildServer(options: BuildServerOptions = {}) {
         ? [...httpSecurity.trustedProxyAddresses]
         : false,
       bodyLimit: HTTP_REQUEST_BODY_LIMIT_BYTES,
-      routerOptions: { maxParamLength: HTTP_REQUEST_MAX_PARAM_LENGTH }
+      routerOptions: { maxParamLength: HTTP_REQUEST_MAX_PARAM_LENGTH },
+      // Fastify answers 503 to what arrives while it closes, before any hook; an `EventSource`
+      // that gets a 503 stops for good, so the stream route answers in band during the grace
+      // (SPEC 0296 A13) and the other routes finish like the requests already in flight.
+      return503OnClosing: !options.sessionEventStreams
     }),
     {
       persistence,
@@ -646,12 +660,16 @@ export function buildServer(options: BuildServerOptions = {}) {
       registry: routeRegistry
     })
   }
+  const firstFrameLatencyMs = new WeakMap<object, number>()
   app.addHook('onRequest', async (request) => {
     requestStartedAt.set(request, performance.now())
   })
   app.addHook('onResponse', async (request, reply) => {
     const startedAt = requestStartedAt.get(request) ?? performance.now()
-    const latencyMs = Math.max(0, performance.now() - startedAt)
+    // a stream lives for minutes: its latency is the time to the first frame (SPEC 0296)
+    const latencyMs =
+      firstFrameLatencyMs.get(request) ??
+      Math.max(0, performance.now() - startedAt)
     requestMetrics.record({
       method: request.method,
       routeTemplate: request.routeOptions.url,
@@ -4227,6 +4245,47 @@ export function buildServer(options: BuildServerOptions = {}) {
       return fail(safeError.code, safeError.message, correlationId)
     }
   })
+
+  if (options.sessionEventStreams) {
+    installSessionEventStream({
+      app,
+      options: options.sessionEventStreams,
+      requireIdentity,
+      resolveDataPlaneTenant,
+      mapError: (error) => {
+        const safe = toSafeError(error)
+        return {
+          status: statusCodeForError(safe.code),
+          code: safe.code,
+          message: safe.message
+        }
+      },
+      ...(identityMode === 'trusted' && options.operatorSessionStore
+        ? {
+            revalidation: {
+              sessionIdOf: (headers: Record<string, unknown>) =>
+                parseOperatorSessionCookie(
+                  typeof headers.cookie === 'string'
+                    ? headers.cookie
+                    : undefined,
+                  operatorCookiePolicy
+                ) ?? undefined,
+              revalidate: (sessionId: string) =>
+                revalidateOperatorSession(
+                  {
+                    operatorSessionStore: options.operatorSessionStore!,
+                    caseAuthority,
+                    principalPolicy
+                  },
+                  sessionId
+                )
+            }
+          }
+        : {}),
+      sessionStoreFailureByHeaders,
+      firstFrameLatencyMs
+    })
+  }
 
   return app
 }
