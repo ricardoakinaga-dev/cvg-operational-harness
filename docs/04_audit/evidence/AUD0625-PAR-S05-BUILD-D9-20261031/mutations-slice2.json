@@ -1,0 +1,79 @@
+[
+ {
+  "id": "D1",
+  "what": "the window orders by the bare column",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "    ORDER BY writer_lock_id::bigint DESC\n    LIMIT $3",
+  "new": "    ORDER BY writer_lock_id DESC\n    LIMIT $3"
+ },
+ {
+  "id": "D2",
+  "what": "the window ignores the cursor",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "AND ($2::bigint IS NULL OR writer_lock_id::bigint < $2)",
+  "new": "AND ($2::bigint IS NULL OR $2::bigint > 0)"
+ },
+ {
+  "id": "D3",
+  "what": "the window ignores the size",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "    LIMIT $3`",
+  "new": "    LIMIT 10000000 + $3 * 0`"
+ },
+ {
+  "id": "D4",
+  "what": "the index is not required",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "        if (found.rows.length !== 1)\n          throw new SessionMigrationRequiredError(",
+  "new": "        if (found.rows.length > 1)\n          throw new SessionMigrationRequiredError("
+ },
+ {
+  "id": "D6",
+  "what": "a header of another session is accepted",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "  if (header.id !== row.session_id)\n    throw new SessionPersistenceCorruptionError(\n      'Stored header names another session',\n      row.session_id\n    )\n",
+  "new": ""
+ },
+ {
+  "id": "D8",
+  "what": "the abort is not checked",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "    if (input.signal?.aborted) throw abortError()\n",
+  "new": ""
+ },
+ {
+  "id": "D10",
+  "what": "the tenant predicate is dropped from the query",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "    WHERE tenant_id = $1 AND ($2::bigint",
+  "new": "    WHERE $1::text IS NOT NULL AND ($2::bigint"
+ },
+ {
+  "id": "D11",
+  "what": "the migration indexes the bare column",
+  "file": "packages/persistence/migrations/0038_session_streams_tenant_order_index.sql",
+  "old": "ON session_streams (tenant_id, ((writer_lock_id::bigint)));",
+  "new": "ON session_streams (tenant_id, writer_lock_id);"
+ },
+ {
+  "id": "D12",
+  "what": "a failing cleanup hides the error class",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "      if (\n        error instanceof SessionMigrationRequiredError ||\n        error instanceof SessionPersistenceCorruptionError\n      )\n        throw error",
+  "new": "      if (false as boolean)\n        throw error"
+ },
+ {
+  "id": "D5",
+  "what": "a missing index is remembered as verified",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "      if (!verifiedSchemas.has(this.#schema)) {\n        const found",
+  "new": "      if (!verifiedSchemas.has(this.#schema)) {\n        verifiedSchemas.add(this.#schema)\n        const found"
+ },
+ {
+  "id": "D7",
+  "what": "an unreadable header is listed as unadopted",
+  "file": "packages/persistence/src/session-query-postgres.ts",
+  "old": "    throw new SessionPersistenceCorruptionError(\n      'Stored header is not JSON',\n      row.session_id,\n      { cause }\n    )",
+  "new": "    return null"
+ }
+]
