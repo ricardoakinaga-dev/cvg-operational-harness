@@ -72,27 +72,26 @@ const preRollForwardMigrations = [
   '0027_worker_operations',
   '0029_case_assignment_authorization',
   '0030_api_creation_receipts',
-  '0031_channel_effect_retry_not_before'
+  '0031_channel_effect_retry_not_before',
+  '0033_complete_tool_result_journal'
 ]
 // The proof always rolls forward the newest migration of the default run
 // (POSTGRES_MIGRATIONS; 0028_session_events is opt-in) over a dump of the one
 // before it; keep both in step with packages/persistence/migrations.
-const rollForwardMigration = '0033_complete_tool_result_journal'
+const rollForwardMigration = '0035_runtime_approval_origin'
 const preRollForwardVersion = preRollForwardMigrations.at(-1)
 // Objects the roll-forward migration adds, removed before the pre-migration
 // backup is restored over the rolled-forward schema. SPEC0176 recovers
-// production by rolling forward; this drill only restores the 0031 backup.
-// 0033 (SPEC 0225) adds two columns, three CHECKs and one guard trigger with
-// its function to operational_effect_journal.
+// production by rolling forward; this drill only restores the 0033 backup.
+// 0035 (SPEC 0291) adds two nullable columns, one CHECK and one immutability
+// trigger with its function to runtime_approvals.
 const rollForwardRollbackSql = [
-  'DROP TRIGGER IF EXISTS journal_result_storage_guard ON operational_effect_journal;',
-  'DROP FUNCTION IF EXISTS cvg_journal_result_storage_guard();',
-  'ALTER TABLE operational_effect_journal',
-  'DROP CONSTRAINT IF EXISTS journal_result_storage_envelope,',
-  'DROP CONSTRAINT IF EXISTS journal_result_storage_shape,',
-  'DROP CONSTRAINT IF EXISTS journal_result_storage_version,',
-  'DROP COLUMN IF EXISTS result_storage_payload,',
-  'DROP COLUMN IF EXISTS result_storage_version'
+  'DROP TRIGGER IF EXISTS runtime_approvals_origin_immutable ON runtime_approvals;',
+  'DROP FUNCTION IF EXISTS cvg_runtime_approvals_origin_immutable();',
+  'ALTER TABLE runtime_approvals',
+  'DROP CONSTRAINT IF EXISTS runtime_approvals_origin_check,',
+  'DROP COLUMN IF EXISTS origin_conversation_id,',
+  'DROP COLUMN IF EXISTS origin_session_id'
 ].join(' ')
 
 type ManagedPostgres = {
