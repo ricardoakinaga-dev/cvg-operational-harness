@@ -20,6 +20,8 @@ import type {
   TurnState
 } from './kernel/types.ts'
 import { stop } from './kernel/types.ts'
+import type { SpillComposition } from './spill/composition.ts'
+import { pruneToolMessages } from './spill/prune.ts'
 
 /**
  * SPEC 0290 (PAR-C01): compaction by a model call, with items the host pins.
@@ -76,6 +78,12 @@ export interface ModelCompactionOptions {
    * gateway window check refuses an oversized request and the turn is refused.
    */
   readonly maxCompactionInputTokens?: number
+  /**
+   * SPEC 0293 §3.4: when set, tool messages of the prefix above the spill threshold are
+   * sent to the summariser as a preview block with a locator instead of in full. Absent:
+   * the prefix is sent as it is.
+   */
+  readonly spill?: SpillComposition
   /** Configured cost cap; the effective cap is min(this, 10% of the turn). */
   readonly maxCostUsd?: number
   readonly onCompacted?: (
@@ -87,6 +95,18 @@ export interface ModelCompactionOptions {
    * summary covers, and that cannot be inferred from the messages.
    */
   readonly logSequenceOf?: LogSequenceOf
+  /**
+   * SPEC 0293 I11: true when the request message at `index` is the result of the house
+   * `spill.read` tool. Those messages reach the summariser as they are: never stored again,
+   * never cut. The answer must come from trusted runtime data (for example
+   * `Observation.rendering.houseRead`), never from the message text, which could forge it.
+   * Required when `spill` is set and the history can hold house reads; absent means none.
+   * A port that throws refuses the compaction.
+   */
+  readonly houseReadOf?: (
+    index: number,
+    turn: TurnState
+  ) => boolean | Promise<boolean>
 }
 
 function validPins(items: readonly PinnedItem[]): boolean {
@@ -196,7 +216,38 @@ export function createModelCompactionControl(
           const budgetCap =
             call.request.budget.maxCostUsd * MODEL_COMPACTION_COST_SHARE
           const cap = Math.min(budgetCap, options.maxCostUsd ?? Infinity)
-          const request = excerpt(prefix)
+          // SPEC 0293 §3.4: what the summariser receives (and what the digest covers)
+          const exempt = new Set<number>()
+          if (options.spill && options.houseReadOf) {
+            try {
+              for (const [position, item] of prefix.entries()) {
+                if (
+                  item.role === 'tool' &&
+                  (await options.houseReadOf(item.sequence - 1, call.turn)) ===
+                    true
+                )
+                  exempt.add(position)
+              }
+            } catch {
+              return refuse()
+            }
+            if (call.turn.signal.aborted) return next()
+          }
+          const sent = options.spill
+            ? await pruneToolMessages(
+                prefix,
+                {
+                  tenantId: call.turn.input.tenantId,
+                  sessionId: call.turn.input.sessionId,
+                  executionId: call.turn.input.executionId ?? 'unbound',
+                  signal: call.turn.signal
+                },
+                options.spill,
+                exempt
+              )
+            : prefix
+          if (call.turn.signal.aborted) return next()
+          const request = excerpt(sent)
           if (
             !(cap > 0) ||
             estimateContextTokens(request) >
@@ -296,7 +347,7 @@ export function createModelCompactionControl(
                 keptMessages: governed.length + kept.length,
                 droppedMessages: prefix.length,
                 throughSequence: loggedThrough as number,
-                sourceDigest: digestMessages(prefix),
+                sourceDigest: digestMessages(sent),
                 summary,
                 viewTokens,
                 pinnedDigest: createHash('sha256')

@@ -8,6 +8,7 @@ import type {
   ModelUsage,
   StepContext
 } from '@cvg/harness-contracts'
+import { renderedObservationText } from '@cvg/harness-contracts'
 import {
   EMPTY_MODEL_USAGE,
   sanitizeLoopDecision,
@@ -110,10 +111,17 @@ function buildDecisionPrompt(context: StepContext): string {
         `- ${tool.id}@${tool.version}: ${tool.description} (risk=${tool.risk}, sideEffect=${tool.sideEffect})`
     )
     .join('\n')
+  // SPEC 0293: a tool result is read as the runtime rendered it on arrival, but only
+  // while the context engine kept it inside its budget; otherwise the (marked) summary
+  const kept = new Set(context.contextItems.map((item) => item.contextId))
   const observations = context.observations
     .map(
       (observation) =>
-        `- [${observation.source}/${observation.type}] ${observation.summary}`
+        `- [${observation.source}/${observation.type}] ${
+          kept.has(`tool.${observation.observationId}`)
+            ? renderedObservationText(observation)
+            : observation.summary
+        }`
     )
     .join('\n')
   const repair = context.decisionRepair

@@ -170,4 +170,103 @@ describe('P3-ORCH — hybrid orchestrator', () => {
       orchestrator.decide({ context: stepContext() })
     ).rejects.toMatchObject({ code: 'orchestrator_unavailable' })
   })
+
+  describe('SPEC 0293 tool result rendering in the decision prompt', () => {
+    const decisionText = JSON.stringify({
+      decisionType: 'RESPOND',
+      reasonCode: 'GOAL_SATISFIED',
+      responseIntent: 'answer'
+    })
+    const capture = () => {
+      const prompts: string[] = []
+      const model = {
+        complete: async (request: {
+          messages: readonly { content: string }[]
+        }) => {
+          prompts.push(request.messages.map((m) => m.content).join('\n'))
+          return {
+            text: decisionText,
+            provider: 'synthetic',
+            model: 'synthetic-v1',
+            inputTokens: 1,
+            outputTokens: 1,
+            costUsd: 0
+          }
+        }
+      }
+      return { model, prompts }
+    }
+    const tool = (
+      rendering?: StepContext['observations'][number]['rendering']
+    ) => ({
+      observationId: 'obs_tool',
+      executionId: 'exec_orch',
+      stepId: 'step_1',
+      stepNumber: 1,
+      type: 'TOOL_RESULT' as const,
+      source: 'TOOL' as const,
+      trust: 'UNTRUSTED' as const,
+      payload: {},
+      summary: 'RESUMO-CORTADO',
+      ...(rendering ? { rendering } : {}),
+      provenance: { sourceId: 'synthetic.tool' },
+      timestamp: '2026-10-30T00:00:00.000Z'
+    })
+    const rendering = {
+      form: 'preview' as const,
+      text: 'BLOCO-DE-PREVIA-COM-LOCATOR',
+      bytes: 9000,
+      sha256: 'x',
+      stored: true,
+      locator: 'spill_x'
+    }
+    const item = (id: string) => ({
+      contextId: id,
+      priority: 'FRESH_TOOL_RESULTS' as const,
+      trust: 'UNTRUSTED' as const,
+      source: 'synthetic.tool',
+      content: 'x',
+      tokenEstimate: 1
+    })
+
+    it('reads the rendering of a tool result the context engine kept', async () => {
+      const { model, prompts } = capture()
+      const orchestrator = new HybridOrchestrator({ decisionModel: model })
+      await orchestrator.decide({
+        context: stepContext({
+          observations: [tool(rendering)],
+          contextItems: [item('tool.obs_tool')]
+        })
+      })
+      expect(prompts[0]).toContain(
+        '- [TOOL/TOOL_RESULT] BLOCO-DE-PREVIA-COM-LOCATOR'
+      )
+      expect(prompts[0]).not.toContain('RESUMO-CORTADO')
+    })
+
+    it('falls back to the marked summary when the context engine dropped the item', async () => {
+      const { model, prompts } = capture()
+      const orchestrator = new HybridOrchestrator({ decisionModel: model })
+      await orchestrator.decide({
+        context: stepContext({
+          observations: [tool(rendering)],
+          contextItems: []
+        })
+      })
+      expect(prompts[0]).toContain('- [TOOL/TOOL_RESULT] RESUMO-CORTADO')
+      expect(prompts[0]).not.toContain('BLOCO-DE-PREVIA-COM-LOCATOR')
+    })
+
+    it('uses the summary when there is no rendering', async () => {
+      const { model, prompts } = capture()
+      const orchestrator = new HybridOrchestrator({ decisionModel: model })
+      await orchestrator.decide({
+        context: stepContext({
+          observations: [tool()],
+          contextItems: [item('tool.obs_tool')]
+        })
+      })
+      expect(prompts[0]).toContain('- [TOOL/TOOL_RESULT] RESUMO-CORTADO')
+    })
+  })
 })

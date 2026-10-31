@@ -440,6 +440,8 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Armazenamento de texto grande com localizador opaco, prévia de cabeça e cauda e poda de resultado de ferramenta.
 - Depende de: PAR-S01.
 - Aceite: O modelo recebe localizador e prévia com aviso de corte; falha de gravação nunca descarta conteúdo em silêncio.
+- Acompanhamento (D9, fatia 1 do BUILD, ligado à SPEC 0224): o orçamento de 4 000 tokens do `DefaultContextEngine` descarta itens de baixa prioridade inteiros; com resultados de ferramenta de até 8 KiB inline essa pressão chega antes. Decidir, junto com a admissão "completo ou recusa" da 0224, se o orçamento passa a ser do anfitrião ou se o item é reduzido a prévia em vez de sumir. Sem mudança agora.
+- Acompanhamento (D9, fatia 3 do BUILD, achado do DF, preexistente): no prompt de decisão do `HybridOrchestrator` as demais linhas `- [fonte/tipo] <summary>` (USER_MESSAGE, MODEL_PROPOSAL e o resumo de 300 caracteres de um resultado que saiu do orçamento do motor de contexto) seguem sem moldura; um `\n- [TOOL/...]` dentro delas ainda imita outra linha. Conserto natural: emoldurar com marcador por bloco todo texto não confiável do prompt, ou escapar quebras de linha. Fora do escopo da C03; não feito.
 
 ### PAR-C04 — Descarregamento de imagens antigas
 

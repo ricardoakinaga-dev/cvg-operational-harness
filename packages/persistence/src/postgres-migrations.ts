@@ -58,6 +58,7 @@ const defaultPostgresMigrations = [
   // SPEC 0291: additive, immutable origin (conversation and session) of an approval request.
   // 0034 is the opt-in session writer ownership and is not in this run.
   '0035_runtime_approval_origin'
+  // 0037_tool_output_spill (SPEC 0293) is opt-in (dedicated schema); not in the default run.
 ]
 
 /**

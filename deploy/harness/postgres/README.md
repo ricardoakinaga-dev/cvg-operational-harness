@@ -70,6 +70,23 @@ nunca configurado no serving. Essa exceção precisa constar do parecer C10.
      -f deploy/harness/postgres/backup-grants.sql
    ```
 
+   **Varredor do spill** (só se a migração `0037_tool_output_spill` foi
+   aplicada, pelo administrador da instância, nunca pelo papel de migração):
+   o papel `cvg_spill_sweeper` não é criado pela migração. Crie-o com
+   `spill-sweeper.sql` (`-v data_schema=… -v sweep_login_role=<login do job>`);
+   ele concede só `SELECT` nas colunas de identidade e validade e `DELETE`,
+   nunca `SELECT` em `content`. O varredor recusa rodar enquanto o papel não
+   existir, não for membro ou tiver privilégio a mais.
+
+   O worker liga o expurgo só com configuração do anfitrião:
+   `CVG_SPILL_SWEEP_DATABASE_URL` (URL do login do job, que carrega o papel),
+   `CVG_SPILL_SWEEP_SCHEMA` (o `data_schema`) e, opcional,
+   `CVG_SPILL_SWEEP_INTERVAL_MS` (padrão 300000; de 1000 a 86400000). Sem as
+   três, não há expurgo nem métrica; valor parcial ou inválido derruba a
+   partida; na partida o preflight do varredor recusa privilégio a mais. A
+   métrica é `worker_sweep_spill_purged_total`; falhas contam em
+   `worker_sweep_failures_total`.
+
 6. **Verificação** (papel de runtime basta; só catálogo e `schema_migrations`):
 
    ```sh

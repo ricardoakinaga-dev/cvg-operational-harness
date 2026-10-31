@@ -32,6 +32,7 @@ import {
 } from './homolog-worker.ts'
 import { createWorkerReadiness } from './readiness.ts'
 import { redactStartupErrorMessage } from './startup-error.ts'
+import { composeSpillSweep } from './spill-sweep-composition.ts'
 
 const startupFailure = getWorkerStartupFailure()
 
@@ -441,7 +442,20 @@ async function runPostgresControlledWorker(env: NodeJS.ProcessEnv) {
  */
 async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
   const telemetry = createJsonWorkerTelemetry()
-  const runtime = createPostgresContinuousWorker(env, { telemetry })
+  // SPEC 0293 D4: an invalid spill sweep configuration stops the start before any pool opens
+  const composedSpillSweep = composeSpillSweep(env, { telemetry })
+  const spillSweep = composedSpillSweep?.composition
+  const spillSweepConfig = composedSpillSweep?.config
+  let runtime: ReturnType<typeof createPostgresContinuousWorker>
+  try {
+    runtime = createPostgresContinuousWorker(env, {
+      telemetry,
+      ...(spillSweep ? { sweeps: spillSweep.sweeps } : {})
+    })
+  } catch (error) {
+    await spillSweep?.close().catch(() => undefined)
+    throw error
+  }
   const readiness = createWorkerReadiness({
     onTransition: (transition) =>
       telemetry.log('worker.readiness', {
@@ -462,6 +476,7 @@ async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
         released: stopped.released,
         releaseFailed: stopped.releaseFailed
       })
+      await spillSweep?.close().catch(() => undefined)
       await runtime.pool.end()
       readiness.markStopped(
         reason === 'shutdown_started' ? 'shutdown_completed' : 'startup_failed'
@@ -495,6 +510,8 @@ async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
     if (resolveWorkerRuntimeKind(env) === KERNEL_WORKER_RUNTIME) {
       await assertPostgresKernelPrerequisites(runtime.pool, runtime.tenantId)
     }
+    // the sweep never runs with more privilege than the provisioning script grants
+    await spillSweep?.verify()
   } catch (error) {
     if (shutdown.isShuttingDown()) {
       await cleanup('shutdown_started')
@@ -502,6 +519,13 @@ async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
     }
     await cleanup('startup_failed').catch(() => undefined)
     throw error
+  }
+  if (spillSweep) {
+    telemetry.log('worker.spill_sweep_enabled', {
+      schema: spillSweepConfig?.schemaName,
+      intervalMs: spillSweepConfig?.intervalMs,
+      operation: 'spill_sweep'
+    })
   }
   telemetry.log('worker.sweeps_disabled', {
     reason: 'approval_engine_composition_pending_aaa21',
