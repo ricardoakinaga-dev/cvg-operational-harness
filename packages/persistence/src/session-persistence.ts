@@ -40,9 +40,13 @@ import {
   analyzeSessionLog,
   checkSessionFork,
   SESSION_PROJECTION_ID,
+  SESSION_PROJECTION_MAX_STATE_BYTES,
+  emptySessionProjection,
   foldSessionProjection,
   judgeSessionCheckpoint,
   projectSession,
+  sessionCheckpointRow,
+  sessionProjectionStateBytes,
   planSessionFork,
   materializeSessionEvent,
   sessionEventInputDigest,
@@ -74,6 +78,8 @@ const MIGRATION = '0034_session_writer_ownership'
 const PAGE = 256
 const SESSION_BATCH_MAX_BYTES = 8 * 1024 * 1024
 const OPERATION_TIMEOUT_MS = 5_000
+/** SPEC 0292 §4: events between two checkpoints of one stream. */
+export const SESSION_PROJECTION_CHECKPOINT_EVERY = 256
 const MAX_SAFE = Number.MAX_SAFE_INTEGER
 const SCHEMA = /^[a-z][a-z0-9_]{0,62}$/
 const TENANT = /^[\x21-\x7e]{1,200}$/
@@ -85,9 +91,15 @@ export interface PostgresSessionPersistenceOptions {
   readonly maxOpenWriters: number
   readonly acquireTimeoutMs?: number
   /**
-   * SPEC 0292 I8: called, without any message text, each time the projection cache cannot be read
-   * or written. The failure never fails a projection, an append, a flush or a close; this is how
-   * it stays visible. Errors thrown by the callback are ignored.
+   * SPEC 0292 I8: the owner of a stream writes a projection checkpoint when this many events have
+   * been appended since the last one (default 256), after the commit that crossed it and as a best
+   * effort; `flush` and `close` try as well when it is due.
+   */
+  readonly projectionCheckpointEvery?: number
+  /**
+   * Called, without any message text, each time the projection cache cannot be read or written.
+   * The failure never fails a projection, an append, a flush or a close; this is how it stays
+   * visible. Errors thrown by the callback are ignored.
    */
   readonly onProjectionCacheFailure?: (failure: {
     readonly operation: 'read' | 'write'
@@ -132,6 +144,12 @@ export async function createPostgresSessionPersistence(
   )
     throw new SessionHeaderValidationError(
       'maxOpenWriters must be a positive integer'
+    )
+  const every =
+    options.projectionCheckpointEvery ?? SESSION_PROJECTION_CHECKPOINT_EVERY
+  if (!Number.isSafeInteger(every) || every < 1)
+    throw new SessionHeaderValidationError(
+      'projectionCheckpointEvery must be a positive integer'
     )
   const keyBase = await preflight(readPool, options)
   return {
@@ -364,7 +382,7 @@ class PostgresSessionPersistence implements SessionPersistence {
           await lease?.query('ROLLBACK').catch(() => undefined)
         throw error
       }
-      return this.#writerHandle(lease, captured, inheritedEventCount, key)
+      return this.#writerHandle(lease, captured, inheritedEventCount, key, 0)
     } catch (error) {
       if (lease) await lease.destroy()
       this.#writers--
@@ -420,7 +438,13 @@ class PostgresSessionPersistence implements SessionPersistence {
           'Session changed while it was being claimed',
           id
         )
-      return this.#writerHandle(lease, after.header, after.cut, after.key)
+      return this.#writerHandle(
+        lease,
+        after.header,
+        after.cut,
+        after.key,
+        after.head
+      )
     } catch (error) {
       if (lease) await lease.destroy()
       this.#writers--
@@ -572,7 +596,7 @@ class PostgresSessionPersistence implements SessionPersistence {
           await lease.query('ROLLBACK').catch(() => undefined)
         throw error
       }
-      return this.#writerHandle(lease, captured, cut, key)
+      return this.#writerHandle(lease, captured, cut, key, cut)
     } catch (error) {
       if (lease) await lease.destroy()
       this.#writers--
@@ -649,6 +673,12 @@ class PostgresSessionPersistence implements SessionPersistence {
   }
 
   #cacheFailures = { read: 0, write: 0 }
+  get projectionCheckpointEvery(): number {
+    return (
+      this.options.projectionCheckpointEvery ??
+      SESSION_PROJECTION_CHECKPOINT_EVERY
+    )
+  }
   projectionCacheStats(): SessionProjectionCacheStats {
     return {
       readFailures: this.#cacheFailures.read,
@@ -881,6 +911,36 @@ class PostgresSessionPersistence implements SessionPersistence {
     return out
   }
 
+  /** Position of the stored checkpoint of `id`, 0 when there is none or it cannot be read. */
+  async #checkpointThrough(id: string): Promise<number> {
+    let client: PostgresPoolClient
+    try {
+      client = await this.readPool.connect()
+    } catch {
+      return 0
+    }
+    try {
+      await client.query('BEGIN READ ONLY')
+      await client.query("SET LOCAL statement_timeout = '5s'")
+      await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
+        this.options.tenantId
+      ])
+      const found = await client.query<{ through_sequence: string }>(
+        `SELECT through_sequence FROM ${quote(this.options.schemaName)}.session_projection_checkpoints
+          WHERE tenant_id=$1 AND session_id=$2 AND projection_id=$3`,
+        [this.options.tenantId, id, SESSION_PROJECTION_ID]
+      )
+      await client.query('COMMIT')
+      return Number(found.rows[0]?.through_sequence ?? 0)
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      this.#cacheFailed('read', id, error)
+      return 0
+    } finally {
+      client.release()
+    }
+  }
+
   #reserveWriter(): void {
     if (this.#writers >= this.options.maxOpenWriters)
       throw new SessionStorageUnavailableError('Writer capacity is exhausted')
@@ -969,17 +1029,24 @@ class PostgresSessionPersistence implements SessionPersistence {
     return parseStream(row, id)
   }
 
+  /** `head` is the last sequence of the log when the handle is issued; 0 for a new stream. */
   #writerHandle(
     lease: PhysicalSessionLease,
     header: SessionHeaderV1,
     cut: number,
-    key: number
+    key: number,
+    head: number
   ): SessionHandle {
     return new PostgresSessionHandle({
       access: 'write',
       header,
       cut,
       key,
+      head,
+      checkpointEvery: this.projectionCheckpointEvery,
+      project: (id) => this.project(id),
+      checkpointThrough: (id) => this.#checkpointThrough(id),
+      cacheFailed: (id, error) => this.#cacheFailed('write', id, error),
       keyBase: this.keyBase,
       lease,
       readPool: this.readPool,
@@ -1087,6 +1154,12 @@ interface HandleState {
   readonly readPool: PostgresPoolLike
   readonly options: PostgresSessionPersistenceOptions
   readonly onClosed?: () => void
+  /** Writer only: the log head at issue, the checkpoint interval and the cache plumbing. */
+  readonly head?: number
+  readonly checkpointEvery?: number
+  readonly project?: (id: string) => Promise<SessionProjectionResult>
+  readonly checkpointThrough?: (id: string) => Promise<number>
+  readonly cacheFailed?: (id: string, error: unknown) => void
 }
 
 class PostgresSessionHandle implements SessionHandle {
@@ -1099,8 +1172,19 @@ class PostgresSessionHandle implements SessionHandle {
   #lost: Error | undefined
   #unknown: SessionCommitUnknownError | undefined
   #highWater = 0
+  /** SPEC 0292 I8: the owner's view of the log head, the folded projection and the cache. */
+  #head: number
+  #projection: SessionProjection | undefined
+  #checkpointed: number | undefined
+  #nextCheckpointAt = 0
   constructor(state: HandleState) {
     this.#s = state
+    this.#head = state.head ?? 0
+    if (state.access === 'write' && state.head === 0) {
+      // a new stream: nothing to read, and no checkpoint to find
+      this.#projection = emptySessionProjection()
+      this.#checkpointed = 0
+    }
     this.id = state.header.id
     this.access = state.access
     this.inheritedEventCount = state.cut
@@ -1276,7 +1360,10 @@ class PostgresSessionHandle implements SessionHandle {
   flush(options?: SessionPersistenceOptions): Promise<void> {
     const refusal = this.#writerRefusal()
     if (refusal) return Promise.reject(refusal)
-    return this.#admit(options, () => this.#flushNow())
+    return this.#admit(options, async () => {
+      await this.#checkpointIfDue()
+      await this.#flushNow()
+    })
   }
 
   /** closed > read-only > lost: the first applicable error wins. */
@@ -1459,6 +1546,108 @@ class PostgresSessionHandle implements SessionHandle {
       return next - 1
     })
     this.#highWater = Math.max(this.#highWater, last)
+    await this.#noteAppended(batch.events.map((item) => item.event))
+  }
+
+  /**
+   * SPEC 0292 I8, after the commit that stored `events`: the owner's head moves, the folded
+   * projection follows, and a checkpoint is written when `K` events have gone by. Nothing here
+   * can fail the append: a replay of an event already stored moves nothing.
+   */
+  async #noteAppended(events: readonly SessionEvent[]): Promise<void> {
+    const fresh = events.filter((event) => event.sequence > this.#head)
+    if (fresh.length === 0) return
+    this.#head = fresh[fresh.length - 1]!.sequence
+    if (this.#projection) {
+      try {
+        this.#projection = foldSessionProjection(this.#projection, fresh)
+      } catch (error) {
+        // the log decides: the projection is rebuilt from it when a checkpoint is due
+        this.#projection = undefined
+        this.#s.cacheFailed?.(this.id, error)
+      }
+    }
+    await this.#checkpointIfDue()
+  }
+
+  /** Writes the checkpoint when `K` events have gone by since the last one; never raises. */
+  async #checkpointIfDue(): Promise<void> {
+    const every = this.#s.checkpointEvery
+    if (every === undefined || this.#lost || this.access !== 'write') return
+    try {
+      this.#checkpointed ??= (await this.#s.checkpointThrough?.(this.id)) ?? 0
+      if (
+        this.#head - this.#checkpointed < every ||
+        this.#head < this.#nextCheckpointAt
+      )
+        return
+      // one attempt per interval: a failure waits for `K` more events, a success needs them anyway
+      this.#nextCheckpointAt = this.#head + every
+      if (this.#projection === undefined) {
+        const rebuilt = await this.#s.project?.(this.id)
+        if (!rebuilt || rebuilt.projection.throughSequence !== this.#head)
+          throw new SessionPersistenceCorruptionError(
+            'Session projection is not at the head',
+            this.id
+          )
+        this.#projection = rebuilt.projection
+      }
+      if (
+        sessionProjectionStateBytes(this.#projection) >
+        SESSION_PROJECTION_MAX_STATE_BYTES
+      )
+        throw Object.assign(new Error('projection state is too large'), {
+          code: 'state_too_large'
+        })
+      await this.#writeCheckpoint(this.#projection)
+      this.#checkpointed = this.#head
+    } catch (error) {
+      this.#s.cacheFailed?.(this.id, error)
+    }
+  }
+
+  async #writeCheckpoint(projection: SessionProjection): Promise<void> {
+    const schema = quote(this.#s.options.schemaName)
+    const tenant = this.#s.options.tenantId
+    await this.#transaction(async (lease) => {
+      const stream = await lease.query<{ header_json: string }>(
+        `SELECT header_json FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+        [tenant, this.id]
+      )
+      const point = await lease.query<{ input_digest: string }>(
+        `SELECT input_digest FROM ${schema}.session_events WHERE tenant_id=$1 AND session_id=$2 AND sequence=$3`,
+        [tenant, this.id, projection.throughSequence]
+      )
+      const headerText = stream.rows[0]?.header_json
+      const pointDigest = point.rows[0]?.input_digest
+      if (headerText === undefined || pointDigest === undefined)
+        throw new SessionPersistenceCorruptionError(
+          'Session checkpoint point is not in the log',
+          this.id
+        )
+      const row = sessionCheckpointRow(projection, headerText, pointDigest)
+      await lease.query(
+        `INSERT INTO ${schema}.session_projection_checkpoints
+           (tenant_id,session_id,projection_id,projection_version,through_sequence,tail_input_digest,header_digest,state,state_digest)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+         ON CONFLICT (tenant_id,session_id,projection_id) DO UPDATE SET
+           projection_version=EXCLUDED.projection_version, through_sequence=EXCLUDED.through_sequence,
+           tail_input_digest=EXCLUDED.tail_input_digest, header_digest=EXCLUDED.header_digest,
+           state=EXCLUDED.state, state_digest=EXCLUDED.state_digest, created_at=now()
+         WHERE EXCLUDED.through_sequence > ${schema}.session_projection_checkpoints.through_sequence`,
+        [
+          tenant,
+          this.id,
+          SESSION_PROJECTION_ID,
+          row.projectionVersion,
+          row.throughSequence,
+          row.tailInputDigest,
+          row.headerDigest,
+          JSON.stringify(row.state),
+          row.stateDigest
+        ]
+      )
+    })
   }
 
   /**
@@ -1472,7 +1661,7 @@ class PostgresSessionHandle implements SessionHandle {
   ): Promise<SessionEvent> {
     const schema = quote(this.#s.options.schemaName)
     const tenant = this.#s.options.tenantId
-    return this.#transaction(async (lease) => {
+    const stored = await this.#transaction(async (lease) => {
       const cursor = await lease.query<{
         next_sequence: string
         format_version: number
@@ -1537,6 +1726,8 @@ class PostgresSessionHandle implements SessionHandle {
       this.#highWater = Math.max(this.#highWater, next)
       return event
     })
+    await this.#noteAppended([stored])
+    return stored
   }
 
   /**
@@ -1575,6 +1766,7 @@ class PostgresSessionHandle implements SessionHandle {
     try {
       if (!this.#lost) {
         try {
+          await this.#checkpointIfDue()
           await this.#flushNow()
         } catch (error) {
           // A failed flush is not a successful close: keep the error, drop the connection.

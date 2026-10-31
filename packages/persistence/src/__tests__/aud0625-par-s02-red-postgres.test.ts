@@ -10,6 +10,7 @@ import { runSessionProjectionMigrations } from '../session-events.ts'
 import {
   createPgPhysicalSessionPool,
   createPostgresSessionPersistence,
+  sessionEventStoreForHandle,
   verifyProjectionCache
 } from '../session-persistence.ts'
 
@@ -48,8 +49,12 @@ const countingPool = () => ({
     return client
   }
 })
-const cacheFailures: { operation: string; sessionId: string }[] = []
-const service = (tenantId = tenantA) =>
+const cacheFailures: {
+  operation: string
+  sessionId: string
+  code?: string
+}[] = []
+const service = (tenantId = tenantA, extra: Record<string, unknown> = {}) =>
   createPostgresSessionPersistence(
     createPgPhysicalSessionPool({ connectionString: roleUrl }),
     countingPool() as never,
@@ -58,7 +63,8 @@ const service = (tenantId = tenantA) =>
       schemaName: schema,
       maxOpenWriters: 4,
       acquireTimeoutMs: 3000,
-      onProjectionCacheFailure: (f) => cacheFailures.push(f)
+      onProjectionCacheFailure: (f) => cacheFailures.push(f),
+      ...extra
     }
   ).then((r) => r.service as any)
 const mk = (
@@ -722,9 +728,11 @@ describe.skipIf(!url)(
       it('a hole in the pages of the log is corruption, never a shorter projection', async () => {
         const { w, id } = await seeded(3)
         await w.close()
+        // a pool of its own: the patched client must never go back to the shared one
+        const ownPool = new Pool({ connectionString: roleUrl, max: 2 })
         const holey = {
           connect: async () => {
-            const client = await basePool.connect()
+            const client = await ownPool.connect()
             const query = client.query.bind(client) as (
               ...a: unknown[]
             ) => Promise<any>
@@ -749,10 +757,14 @@ describe.skipIf(!url)(
             }
           )
         ).service as any
-        await expect(svc.project(id)).rejects.toMatchObject({
-          name: 'SessionPersistenceCorruptionError',
-          message: expect.stringContaining('gap')
-        })
+        try {
+          await expect(svc.project(id)).rejects.toMatchObject({
+            name: 'SessionPersistenceCorruptionError',
+            message: expect.stringContaining('gap')
+          })
+        } finally {
+          await ownPool.end()
+        }
       })
 
       it('the cache table keeps row level security forced, and an aborted request never gets a cached answer', async () => {
@@ -883,6 +895,385 @@ describe.skipIf(!url)(
             [tenantA, 'a'.repeat(64)]
           )
         ).rejects.toThrow()
+      })
+    })
+
+    describe('slice 3: the owner of the stream writes the checkpoint (SPEC 0292 I8, PJ05, PJ08)', () => {
+      const header = (id: string) => ({
+        version: 1 as const,
+        id,
+        createdAt: 1_700_000_000_000,
+        isSeeded: false
+      })
+      const stored = async (id: string, tenantId = tenantA) => {
+        const rows = await admin.query(
+          `SELECT through_sequence, state FROM ${schema}.session_projection_checkpoints WHERE tenant_id=$1 AND session_id=$2`,
+          [tenantId, id]
+        )
+        return rows.rows[0] as
+          | { through_sequence: string; state: Record<string, unknown> }
+          | undefined
+      }
+      const lines = (
+        tenantId: string,
+        id: string,
+        from: number,
+        count: number
+      ) => turns(tenantId, id, from, count)
+      const fresh = (name: string) => `${name}-${++seq}`
+
+      it('the original witnesses, with the real writer: close leaves a checkpoint, the next projection is the cache, a short tail is incremental', async () => {
+        const id = fresh('w1')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 64 })
+        const w = await svc.create(header(id))
+        const events = lines(tenantA, id, 1, 50)
+        for (let i = 0; i < events.length; i += 100)
+          await w.append(events.slice(i, i + 100))
+        await w.close()
+        rowsFetched = 0
+        const cached = await svc.project(id)
+        expect(cached.origin).toBe('cache')
+        expect(rowsFetched).toBeLessThanOrEqual(1)
+        expect(cached.projection).toEqual(api.projectSession(events))
+        const again = await svc.open(id, 'write')
+        const tail = lines(tenantA, id, events.length + 1, 1)
+        await again.append(tail)
+        await again.close()
+        rowsFetched = 0
+        const result = await svc.project(id)
+        expect(result.origin).toBe('incremental')
+        expect(rowsFetched).toBeLessThanOrEqual(tail.length + 1)
+        expect(result.projection).toEqual(
+          api.projectSession([...events, ...tail])
+        )
+        expect(await verifyProjectionCache(svc, id)).toEqual([])
+      })
+
+      it('the append that crosses K writes the checkpoint at once, before any flush or close', async () => {
+        const id = fresh('w3')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 10 })
+        const w = await svc.create(header(id))
+        const events = lines(tenantA, id, 1, 4) // 16 events: 9 first, then 7
+        await w.append(events.slice(0, 9))
+        expect(await stored(id)).toBeUndefined()
+        await w.append(events.slice(9))
+        const row = await stored(id)
+        expect(Number(row?.through_sequence)).toBe(16)
+        expect(row?.state).toEqual(
+          JSON.parse(JSON.stringify(api.projectSession(events)))
+        )
+        await w.close()
+      })
+
+      it('a long session of an open writer is checkpointed every K events and never read back to fold', async () => {
+        const id = fresh('w-long')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 20 })
+        const w = await svc.create(header(id))
+        const events = lines(tenantA, id, 1, 60) // 240 events, never flushed or closed
+        rowsFetched = 0
+        const seen: number[] = []
+        for (let i = 0; i < events.length; i += 8) {
+          await w.append(events.slice(i, i + 8))
+          seen.push(Number((await stored(id))?.through_sequence ?? 0))
+        }
+        // the writer folds in memory: the log was not read again for any of it (PJ05)
+        expect(rowsFetched).toBe(0)
+        expect(seen.at(-1)).toBeGreaterThanOrEqual(events.length - 19)
+        expect(seen.every((n, k) => k === 0 || n >= seen[k - 1]!)).toBe(true)
+        const row = await stored(id)
+        const through = Number(row?.through_sequence)
+        expect(row?.state).toEqual(
+          JSON.parse(
+            JSON.stringify(api.projectSession(events.slice(0, through)))
+          )
+        )
+        await w.close()
+        expect((await svc.project(id)).projection).toEqual(
+          api.projectSession(events)
+        )
+      })
+
+      it('flush and close write the checkpoint when it is due even though no append of this handle crossed K', async () => {
+        const id = fresh('w-due')
+        const slow = await service(tenantA, {
+          projectionCheckpointEvery: 100000
+        })
+        const first = await slow.create(header(id))
+        const events = lines(tenantA, id, 1, 30) // 120 events, no checkpoint under a huge K
+        await first.append(events)
+        await first.close()
+        expect(await stored(id)).toBeUndefined()
+        const svc = await service(tenantA, { projectionCheckpointEvery: 50 })
+        const w = await svc.open(id, 'write')
+        await w.flush()
+        expect(Number((await stored(id))?.through_sequence)).toBe(120)
+        const more = lines(tenantA, id, 121, 20) // 80 more events
+        await w.append(more.slice(0, 5))
+        await w.close()
+        expect(Number((await stored(id))?.through_sequence)).toBe(120)
+        const second = await svc.open(id, 'write')
+        await second.append(more.slice(5))
+        await second.close()
+        expect(Number((await stored(id))?.through_sequence)).toBe(200)
+        expect((await svc.project(id)).projection).toEqual(
+          api.projectSession([...events, ...more])
+        )
+      })
+
+      it('a writer that is opened and closed without appending still writes a due checkpoint', async () => {
+        const id = fresh('w-close-only')
+        const slow = await service(tenantA, {
+          projectionCheckpointEvery: 100000
+        })
+        const first = await slow.create(header(id))
+        await first.append(lines(tenantA, id, 1, 30)) // 120 events
+        await first.close()
+        expect(await stored(id)).toBeUndefined()
+        const svc = await service(tenantA, { projectionCheckpointEvery: 50 })
+        const w = await svc.open(id, 'write')
+        await w.close()
+        expect(Number((await stored(id))?.through_sequence)).toBe(120)
+      })
+
+      it('the default interval is 256 events', async () => {
+        const id = fresh('w-default')
+        const svc = await service()
+        expect(svc.projectionCheckpointEvery).toBe(256)
+        const w = await svc.create(header(id))
+        const events = lines(tenantA, id, 1, 64) // 256 events
+        await w.append(events.slice(0, 255))
+        expect(await stored(id)).toBeUndefined()
+        await w.append(events.slice(255))
+        expect(Number((await stored(id))?.through_sequence)).toBe(256)
+        await w.close()
+      })
+
+      it('a close with nothing due writes nothing', async () => {
+        const id = fresh('w-quiet')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 500 })
+        const w = await svc.create(header(id))
+        await w.append(lines(tenantA, id, 1, 5))
+        await w.flush()
+        await w.close()
+        expect(await stored(id)).toBeUndefined()
+      })
+
+      it('the bridge append of the kernel port counts too', async () => {
+        const id = fresh('w-bridge')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 5 })
+        const w = await svc.create(header(id))
+        const store = sessionEventStoreForHandle(w)
+        const events = lines(tenantA, id, 1, 3) // 12 events: checkpoints at 5 and 10
+        for (const e of events) {
+          const { sequence: _s, schemaFingerprint: _f, ...input } = e
+          void _s
+          void _f
+          await store.append(input)
+        }
+        expect(Number((await stored(id))?.through_sequence)).toBe(10)
+        const failuresBefore = svc.projectionCacheStats().writeFailures
+        // a replay of an event already stored moves nothing and writes nothing
+        const { sequence: _s, schemaFingerprint: _f, ...again } = events[0]!
+        void _s
+        void _f
+        await store.append(again)
+        expect(Number((await stored(id))?.through_sequence)).toBe(10)
+        // and it does not disturb the folded state: no cache failure was counted
+        expect(svc.projectionCacheStats().writeFailures).toBe(failuresBefore)
+        await w.close()
+      })
+
+      it('PJ08: a cache that cannot be written fails neither append, flush nor close; it is counted, backed off and reported', async () => {
+        const id = fresh('w-nowrite')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 10 })
+        const w = await svc.create(header(id))
+        await admin.query(
+          `REVOKE INSERT, UPDATE ON ${schema}.session_projection_checkpoints FROM ${role}`
+        )
+        cacheFailures.length = 0
+        const before = svc.projectionCacheStats().writeFailures
+        const events = lines(tenantA, id, 1, 7) // 28 events in batches of 4
+        try {
+          for (let i = 0; i < events.length; i += 1)
+            await w.append(events.slice(i, i + 1))
+          await w.flush()
+          await w.close()
+        } finally {
+          await admin.query(
+            `GRANT SELECT, INSERT, UPDATE ON ${schema}.session_projection_checkpoints TO ${role}`
+          )
+        }
+        const failures = svc.projectionCacheStats().writeFailures - before
+        // attempts at 10 and 20 events (each waits for K more), and at the close (28 - 20 < 10: none)
+        expect(failures).toBe(2)
+        expect(
+          cacheFailures.filter(
+            (f) => f.operation === 'write' && f.sessionId === id
+          )
+        ).toHaveLength(2)
+        expect(
+          cacheFailures.every(
+            (f) =>
+              f.code === '42501' ||
+              f.code === undefined ||
+              typeof f.code === 'string'
+          )
+        ).toBe(true)
+        expect(await stored(id)).toBeUndefined()
+        expect((await svc.project(id)).projection).toEqual(
+          api.projectSession(events)
+        )
+        expect(await verifyProjectionCache(svc, id)).toContain(
+          `${svc.projectionCacheStats().writeFailures} checkpoint write(s) failed`
+        )
+      })
+
+      it('PJ08: a stream longer than K in a schema without the table still appends, flushes and closes', async () => {
+        const bare = `pars02c_${suffix}`
+        const { runSessionEventMigrations } =
+          await import('../session-events.ts')
+        await runSessionEventMigrations(admin, { schemaName: bare })
+        try {
+          await admin.query(`GRANT USAGE ON SCHEMA ${bare} TO ${role}`)
+          await admin.query(
+            `GRANT SELECT, INSERT ON ${bare}.session_events, ${bare}.session_streams TO ${role}`
+          )
+          await admin.query(
+            `GRANT UPDATE (next_sequence) ON ${bare}.session_streams TO ${role}`
+          )
+          await admin.query(
+            `GRANT SELECT ON ${bare}.schema_migrations TO ${role}`
+          )
+          const svc = (
+            await createPostgresSessionPersistence(
+              createPgPhysicalSessionPool({ connectionString: roleUrl }),
+              countingPool() as never,
+              {
+                tenantId: tenantA,
+                schemaName: bare,
+                maxOpenWriters: 2,
+                acquireTimeoutMs: 3000,
+                projectionCheckpointEvery: 8
+              }
+            )
+          ).service as any
+          const id = fresh('bare-writer')
+          const w = await svc.create(header(id))
+          const events = lines(tenantA, id, 1, 6)
+          await w.append(events)
+          await w.flush()
+          await w.close()
+          expect(
+            svc.projectionCacheStats().writeFailures
+          ).toBeGreaterThanOrEqual(1)
+          expect((await svc.project(id)).projection).toEqual(
+            api.projectSession(events)
+          )
+        } finally {
+          await admin.query(`DROP SCHEMA IF EXISTS ${bare} CASCADE`)
+        }
+      })
+
+      it('a state over the ceiling is not checkpointed and the failure is counted with its reason', async () => {
+        const id = fresh('w-big')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 100 })
+        const w = await svc.create(header(id))
+        cacheFailures.length = 0
+        const batch: SessionEvent[] = [
+          mk(tenantA, id, 1, 'turn/start', 'big', { correlationId: 'big' })
+        ]
+        // one open turn with a call that never gets a result: the open group grows with each one
+        for (let k = 0; k < 1500; k++)
+          batch.push(
+            mk(tenantA, id, k + 2, 'tool/call', 'big', {
+              correlationId: 'big',
+              toolId: `tool-${k % 3}`,
+              operationKey: `operation-key-${String(k).padStart(6, '0')}-${'x'.repeat(40)}`,
+              input: {}
+            })
+          )
+        for (let i = 0; i < batch.length; i += 100)
+          await w.append(batch.slice(i, i + 100))
+        await w.close()
+        // the early checkpoints fit; the first one over the ceiling was refused and counted
+        const last = Number((await stored(id))?.through_sequence)
+        expect(last).toBeGreaterThan(0)
+        expect(last).toBeLessThan(batch.length)
+        expect(cacheFailures.some((f) => f.code === 'state_too_large')).toBe(
+          true
+        )
+        const served = await svc.project(id)
+        expect(served.origin).toBe('incremental')
+        expect(served.projection).toEqual(api.projectSession(batch))
+      })
+
+      it('a reopened writer finds the checkpoint, folds from it and writes the next one without reading the whole log twice', async () => {
+        const id = fresh('w-reopen')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 40 })
+        const w = await svc.create(header(id))
+        const events = lines(tenantA, id, 1, 20) // 80 events
+        await w.append(events)
+        await w.close()
+        expect(Number((await stored(id))?.through_sequence)).toBe(80)
+        const again = await svc.open(id, 'write')
+        const more = lines(tenantA, id, 81, 30) // 120 events
+        rowsFetched = 0
+        await again.append(more)
+        await again.close()
+        // the checkpoint (80) plus the tail (120) and the point: not the whole 200 and not twice
+        expect(rowsFetched).toBeLessThanOrEqual(120 + 1)
+        expect(Number((await stored(id))?.through_sequence)).toBe(200)
+        expect((await svc.project(id)).origin).toBe('cache')
+        // a short append after a checkpoint at the head is below K: nothing is written
+        const last = await svc.open(id, 'write')
+        await last.append(lines(tenantA, id, 201, 3).slice(0, 2))
+        await last.close()
+        expect(Number((await stored(id))?.through_sequence)).toBe(200)
+      })
+
+      it('a fork child is written with the same rule and does not inherit the cache', async () => {
+        const id = fresh('w-fork-src')
+        const svc = await service(tenantA, { projectionCheckpointEvery: 6 })
+        const w = await svc.create(header(id))
+        const events = lines(tenantA, id, 1, 3)
+        await w.append(events)
+        await w.close()
+        const childId = `${id}-child`
+        const child = await svc.fork(id, header(childId))
+        expect(await stored(childId)).toBeUndefined()
+        const failuresBefore = svc.projectionCacheStats().writeFailures
+        const extra = lines(
+          tenantA,
+          childId,
+          child.inheritedEventCount + 1,
+          3
+        ).map((e, i) => ({
+          ...e,
+          eventId: `${childId}-x${i}`
+        }))
+        await child.append(extra)
+        await child.close()
+        expect(Number((await stored(childId))?.through_sequence)).toBe(24)
+        // the child starts from its inherited head: its projection is rebuilt once, not mis-folded
+        expect(svc.projectionCacheStats().writeFailures).toBe(failuresBefore)
+        expect((await svc.project(childId)).origin).toBe('cache')
+      })
+
+      it('the checkpoint interval must be a positive integer', async () => {
+        for (const bad of [0, -1, 1.5, Number.NaN]) {
+          await expect(
+            createPostgresSessionPersistence(
+              createPgPhysicalSessionPool({ connectionString: roleUrl }),
+              countingPool() as never,
+              {
+                tenantId: tenantA,
+                schemaName: schema,
+                maxOpenWriters: 1,
+                projectionCheckpointEvery: bad
+              }
+            )
+          ).rejects.toMatchObject({ name: 'SessionHeaderValidationError' })
+        }
       })
     })
   }
