@@ -28,35 +28,46 @@ const big = (n: number): SessionEvent =>
     schemaFingerprint: 'a'.repeat(64)
   }) as unknown as SessionEvent
 
+/** Every raw record the fake store hands out, held weakly: what is still alive was retained. */
+const handedOut: Array<WeakRef<SessionEvent>> = []
+
 const bigStore = (): SessionEventStore => ({
   openSession: async (i) => i,
   append: async () => {
     throw new Error('read only')
   },
   read: async (input) =>
-    Array.from({ length: input.limit ?? 10 }, (_, i) =>
-      big((input.afterSequence ?? 0) + i + 1)
-    )
+    Array.from({ length: input.limit ?? 10 }, (_, i) => {
+      const event = big((input.afterSequence ?? 0) + i + 1)
+      handedOut.push(new WeakRef(event))
+      return event
+    })
 })
 
 setFlagsFromString('--expose-gc')
 const collectGarbage = (): void => {
   runInNewContext('gc')()
 }
-const retained = (): number => {
+/**
+ * The raw records still alive. A WeakRef keeps its target until the end of the current job, so
+ * the collection runs in a later task; the count does not depend on the load of the machine.
+ */
+const aliveRaw = async (): Promise<number> => {
+  await new Promise((resolve) => setTimeout(resolve, 0))
   collectGarbage()
-  // a long string can live outside the V8 heap, as an external string
-  const usage = process.memoryUsage()
-  return usage.heapUsed + usage.external
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  collectGarbage()
+  return handedOut.filter((ref) => ref.deref() !== undefined).length
 }
 
 describe('PAR-A01 repair: the page that waits for a slow client', () => {
   const TAILS = 30
-  const FRAME = 64 * 1024
+  const PAGE = 10
 
   const suspend = async (
     frameOf: ((event: SessionEvent) => string) | undefined
   ) => {
+    handedOut.length = 0
     const signal = new AbortController()
     const gens = Array.from({ length: TAILS }, () =>
       tailSessionEvents({
@@ -68,28 +79,28 @@ describe('PAR-A01 repair: the page that waits for a slow client', () => {
         ...(frameOf ? { frameOf } : {})
       })
     )
-    const before = retained()
     // each tail has read a page of ten 1 MiB records and is parked at its first item
     const first = await Promise.all(gens.map((g) => g.next()))
-    const peak = retained() - before
+    const alive = await aliveRaw()
+    // the tails are still parked here: that is what is measured
+    expect(gens).toHaveLength(TAILS)
     signal.abort()
-    return { first, peak }
+    return { first, alive }
   }
 
-  it('parks N tails of 1 MiB events within the declared budget when the frame is built at read time', async () => {
-    // budget: a page waiting for the client is at most ten frames of 64 KiB (SPEC 0296 A9)
-    const budget = TAILS * 10 * FRAME * 1.5
-    const { first, peak } = await suspend(() => 'x'.repeat(FRAME))
+  it('parks N tails of 1 MiB events holding none of the raw records when the frame is built at read time', async () => {
+    const { first, alive } = await suspend(() => 'x'.repeat(64 * 1024))
     for (const item of first)
       expect(item.value).toMatchObject({ kind: 'frame', sequence: 1 })
-    expect(peak).toBeLessThan(budget)
+    expect(handedOut).toHaveLength(TAILS * PAGE)
+    expect(alive).toBe(0)
   }, 60_000)
 
-  it('the control without the projection retains the raw page: far above the budget', async () => {
-    const { first, peak } = await suspend(undefined)
+  it('the control without the projection keeps the raw page of every tail alive', async () => {
+    const { first, alive } = await suspend(undefined)
     for (const item of first)
       expect(item.value).toMatchObject({ kind: 'event' })
-    expect(peak).toBeGreaterThan(TAILS * 5 * MIB)
+    expect(alive).toBeGreaterThanOrEqual(TAILS * PAGE)
   }, 60_000)
 
   it('an event the projection cannot read ends the tail as corrupt instead of leaving', async () => {

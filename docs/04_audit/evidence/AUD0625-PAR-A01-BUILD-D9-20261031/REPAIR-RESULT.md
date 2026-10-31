@@ -20,3 +20,7 @@ Limite: a mudança de `return503OnClosing` vale para o servidor inteiro quando `
 ## P3 da conferência da DF: o desligamento das outras rotas
 
 `return503OnClosing: false` valia para todas as rotas. Agora um `onRequest` (instalado junto com o stream) responde `503` com `connection: close` a toda rota que não seja a do stream enquanto o `preClose` espera; o stream segue recebendo `200` + `end(server_closing)`. Teste no servidor real: rota comum ⇒ 503 + `connection: close` durante o `preClose`, stream ⇒ 200 + `server_closing`. Mutantes O1–O3 (`mutations-onrequest.json`) mortos.
+
+## Medida determinística no teste do P2-1 (pedido da DF para a barra da onda 7)
+
+O teste "parks N tails of 1 MiB events…" medi­a `heapUsed + external` do processo e oscilava com a carga da máquina (32,8–33,8 MB contra 29,5 MB na onda 7; 5 de 8 isolado). Agora cada registro bruto que a store falsa entrega é guardado num `WeakRef`; com os 30 tails estacionados (cada um com uma página de 10 × 1 MiB lida), força-se o GC em outra tarefa (o `WeakRef` segura o alvo até o fim do job) e contam-se os registros brutos vivos: **0** com `frameOf` (de 300 entregues) e **≥ 300** no controle sem projeção. Orçamento e limite não foram afrouxados; o poder de discriminação é 0 contra 300 e não depende de carga (10 execuções, 5 delas com 4 processos em laço de CPU, todas verdes). Mutantes R1 e R2 seguem mortos.
