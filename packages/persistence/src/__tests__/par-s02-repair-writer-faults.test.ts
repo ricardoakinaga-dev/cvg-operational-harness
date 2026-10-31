@@ -35,6 +35,8 @@ interface Fault {
   readonly match: RegExp
   readonly error: Error & { code?: string }
   times: number
+  /** Matching statements that go through untouched before the fault starts. */
+  skip?: number
 }
 const faults: Fault[] = []
 const fail = (code: string) =>
@@ -47,7 +49,8 @@ const faultyPool = (real: any) => ({
         if (property === 'query')
           return async (text: string, values?: unknown[]) => {
             const fault = faults.find((f) => f.times > 0 && f.match.test(text))
-            if (fault) {
+            if (fault && (fault.skip ?? 0) > 0) fault.skip! -= 1
+            else if (fault) {
               fault.times -= 1
               throw fault.error
             }
@@ -271,6 +274,53 @@ describe.skipIf(!url)(
       },
       30_000
     )
+
+    it('08006 on the COMMIT of the derived write is a loss of the connection: the writer is refused afterwards, and the append that stored the events already succeeded', async () => {
+      const { w, id } = await seeded(1)
+      try {
+        // the first COMMIT is the canonical one (events); the second is the checkpoint's
+        faults.push({
+          match: /^COMMIT$/,
+          error: fail('08006'),
+          times: 1,
+          skip: 1
+        })
+        expect(await outcome(w.append(next(id)))).toEqual({ ok: true })
+        const head = await admin.query(
+          `SELECT next_sequence-1 AS head FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+          [tenantA, id]
+        )
+        expect(Number(head.rows[0].head)).toBe(8)
+        expect(await outcome(w.append(turns(tenantA, id, 9, 1)))).toEqual({
+          ok: false,
+          name: 'SessionOwnershipLostError'
+        })
+      } finally {
+        await w.close().catch(() => undefined)
+      }
+    }, 30_000)
+
+    it('after a contention failure of the derived write the next canonical append runs on a clean connection (the short lock_timeout does not outlive the transaction)', async () => {
+      const { w, id } = await seeded(1)
+      try {
+        faults.push({ match: CHECKPOINT_WRITE, error: fail('55P03'), times: 1 })
+        expect(await outcome(w.append(next(id)))).toEqual({ ok: true })
+        const setting = await admin.query('SELECT 1')
+        expect(setting.rowCount).toBe(1)
+        // a canonical write that needs more than 250 ms of lock wait still succeeds
+        await admin.query('BEGIN')
+        await admin.query(
+          `SELECT session_id FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2 FOR UPDATE`,
+          [tenantA, id]
+        )
+        const appending = w.append(turns(tenantA, id, 9, 1))
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        await admin.query('ROLLBACK')
+        expect(await outcome(appending)).toEqual({ ok: true })
+      } finally {
+        await w.close().catch(() => undefined)
+      }
+    }, 30_000)
 
     it('an ordinary derived failure (privilege) stays what it was: the cache fails, the writer does not', async () => {
       const { svc, w, id } = await seeded(1)

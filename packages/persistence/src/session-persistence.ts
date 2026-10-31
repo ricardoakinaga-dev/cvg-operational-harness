@@ -696,7 +696,12 @@ class PostgresSessionPersistence implements SessionPersistence {
     error: unknown
   ): void {
     this.#cacheFailures[operation] += 1
-    const code = (error as { code?: unknown } | null)?.code
+    // a wrapped failure (the derived write's timeout) reports the code of its cause
+    const wrapped = error as {
+      code?: unknown
+      cause?: { code?: unknown }
+    } | null
+    const code = wrapped?.code ?? wrapped?.cause?.code
     try {
       this.options.onProjectionCacheFailure?.({
         operation,
@@ -1084,6 +1089,9 @@ class PostgresSessionPersistence implements SessionPersistence {
     })
   }
 }
+
+/** How long a derived write (the projection checkpoint) waits for a locked row before it gives up. */
+const DERIVED_LOCK_TIMEOUT_MS = 250
 
 /** A statement that only waited too long: statement timeout (57014) or lock timeout (55P03). */
 function isContention(error: unknown): boolean {
@@ -1473,6 +1481,12 @@ class PostgresSessionHandle implements SessionHandle {
       await lease.query("SELECT set_config('cvg.tenant_id', $1, true)", [
         this.#s.options.tenantId
       ])
+      // A derived write waits for a contended row only briefly (it runs on the writer's queue and
+      // nothing depends on it): the failure is the `55P03` that `derived` isolates below.
+      if (derived)
+        await lease.query(
+          `SET LOCAL lock_timeout = '${DERIVED_LOCK_TIMEOUT_MS}ms'`
+        )
       value = await body(lease)
     } catch (error) {
       try {

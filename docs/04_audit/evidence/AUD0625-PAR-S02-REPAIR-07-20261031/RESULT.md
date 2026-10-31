@@ -22,5 +22,14 @@ Relatórios: `codex/aud0625-review-s02-{s12,s23,s234}-20261031` (S02-S12-F01, S0
 ## Limites e achados
 
 - O `ROLLBACK` que passou prova que a conexão está viva, não que a transação derivada não deixou rastro: a atomicidade da linha do cache é da própria transação.
-- Uma contenção na linha do cache ainda **atrasa** o escritor até `statement_timeout` de 5 s por tentativa (uma tentativa por K eventos), porque a escrita derivada roda na fila do escritor. Não muda correção; se importar, uma `lock_timeout` curta só para a transação derivada resolve. Fica como P3 para a revisão.
-- **Os testes de PG de sessão (S01, S04 e S02, inclusive os novos) não estão na lista `test:postgres` do `package.json`**, então a barra de PG não os chama; mesma classe do buraco da 0291 que a D9 fechou na onda 6. Não toquei no `package.json` aqui para não conflitar com a onda; o DF decide onde entra.
+- O DF conferiu que os testes de PG de sessão rodam nos gates de unidade e de cobertura (o `verify.yml` define `TEST_DATABASE_URL` no nível do job e os testes usam `describe.skipIf(!url)`); a lista `test:postgres` é só um acréscimo explícito. Não há buraco; nada a mudar no `package.json`.
+
+## Acréscimo: `lock_timeout` curto só na transação derivada (pedido do DF)
+
+A escrita do checkpoint roda na fila do escritor; com a linha do cache travada ela atrasava o turno até o `statement_timeout` de 5 s. Agora `#transaction(..., derived = true)` faz
+`SET LOCAL lock_timeout = '250ms'` (constante `DERIVED_LOCK_TIMEOUT_MS`) depois dos `SET LOCAL` padrão; o `55P03` resultante é o caminho derivado do F03. Escrita canônica
+mantém os 5 s. O registro de falha do cache passou a reportar o `code` da causa quando a falha vem embrulhada (`55P03`).
+
+- Testes (`par-s02-repair-writer`, PG real): com a linha do cache travada por outra conexão, o append custa bem menos de 2,5 s (medido na casa de 300 ms), `writeFailures` sobe em 1, o registro traz `code: '55P03'` e o append seguinte e o `flush` passam (a posse fica); uma escrita **canônica** com a linha do fluxo travada por 1 s ainda espera e passa (a restrição curta é só da derivada).
+- Mutantes (`mutations-lock-timeout.json`): sem o `SET LOCAL` (L-1), limite de 4000 ms (L-2), limite curto para toda escrita (L-3) e sem o `code` da causa (L-4): 4/4 mortos.
+- Ataques pedidos pela Codex (`par-s02-repair-writer-faults`): `08006` no COMMIT da escrita derivada (o append que gravou os eventos já devolveu sucesso e o log está em 8; a posse é perdida e o append seguinte é recusado) e a conexão depois de uma falha derivada por contenção: o `SET LOCAL lock_timeout` não sobrevive à transação, e uma escrita canônica seguinte que espera mais de 250 ms pelo bloqueio passa. Regressão S01/S04/S02 em PG real depois do `lock_timeout`: 17 arquivos, 334 testes.

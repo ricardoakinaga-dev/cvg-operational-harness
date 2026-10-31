@@ -177,6 +177,64 @@ describe.skipIf(!url)(
         await w.close()
       }
     })
+    // Derived writes wait for a locked row briefly (SET LOCAL lock_timeout): the append that finds
+    // the cache row held by someone else costs a fraction of a second, not the statement timeout.
+    it('a locked cache row costs the append well under the 5 s statement timeout, and keeps the writer', async () => {
+      const { svc, w, id } = await seeded(1)
+      let locked = false
+      try {
+        await admin.query('BEGIN')
+        locked = true
+        await admin.query(
+          `SELECT session_id FROM ${schema}.session_projection_checkpoints WHERE tenant_id=$1 AND session_id=$2 FOR UPDATE`,
+          [tenantA, id]
+        )
+        const before = svc.projectionCacheStats().writeFailures
+        const started = Date.now()
+        await w.append(turns(tenantA, id, 5, 1))
+        const elapsed = Date.now() - started
+        await admin.query('ROLLBACK')
+        locked = false
+        expect(elapsed).toBeLessThan(2500)
+        expect(svc.projectionCacheStats().writeFailures).toBe(before + 1)
+        expect(cacheFailures.at(-1)).toMatchObject({
+          operation: 'write',
+          sessionId: id,
+          code: '55P03'
+        })
+        // the owner is still the owner: the next append goes through
+        await w.append(turns(tenantA, id, 9, 1))
+        await w.flush()
+      } finally {
+        if (locked) await admin.query('ROLLBACK')
+        await w.close().catch(() => undefined)
+      }
+    }, 30_000)
+
+    // The short wait is the derived write's only: a canonical write keeps the 5 s lock timeout.
+    it('a canonical write still waits for a row held longer than the derived limit', async () => {
+      const { w, id } = await seeded(1)
+      let locked = false
+      try {
+        await admin.query('BEGIN')
+        locked = true
+        await admin.query(
+          `SELECT session_id FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2 FOR UPDATE`,
+          [tenantA, id]
+        )
+        const started = Date.now()
+        const appending = w.append(turns(tenantA, id, 5, 1))
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        await admin.query('ROLLBACK')
+        locked = false
+        await appending
+        expect(Date.now() - started).toBeGreaterThanOrEqual(900)
+      } finally {
+        if (locked) await admin.query('ROLLBACK')
+        await w.close().catch(() => undefined)
+      }
+    }, 30_000)
+
     it('a cache-row lock timeout after the event commit must not poison the canonical writer after rollback', async () => {
       const { svc, w, id } = await seeded(1)
       let locked = false
