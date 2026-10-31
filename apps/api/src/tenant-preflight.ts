@@ -92,7 +92,8 @@ const tenantIsolationMigrationVersions = [
   '0029_case_assignment_authorization',
   '0030_api_creation_receipts',
   '0031_channel_effect_retry_not_before',
-  '0033_complete_tool_result_journal'
+  '0033_complete_tool_result_journal',
+  '0035_runtime_approval_origin'
 ] as const
 
 const tenantIsolationRequiredConstraints = [

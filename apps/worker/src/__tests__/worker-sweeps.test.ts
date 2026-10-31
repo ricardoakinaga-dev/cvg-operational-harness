@@ -70,7 +70,8 @@ describe('AAA-19 periodic sweeps', () => {
     expect(result).toMatchObject({
       journalReleased: 1,
       approvalsReleased: 2,
-      approvalsUncertain: 1
+      approvalsUncertain: 1,
+      spillPurged: 0
     })
     await expect(journal.get(tenantId, 'op-sweep-191')).resolves.toMatchObject({
       state: 'ABANDONED'
@@ -83,6 +84,28 @@ describe('AAA-19 periodic sweeps', () => {
       })
     )
     expect(approvals.list).toHaveBeenCalledWith(tenantId)
+  })
+
+  it('SPEC 0293 sweeps expired stored tool output in the same tick and reports it', async () => {
+    const now = new Date('2026-10-30T00:00:00.000Z')
+    const journal = {
+      get: vi.fn(),
+      releaseExpired: vi.fn(async () => 0)
+    } as unknown as EffectJournalPort
+    const approvals = createFakeApprovals({ released: 0, uncertain: 0 })
+    const purgeExpired = vi.fn(async () => 7)
+    const recording = createRecordingTelemetry()
+    const runner = createPeriodicSweepRunner({
+      approvals: approvals.engine,
+      effectJournal: journal,
+      tenantId,
+      clock: () => now,
+      spill: { purgeExpired },
+      telemetry: recording.telemetry
+    })
+    await expect(runner.runOnce()).resolves.toMatchObject({ spillPurged: 7 })
+    expect(purgeExpired).toHaveBeenCalledTimes(1)
+    expect(recording.metrics).toContain('worker_sweep_spill_purged_total')
   })
 
   it('invokes both sweeps on a timer and stops cleanly', async () => {

@@ -18,6 +18,11 @@ export interface SweepTickPorts {
   tenantId: string
   reservationTtlMs?: number
   clock?: () => Date
+  /**
+   * SPEC 0293 D4: removes stored tool output whose validity has ended, for every
+   * tenant (a `PostgresSpillSweeper` connected as a `cvg_spill_sweeper` member).
+   */
+  spill?: { purgeExpired(): Promise<number> }
 }
 
 export interface SweepTickResult {
@@ -25,6 +30,7 @@ export interface SweepTickResult {
   journalReleased: number
   approvalsReleased: number
   approvalsUncertain: number
+  spillPurged: number
 }
 
 /**
@@ -47,11 +53,13 @@ export async function runSweepTick(
     now,
     ttlMs
   })
+  const spillPurged = ports.spill ? await ports.spill.purgeExpired() : 0
   return {
     now: now.toISOString(),
     journalReleased,
     approvalsReleased: approvals.released,
-    approvalsUncertain: approvals.uncertain
+    approvalsUncertain: approvals.uncertain,
+    spillPurged
   }
 }
 
@@ -103,6 +111,9 @@ export function createPeriodicSweepRunner(
       result.approvalsReleased,
       { status: 'released' }
     )
+    telemetry.metric('worker_sweep_spill_purged_total', result.spillPurged, {
+      status: 'purged'
+    })
     telemetry.metric(
       'worker_sweep_approvals_uncertain_total',
       result.approvalsUncertain,

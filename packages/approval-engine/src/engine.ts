@@ -203,6 +203,16 @@ export class ApprovalEngine {
         : {}),
       ...(request.proposalPayload !== undefined
         ? { proposalPayload: cloneValue(request.proposalPayload) }
+        : {}),
+      ...(request.origin !== undefined
+        ? {
+            origin: {
+              conversationId: request.origin.conversationId,
+              ...(request.origin.sessionId !== undefined
+                ? { sessionId: request.origin.sessionId }
+                : {})
+            }
+          }
         : {})
     }
     this.#store.insert(record)

@@ -47,6 +47,7 @@ import type {
   GovernedDecisionInput
 } from '@cvg/harness-orchestrator'
 import { DefaultContextEngine } from './context-engine.ts'
+import type { SpillComposition } from './spill/composition.ts'
 import { DeterministicCompletionEvaluator } from './completion.ts'
 import { decisionSignature, detectDecisionCycle } from './loop-detection.ts'
 import { sealCheckpoint } from './step-store.ts'
@@ -124,6 +125,8 @@ export interface IterativeGovernedRuntimeOptions {
   readonly log?: KernelLog
   readonly effects?: EffectLedger
   readonly sandbox?: SandboxGate
+  /** SPEC 0293: where large tool output goes; absent = shown as `armazenado=não`. */
+  readonly spill?: SpillComposition
 }
 
 /** Services the iterative mode needs from the kernel (no single-pass planner). */
@@ -1602,6 +1605,7 @@ export class IterativeGovernedRuntime {
       trust: Observation['trust']
       payload: unknown
       summary: string
+      rendering?: Observation['rendering']
       provenance: Observation['provenance']
     }
   ): Observation {
@@ -1615,6 +1619,7 @@ export class IterativeGovernedRuntime {
       trust: input.trust,
       payload: boundedPayload(input.payload, this.maxObservationPayloadChars),
       summary: input.summary.slice(0, 500),
+      ...(input.rendering ? { rendering: input.rendering } : {}),
       provenance: input.provenance,
       timestamp: this.clock().toISOString()
     }
