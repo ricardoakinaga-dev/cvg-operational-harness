@@ -1,6 +1,9 @@
 export {
+  createHostProbe,
   detectSandboxCapabilities,
   hostProbe,
+  LANDLOCK_MIN_ABI,
+  probeLandlockAbiWith,
   type SandboxCapabilities,
   type SandboxProbe
 } from './capabilities.ts'
@@ -31,7 +34,28 @@ export {
 export { confinePath } from './confine.ts'
 export {
   createProcessContainmentProfile,
+  LANDLOCK_HELPER_DESTINATION,
+  landlockRulesFor,
   type ProcessContainmentProfile,
   type ProcessContainmentOptions,
   type ProcessRuntimeFile
 } from './process-profile.ts'
+export {
+  createProcessService,
+  type ProcessServiceOptions
+} from './process-service/service.ts'
+export type {
+  ProcessCause,
+  ProcessChunk,
+  ProcessInput,
+  ProcessCleanup,
+  ProcessConsumer,
+  ProcessDisposeReport,
+  ProcessHandle,
+  ProcessLandlockReport,
+  ProcessLaunchRequest,
+  ProcessLimits,
+  ProcessOutcome,
+  ProcessService
+} from './process-service/types.ts'
+export { ProcessServiceError } from './process-service/errors.ts'

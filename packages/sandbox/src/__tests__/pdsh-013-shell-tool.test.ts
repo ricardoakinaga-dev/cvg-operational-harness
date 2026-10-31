@@ -263,6 +263,22 @@ describe('PDSH-013 shell execution mapping (SPEC 0198 §4)', () => {
     expect(result.output).toMatchObject({ exitCode: 1, stderr: 'no match' })
   })
 
+  it('maps a runner-reported cancellation to FAILED with an uncertain effect (PAR-X01)', async () => {
+    const root = tempWorkspace()
+    const { tool } = probeTool(root, {
+      exitCode: 'cancelled',
+      stdout: '',
+      stderr: '',
+      truncated: false
+    })
+    const result = await tool.execute(
+      { argv: ['true'], intent: 'x' },
+      context(root)
+    )
+    expect(result.status).toBe('FAILED')
+    expect(JSON.stringify(result)).toContain('effect_uncertain')
+  })
+
   it('maps spawn_failed to FAILED (containment failure, never an exit code)', async () => {
     const root = tempWorkspace()
     const { tool } = probeTool(root, {

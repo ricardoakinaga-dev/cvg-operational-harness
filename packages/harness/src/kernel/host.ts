@@ -52,6 +52,7 @@ export class KernelHost {
   readonly #listeners: ListenerTable = {
     'turn/before-step': [],
     'model/before-call': [],
+    'model/overflow': [],
     'tool/pre-execute': [],
     'tool/execute': [],
     'tool/post-execute': [],

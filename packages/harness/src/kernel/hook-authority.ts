@@ -22,6 +22,10 @@ type CoreHookMap = {
     state: ModelCallState,
     next: Next<KernelGate>
   ) => Promise<KernelGate>
+  'model/overflow': (
+    state: ModelCallState,
+    next: Next<KernelGate>
+  ) => Promise<KernelGate>
   'tool/pre-execute': (
     state: ToolCallState,
     next: Next<KernelGate>

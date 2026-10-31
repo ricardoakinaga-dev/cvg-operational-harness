@@ -67,6 +67,9 @@ jobs:
       # an unprivileged user namespace. The hosted runner ships neither, so
       # those tests skipped and the skip-governance gate failed on them. The
       # AppArmor relaxation applies only to this ephemeral runner VM.
+      # SPEC 0288 (PAR-X02): the Landlock helper is built from the repository
+      # source as the tests build it, and the runner must answer ABI >= 3, so a
+      # kernel without Landlock fails here instead of late in the unit gate.
       - name: Enable sandbox host capabilities
         run: |
           sudo apt-get update -qq
@@ -75,6 +78,11 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           bwrap --unshare-all --ro-bind / / true
+          helper="$RUNNER_TEMP/cvg-landlock-exec"
+          cc -static -O2 -Wall -Wextra -Werror -o "$helper" packages/sandbox/native/cvg-landlock-exec.c
+          abi=$("$helper" --probe --status-fd 3 3>&1 >/dev/null | sed -n 's/^{"abi":\([0-9]*\)}$/\1/p')
+          echo "Landlock ABI on this runner: ${abi:-none}"
+          test "${abi:-0}" -ge 3
 
       - name: Initialize candidate/run bar
         id: gate_runtime

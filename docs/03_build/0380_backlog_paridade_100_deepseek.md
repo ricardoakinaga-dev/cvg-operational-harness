@@ -421,6 +421,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Condensação com requisição de modelo sob pressão de tokens, nova tentativa após overflow, preservando fatos, obrigações e aprovações.
 - Depende de: PAR-M01, PAR-K03.
 - Aceite: Aprovação pendente e obrigação aberta sobrevivem à compactação (teste por fato); overflow não chega ao provider sem compactar antes; compactação cancelada não grava resumo.
+- Acompanhamento aceito pelo Ricardo (recibo `human-decisions-24`, desvios 1–4 da SPEC 0290): (a) esquema de eventos de sessão v2 com `pinnedDigest`, `model` e `usage` no payload de `context/compacted` (hoje só no resultado entregue a `onCompacted`) e o pedido de compactação no log do kernel (`purpose: COMPACTION` no enum); (b) `maxTokens` no `ModelRequest` para limitar a saída do resumo (hoje 4000 caracteres); (c) fatiamento do prefixo quando ele não cabe na janela (hoje recusa). Não bloqueia a C01; depende de mudança de esquema/contrato (T3) e do espelho do SDK Python. Nota 0290c: `throughSequence` passa a ser a sequência do log por porta do anfitrião ([0290c](../02_spec/0290c_through_sequence_note.md)).
 
 ### PAR-C02 — Pressão de tokens antes do dispatch
 

@@ -28,7 +28,7 @@ export interface ShellRunRequest {
 }
 
 export interface ShellRunResult {
-  readonly exitCode: number | 'timeout' | 'spawn_failed'
+  readonly exitCode: number | 'timeout' | 'spawn_failed' | 'cancelled'
   readonly stdout: string
   readonly stderr: string
   readonly truncated: boolean
@@ -366,6 +366,10 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
       }
       if (result.exitCode === 'timeout') {
         return failed(`command timed out after ${timeoutMs}ms`)
+      }
+      if (result.exitCode === 'cancelled') {
+        // Cancelled without the caller's signal: the end was requested elsewhere; the effect is unknown.
+        return failed('effect_uncertain: cleanup_incomplete after cancellation')
       }
       return succeeded({
         exitCode: result.exitCode,

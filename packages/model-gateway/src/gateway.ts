@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { DataClassification } from '@cvg/shared'
+import { estimateInputTokens, type DataClassification } from '@cvg/shared'
 import {
   ModelGatewayRequestSchema,
   type ModelGatewayEvent,
@@ -43,6 +43,11 @@ import {
 } from './prompt-registry.ts'
 import { ModelRouter, type ModelRoutingOptions } from './router.ts'
 import { renderGovernedInput } from './prompt-binding.ts'
+import {
+  frozenProviderRequest,
+  frozenRequestIdentity,
+  freezeRequestParts
+} from './frozen-request.ts'
 import { assembleProviderStream, type StreamProgress } from './stream.ts'
 
 export interface ModelGatewayOptions {
@@ -64,6 +69,12 @@ export interface ModelGatewayOptions {
   maxOutputChars?: number
   /** PDSH-024: per-turn meter fed with each successful call's usage. */
   meter?: TokenMeter
+  /**
+   * SPEC 0289 D1-A, off by default: put the canonical request bytes in
+   * `model.call.started`. The bytes are request content, so enable it only
+   * with an event sink that is protected per tenant and has a retention.
+   */
+  recordFrozenRequests?: boolean
 }
 
 export interface GenerateRequest<
@@ -113,6 +124,7 @@ export class ModelGateway {
   readonly #defaultTimeoutMs: number
   readonly #maxOutputChars: number
   readonly #meter?: TokenMeter
+  readonly #recordFrozenRequests: boolean
 
   constructor(options: ModelGatewayOptions) {
     for (const provider of options.providers) {
@@ -143,6 +155,7 @@ export class ModelGateway {
     this.#defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000
     this.#maxOutputChars = options.maxOutputChars ?? 32_000
     if (options.meter) this.#meter = options.meter
+    this.#recordFrozenRequests = options.recordFrozenRequests === true
     this.#budgetLimits = options.budget?.limits ?? {}
     if (options.budget) {
       this.#budget = new BudgetGuard({
@@ -305,7 +318,8 @@ export class ModelGateway {
     ) {
       throw new ModelGatewayError(
         'invalid_request',
-        `Request does not fit the context window of profile ${profile.name}`
+        `Request does not fit the context window of profile ${profile.name}`,
+        { reason: 'context_window' }
       )
     }
 
@@ -362,6 +376,27 @@ export class ModelGateway {
     const circuitKey = `${provider.id}:${profile.model}`
     const timeoutMs =
       request.timeoutMs ?? profile.timeoutMs ?? this.#defaultTimeoutMs
+    // SPEC 0289: the request the adapter receives is built and frozen once per
+    // candidate (own copies of `metadata` and `promptBinding`), and its identity
+    // is computed from those frozen parts. A write by an adapter cannot reach a
+    // retry or the fallback.
+    const frozenParts = freezeRequestParts({
+      requestId: request.requestId,
+      tenantId: request.tenantId,
+      correlationId: request.correlationId,
+      model: profile.model,
+      input: rendered.input,
+      temperature: profile.temperature,
+      maxTokens: request.maxTokens ?? profile.maxTokens,
+      promptSha256: prompt.sha256,
+      promptBinding: rendered.binding,
+      ...(structuredOutput
+        ? { structuredSchemaName: structuredOutput.schemaName }
+        : {}),
+      timeoutMs,
+      ...(request.metadata ? { metadata: request.metadata } : {})
+    })
+    const frozenIdentity = frozenRequestIdentity(frozenParts)
     const maxRetries = profile.maxRetries
     const attemptsAllowed = Math.max(1, maxRetries + 1)
     let attempt = 0
@@ -404,27 +439,16 @@ export class ModelGateway {
         model: profile.model,
         profile: profile.name,
         attempt,
-        projectedInputTokens
+        projectedInputTokens,
+        requestSha256: frozenIdentity.sha256,
+        requestBytes: frozenIdentity.bytes,
+        ...(this.#recordFrozenRequests
+          ? { frozenRequest: frozenIdentity.canonical }
+          : {})
       })
 
       try {
-        const providerRequest = {
-          requestId: request.requestId,
-          tenantId: request.tenantId,
-          correlationId: request.correlationId,
-          model: profile.model,
-          input: rendered.input,
-          temperature: profile.temperature,
-          maxTokens: request.maxTokens ?? profile.maxTokens,
-          promptSha256: prompt.sha256,
-          promptBinding: rendered.binding,
-          ...(structuredOutput
-            ? { structuredSchemaName: structuredOutput.schemaName }
-            : {}),
-          signal,
-          timeoutMs,
-          ...(request.metadata ? { metadata: request.metadata } : {})
-        }
+        const providerRequest = frozenProviderRequest(frozenParts, signal)
         const providerResult: ProviderResult = profile.streaming
           ? await this.#runStream(
               provider,
@@ -839,14 +863,11 @@ function conservativeUsage(
  * one). An estimate for pressure and the window check, never a measurement.
  */
 function projectInputTokens(input: ModelInput): number {
-  const bytes =
-    Buffer.byteLength(input.system ?? '', 'utf8') +
-    input.messages.reduce(
-      (total, message) => total + Buffer.byteLength(message.content, 'utf8'),
-      0
-    )
-  const framed = input.messages.length + (input.system ? 1 : 0)
-  return Math.ceil(bytes / 4) + 4 * framed
+  // the system prompt counts as one framed part, as the shared estimator does
+  return estimateInputTokens([
+    ...(input.system ? [input.system] : []),
+    ...input.messages.map((message) => message.content)
+  ])
 }
 
 function completionDetail(

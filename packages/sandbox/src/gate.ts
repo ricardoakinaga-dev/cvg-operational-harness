@@ -135,10 +135,14 @@ export function createLocalSandboxGate(
               unavailable('partial: IN_PROCESS (host sem contenção)')
             )
           }
-          if (options.requireLandlock && !capabilities.landlock) {
+          // SPEC 0288 D-D: Landlock is per process and irreversible; it can
+          // never be applied to a tool running inside the harness.
+          if (options.requireLandlock) {
             return fail(
               input,
-              unavailable('partial: IN_PROCESS (Landlock ausente)')
+              unavailable(
+                'partial: IN_PROCESS (Landlock ausente: não se aplica a ferramenta em processo)'
+              )
             )
           }
           return grant(
@@ -149,9 +153,8 @@ export function createLocalSandboxGate(
               allowSubprocess: false,
               ...(timeoutMs !== undefined ? { deadlineMs: timeoutMs } : {})
             },
-            capabilities.landlock
-              ? undefined
-              : 'sem Landlock; allowlist do canal é a defesa'
+            // SPEC 0288 XL07: in-process tools never run under Landlock.
+            'Landlock não se aplica em processo; allowlist do canal é a defesa'
           )
         }
         case 'WORKSPACE': {
@@ -169,10 +172,12 @@ export function createLocalSandboxGate(
               )
             )
           }
-          if (options.requireLandlock && !capabilities.landlock) {
+          if (options.requireLandlock) {
             return fail(
               input,
-              unavailable('partial: WORKSPACE (Landlock ausente)')
+              unavailable(
+                'partial: WORKSPACE (Landlock ausente: não se aplica a ferramenta em processo)'
+              )
             )
           }
           return grant(
@@ -184,9 +189,7 @@ export function createLocalSandboxGate(
               allowSubprocess: false,
               ...(timeoutMs !== undefined ? { deadlineMs: timeoutMs } : {})
             },
-            capabilities.landlock
-              ? undefined
-              : 'sem Landlock; allowlist verificável do workspace é a defesa'
+            'Landlock não se aplica em processo; allowlist verificável do workspace é a defesa'
           )
         }
         case 'PROCESS': {
@@ -200,6 +203,15 @@ export function createLocalSandboxGate(
             return fail(
               input,
               unavailable('partial: PROCESS (bubblewrap ausente)')
+            )
+          }
+          // SPEC 0288: in PROCESS the helper applies the ruleset; without a
+          // helper-confirmed ABI at or above the floor, a required Landlock is
+          // refused rather than promised.
+          if (options.requireLandlock && !capabilities.landlock) {
+            return fail(
+              input,
+              unavailable('partial: PROCESS (Landlock ausente)')
             )
           }
           return grant(input, 'PROCESS', {
