@@ -314,7 +314,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 | PAR-S07 | Formatos novos e export/import versionado      | M    | P2    | `TODO`        | PAR-S02          |
 | PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `DONE`        | PAR-M01, PAR-K03 |
 | PAR-C02 | Pressão de tokens antes do dispatch            | P    | P1    | `TODO`        | PAR-M01          |
-| PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `TODO`        | PAR-S01          |
+| PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `DONE`        | PAR-S01          |
 | PAR-C04 | Descarregamento de imagens antigas             | M    | P2    | `TODO`        | PAR-C03, PAR-M03 |
 | PAR-D01 | Storage de domínio tipado sobre PostgreSQL     | M    | P2    | `TODO`        | PAR-S01          |
 
@@ -439,7 +439,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-C03 — Spill de saídas grandes e poda de resultados
 
-- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `DONE` (escopo local/CI, onda 6 mesclada em #37 `0ab1f0d96`; produção `NO_GO`).
 - Origem: G1/SPILL-01, SPILL-02, COMP-03; G2/SH-04. Absorve: P100-021; SPEC0224.
 - Hoje: Saídas truncadas em 1 MiB sem arquivo de continuação; spill só proposto na SPEC0224.
 - Entrega: Armazenamento de texto grande com localizador opaco, prévia de cabeça e cauda e poda de resultado de ferramenta.
