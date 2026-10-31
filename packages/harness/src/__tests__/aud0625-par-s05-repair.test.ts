@@ -126,6 +126,15 @@ describe('F07: inheritance with the origin in a fork child', () => {
       reason: 'source_unavailable',
       subject: { kind: 'session', id: 'child' }
     })
+    // and none of its links is published as original: the cut that would say so is unknown
+    const sessions = out.links.flatMap((l) =>
+      l.kind === 'event' ? [l.sessionId] : []
+    )
+    expect(sessions).not.toContain('child')
+    expect(new Set(sessions)).toEqual(new Set(['parent']))
+    expect(
+      out.links.filter((l) => l.kind === 'event' && l.inherited).length
+    ).toBe(0)
     expect(out.gaps.map((g) => g.reason)).not.toContain(
       'multiple_event_candidates'
     )

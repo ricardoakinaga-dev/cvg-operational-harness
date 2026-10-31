@@ -800,7 +800,13 @@ describe('the error matrix (SPEC 0295 §5.4)', () => {
       reason: 'source_unavailable',
       subject: { kind: 'sessions', id: 'listing' }
     })
-    expect(t.links.filter((l) => l.kind === 'event')).toHaveLength(3)
+    // without the listing the cut of the hinted session is unknown: its links are not published
+    // as original (Q7/Q8/Q9); the gap says which session and why
+    expect(t.links.filter((l) => l.kind === 'event')).toHaveLength(0)
+    expect(t.gaps).toContainEqual({
+      reason: 'source_unavailable',
+      subject: { kind: 'session', id: 'sess-a' }
+    })
   })
 
   it('an abort is a rejection with the reason, never a gap', async () => {

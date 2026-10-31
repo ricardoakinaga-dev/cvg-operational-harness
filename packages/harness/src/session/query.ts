@@ -505,7 +505,9 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
         links.push(link)
         return true
       }
-      for (const c of classified) {
+      // A link whose inheritance cannot be sustained is not published: the gap above says why,
+      // and `inherited: false` would claim an original the cut could not confirm (Q7/Q8/Q9).
+      for (const c of classified.filter((c) => !unknown.has(c.sessionId))) {
         if (
           !push({
             kind: 'event',
