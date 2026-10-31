@@ -6,14 +6,16 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { SessionEvent } from '@cvg/harness-contracts'
 import * as harness from '@cvg/harness'
 import { materializeSessionEvent } from '@cvg/harness'
-import { runSessionEventMigrations } from '../session-events.ts'
+import { runSessionProjectionMigrations } from '../session-events.ts'
 import {
   createPgPhysicalSessionPool,
-  createPostgresSessionPersistence
+  createPostgresSessionPersistence,
+  verifyProjectionCache
 } from '../session-persistence.ts'
 
-// PAR-S02 phase 1 (SPEC 0292): the cost control is live; the `it.fails` bodies specify the
-// checkpointed projection service. The markers come off in BUILD, never replaced by a weaker check.
+// PAR-S02 (SPEC 0292): the phase-1 witnesses of the checkpointed projection service, green since
+// slice 2. Slice 2 has no writer-side checkpoint yet, so the tests that need one store it with
+// `seedCheckpoint`; assertions are unchanged (see SLICE2-RESULT).
 const url = process.env.TEST_DATABASE_URL
 if (!url && process.env.PAR_S01_PG_REQUIRED === '1')
   throw new Error('PAR-S02 requires its own disposable TEST_DATABASE_URL')
@@ -46,11 +48,18 @@ const countingPool = () => ({
     return client
   }
 })
+const cacheFailures: { operation: string; sessionId: string }[] = []
 const service = (tenantId = tenantA) =>
   createPostgresSessionPersistence(
     createPgPhysicalSessionPool({ connectionString: roleUrl }),
     countingPool() as never,
-    { tenantId, schemaName: schema, maxOpenWriters: 4, acquireTimeoutMs: 3000 }
+    {
+      tenantId,
+      schemaName: schema,
+      maxOpenWriters: 4,
+      acquireTimeoutMs: 3000,
+      onProjectionCacheFailure: (f) => cacheFailures.push(f)
+    }
   ).then((r) => r.service as any)
 const mk = (
   tenantId: string,
@@ -102,13 +111,64 @@ async function seeded(count: number, tenantId = tenantA) {
   return { svc, w, id, events }
 }
 
+/**
+ * Slice 2 has no writer-side trigger yet (slice 3): the checkpoint a test needs is stored the way
+ * the owner of the stream will store it, from the pure projection of the first `through` events,
+ * by the migration authority (no session is open, so the stream guard lets it in).
+ */
+async function seedCheckpoint(
+  id: string,
+  events: SessionEvent[],
+  through: number,
+  tenantId = tenantA,
+  patch: (row: ReturnType<typeof api.sessionCheckpointRow>) => unknown = (r) =>
+    r
+) {
+  const head = await admin.query(
+    `SELECT header_json FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+    [tenantId, id]
+  )
+  const point = await admin.query(
+    `SELECT input_digest FROM ${schema}.session_events WHERE tenant_id=$1 AND session_id=$2 AND sequence=$3`,
+    [tenantId, id, through]
+  )
+  const row = patch(
+    api.sessionCheckpointRow(
+      api.projectSession(events.slice(0, through)),
+      head.rows[0].header_json,
+      point.rows[0].input_digest
+    )
+  ) as ReturnType<typeof api.sessionCheckpointRow>
+  await admin.query("SELECT set_config('cvg.tenant_id', $1, false)", [tenantId])
+  await admin.query(
+    `INSERT INTO ${schema}.session_projection_checkpoints
+       (tenant_id,session_id,projection_id,projection_version,through_sequence,tail_input_digest,header_digest,state,state_digest)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)
+     ON CONFLICT (tenant_id,session_id,projection_id) DO UPDATE SET
+       projection_version=EXCLUDED.projection_version, through_sequence=EXCLUDED.through_sequence,
+       tail_input_digest=EXCLUDED.tail_input_digest, header_digest=EXCLUDED.header_digest,
+       state=EXCLUDED.state, state_digest=EXCLUDED.state_digest`,
+    [
+      tenantId,
+      id,
+      api.SESSION_PROJECTION_ID,
+      row.projectionVersion,
+      row.throughSequence,
+      row.tailInputDigest,
+      row.headerDigest,
+      JSON.stringify(row.state),
+      row.stateDigest
+    ]
+  )
+}
+
 describe.skipIf(!url)(
   'PAR-S02 phase 1: projections with checkpoint cache',
   () => {
     beforeAll(async () => {
       admin = new Client({ connectionString: url })
       await admin.connect()
-      await runSessionEventMigrations(admin, { schemaName: schema })
+      await runSessionProjectionMigrations(admin, { schemaName: schema })
       await admin.query(
         `CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT PASSWORD '${password}'`
       )
@@ -121,6 +181,10 @@ describe.skipIf(!url)(
       )
       await admin.query(
         `GRANT SELECT ON ${schema}.schema_migrations TO ${role}`
+      )
+      // the owner of a stream writes its checkpoint (slice 3); a reader only needs SELECT
+      await admin.query(
+        `GRANT SELECT, INSERT, UPDATE ON ${schema}.session_projection_checkpoints TO ${role}`
       )
       const u = new URL(url!)
       u.username = role
@@ -146,123 +210,680 @@ describe.skipIf(!url)(
       await reader.close()
     })
 
-    it.fails(
-      'first projection is a rebuild equal to the pure projection of the whole log',
-      async () => {
-        const { svc, w, id, events } = await seeded(10)
-        await w.close()
-        const result = await svc.project(id)
-        expect(result.origin).toBe('rebuild')
-        expect(result.projection).toEqual(api.projectSession(events))
-      }
-    )
-
-    it.fails(
-      'after the writer closes, the next projection comes from the checkpoint and reads at most the tail row',
-      async () => {
-        const { svc, w, id, events } = await seeded(50)
-        await w.close()
-        await svc.project(id)
-        rowsFetched = 0
-        const again = await svc.project(id)
-        expect(again.origin).toBe('cache')
-        expect(rowsFetched).toBeLessThanOrEqual(1)
-        expect(again.projection).toEqual(api.projectSession(events))
-      }
-    )
-
-    it.fails(
-      'events appended after the checkpoint are folded incrementally, reading only the tail',
-      async () => {
-        const { svc, w, id, events } = await seeded(50)
-        await w.close()
-        await svc.project(id)
-        const again = await svc.open(id, 'write')
-        const tail = turns(tenantA, id, events.length + 1, 1)
-        await again.append(tail)
-        await again.close()
-        rowsFetched = 0
-        const result = await svc.project(id)
-        expect(result.origin).toBe('incremental')
-        expect(rowsFetched).toBeLessThanOrEqual(tail.length + 1)
-        expect(result.projection).toEqual(
-          api.projectSession([...events, ...tail])
-        )
-      }
-    )
-
-    it.fails(
-      'a tampered checkpoint is never served: its state digest fails and the projection is rebuilt',
-      async () => {
-        const { svc, w, id, events } = await seeded(20)
-        await w.close()
-        await svc.project(id)
-        await admin.query(
-          `UPDATE ${schema}.session_projection_checkpoints SET state = jsonb_set(state, '{turns,total}', '99') WHERE session_id=$1`,
-          [id]
-        )
-        const result = await svc.project(id)
-        expect(result.origin).toBe('rebuild')
-        expect(result.projection).toEqual(api.projectSession(events))
-      }
-    )
-
-    it.fails(
-      'a checkpoint of another projection version is ignored',
-      async () => {
-        const { svc, w, id } = await seeded(20)
-        await w.close()
-        await svc.project(id)
-        await admin.query(
-          `UPDATE ${schema}.session_projection_checkpoints SET projection_version = projection_version + 1 WHERE session_id=$1`,
-          [id]
-        )
-        expect((await svc.project(id)).origin).toBe('rebuild')
-      }
-    )
-
-    it.fails(
-      'checkpoints never cross tenants, even for the same session id',
-      async () => {
-        const a = await seeded(5, tenantA)
-        await a.w.close()
-        await a.svc.project(a.id)
-        const svcB = await service(tenantB)
-        await expect(svcB.project(a.id)).rejects.toMatchObject({
-          name: 'SessionPersistenceNotFoundError'
-        })
-        const rows = await admin.query(
-          `SELECT tenant_id FROM ${schema}.session_projection_checkpoints WHERE session_id=$1`,
-          [a.id]
-        )
-        expect(rows.rows.map((r) => r.tenant_id)).toEqual([tenantA])
-      }
-    )
-
-    it.fails(
-      'a cache that cannot be read or written never fails the projection',
-      async () => {
-        const { svc, w, id, events } = await seeded(10)
-        await w.close()
-        await svc.project(id)
-        await admin.query(
-          `REVOKE ALL ON ${schema}.session_projection_checkpoints FROM ${role}`
-        )
-        const result = await svc.project(id)
-        expect(result.origin).toBe('rebuild')
-        expect(result.projection).toEqual(api.projectSession(events))
-      }
-    )
-
-    it.fails('the stored checkpoint holds no message text', async () => {
-      const { svc, w, id } = await seeded(5)
+    it('first projection is a rebuild equal to the pure projection of the whole log', async () => {
+      const { svc, w, id, events } = await seeded(10)
       await w.close()
-      await svc.project(id)
+      const result = await svc.project(id)
+      expect(result.origin).toBe('rebuild')
+      expect(result.projection).toEqual(api.projectSession(events))
+    })
+
+    it('after the writer closes, the next projection comes from the checkpoint and reads at most the tail row', async () => {
+      const { svc, w, id, events } = await seeded(50)
+      await w.close()
+      await seedCheckpoint(id, events, events.length)
+      rowsFetched = 0
+      const again = await svc.project(id)
+      expect(again.origin).toBe('cache')
+      expect(rowsFetched).toBeLessThanOrEqual(1)
+      expect(again.projection).toEqual(api.projectSession(events))
+    })
+
+    it('events appended after the checkpoint are folded incrementally, reading only the tail', async () => {
+      const { svc, w, id, events } = await seeded(50)
+      await w.close()
+      await seedCheckpoint(id, events, events.length)
+      const again = await svc.open(id, 'write')
+      const tail = turns(tenantA, id, events.length + 1, 1)
+      await again.append(tail)
+      await again.close()
+      rowsFetched = 0
+      const result = await svc.project(id)
+      expect(result.origin).toBe('incremental')
+      expect(rowsFetched).toBeLessThanOrEqual(tail.length + 1)
+      expect(result.projection).toEqual(
+        api.projectSession([...events, ...tail])
+      )
+    })
+
+    it('a tampered checkpoint is never served: its state digest fails and the projection is rebuilt', async () => {
+      const { svc, w, id, events } = await seeded(20)
+      await w.close()
+      await seedCheckpoint(id, events, events.length)
+      await admin.query(
+        `UPDATE ${schema}.session_projection_checkpoints SET state = jsonb_set(state, '{turns,total}', '99') WHERE session_id=$1`,
+        [id]
+      )
+      const result = await svc.project(id)
+      expect(result.origin).toBe('rebuild')
+      expect(result.projection).toEqual(api.projectSession(events))
+    })
+
+    it('a checkpoint of another projection version is ignored', async () => {
+      const { svc, w, id, events } = await seeded(20)
+      await w.close()
+      await seedCheckpoint(id, events, events.length)
+      await admin.query(
+        `UPDATE ${schema}.session_projection_checkpoints SET projection_version = projection_version + 1 WHERE session_id=$1`,
+        [id]
+      )
+      expect((await svc.project(id)).origin).toBe('rebuild')
+    })
+
+    it('checkpoints never cross tenants, even for the same session id', async () => {
+      const a = await seeded(5, tenantA)
+      await a.w.close()
+      await seedCheckpoint(a.id, a.events, a.events.length, tenantA)
+      const svcB = await service(tenantB)
+      await expect(svcB.project(a.id)).rejects.toMatchObject({
+        name: 'SessionPersistenceNotFoundError'
+      })
+      const rows = await admin.query(
+        `SELECT tenant_id FROM ${schema}.session_projection_checkpoints WHERE session_id=$1`,
+        [a.id]
+      )
+      expect(rows.rows.map((r) => r.tenant_id)).toEqual([tenantA])
+    })
+
+    it('a cache that cannot be read or written never fails the projection', async () => {
+      const { svc, w, id, events } = await seeded(10)
+      await w.close()
+      await seedCheckpoint(id, events, events.length)
+      await admin.query(
+        `REVOKE ALL ON ${schema}.session_projection_checkpoints FROM ${role}`
+      )
+      try {
+        const result = await svc.project(id)
+        expect(result.origin).toBe('rebuild')
+        expect(result.projection).toEqual(api.projectSession(events))
+      } finally {
+        // teardown for the tests that follow: the role gets its cache grants back
+        await admin.query(
+          `GRANT SELECT, INSERT, UPDATE ON ${schema}.session_projection_checkpoints TO ${role}`
+        )
+      }
+    })
+
+    it('the stored checkpoint holds no message text', async () => {
+      const { w, id, events } = await seeded(5)
+      await w.close()
+      await seedCheckpoint(id, events, events.length)
       const rows = await admin.query(
         `SELECT state::text AS s FROM ${schema}.session_projection_checkpoints WHERE session_id=$1`,
         [id]
       )
       expect(rows.rows[0].s).not.toContain('PATIENT-')
+    })
+
+    describe('slice 2: the service, the checks and the cache guards (SPEC 0292 PJ04-PJ10)', () => {
+      const header = (id: string) => ({
+        version: 1 as const,
+        id,
+        createdAt: 1_700_000_000_000,
+        isSeeded: false
+      })
+      const asAdmin = async (tenantId = tenantA) => {
+        await admin.query("SELECT set_config('cvg.tenant_id', $1, false)", [
+          tenantId
+        ])
+      }
+      /** Stores `patch(row)` bypassing the guard triggers, to plant what the guard would refuse. */
+      const plant = async (
+        id: string,
+        patch: (row: Record<string, unknown>) => Record<string, unknown>,
+        tenantId = tenantA
+      ) => {
+        await asAdmin(tenantId)
+        const current = await admin.query(
+          `SELECT * FROM ${schema}.session_projection_checkpoints WHERE tenant_id=$1 AND session_id=$2`,
+          [tenantId, id]
+        )
+        const next = patch(current.rows[0])
+        const client = new Client({ connectionString: url })
+        await client.connect()
+        try {
+          await client.query('SET session_replication_role = replica')
+          await client.query("SELECT set_config('cvg.tenant_id', $1, false)", [
+            tenantId
+          ])
+          await client.query(
+            `UPDATE ${schema}.session_projection_checkpoints
+                SET through_sequence=$3, tail_input_digest=$4, header_digest=$5, projection_version=$6
+              WHERE tenant_id=$1 AND session_id=$2`,
+            [
+              tenantId,
+              id,
+              next.through_sequence,
+              next.tail_input_digest,
+              next.header_digest,
+              next.projection_version
+            ]
+          )
+        } finally {
+          await client.end()
+        }
+      }
+
+      it('PJ04: the three origins equal the projection rebuilt from zero, and the check finds nothing', async () => {
+        const { svc, w, id, events } = await seeded(30)
+        await w.close()
+        const rebuilt = await svc.project(id)
+        expect(rebuilt).toMatchObject({ origin: 'rebuild', cache: 'absent' })
+        // the cache only advances: first a checkpoint behind the head, then one at it
+        await seedCheckpoint(id, events, 40)
+        const incremental = await svc.project(id)
+        expect(incremental).toMatchObject({
+          origin: 'incremental',
+          cache: 'hit'
+        })
+        expect(incremental.projection).toEqual(rebuilt.projection)
+        expect(incremental.throughSequence).toBe(events.length)
+        expect(await verifyProjectionCache(svc, id)).toEqual([])
+        await seedCheckpoint(id, events, events.length)
+        const cached = await svc.project(id)
+        expect(cached).toMatchObject({ origin: 'cache', cache: 'hit' })
+        expect(cached.projection).toEqual(rebuilt.projection)
+        expect(await verifyProjectionCache(svc, id)).toEqual([])
+      })
+
+      it('PJ05: a rebuild reads the whole log, an incremental one the tail and the point, a cached one the point', async () => {
+        const { svc, w, id, events } = await seeded(40)
+        await w.close()
+        rowsFetched = 0
+        await svc.project(id)
+        expect(rowsFetched).toBe(events.length)
+        await seedCheckpoint(id, events, events.length - 8)
+        rowsFetched = 0
+        await svc.project(id)
+        expect(rowsFetched).toBe(8 + 1)
+        await seedCheckpoint(id, events, events.length)
+        rowsFetched = 0
+        await svc.project(id)
+        expect(rowsFetched).toBe(1)
+      })
+
+      it.each([
+        [
+          'the point event has another digest',
+          (r: any) => ({ ...r, tail_input_digest: 'e'.repeat(64) })
+        ],
+        [
+          'the stream header differs',
+          (r: any) => ({ ...r, header_digest: 'e'.repeat(64) })
+        ],
+        [
+          'the checkpoint is beyond the log',
+          (r: any) => ({ ...r, through_sequence: 9999 })
+        ],
+        [
+          'the checkpoint names a position that is another event',
+          (r: any) => ({ ...r, through_sequence: 3 })
+        ]
+      ])(
+        'PJ06: %s, so the log is read and the cache is not served',
+        async (_name, change) => {
+          const { svc, w, id, events } = await seeded(20)
+          await w.close()
+          await seedCheckpoint(id, events, events.length)
+          await plant(id, change as never)
+          const result = await svc.project(id)
+          expect(result).toMatchObject({ origin: 'rebuild', cache: 'invalid' })
+          expect(result.projection).toEqual(api.projectSession(events))
+          expect(await verifyProjectionCache(svc, id)).toContain(
+            'the checkpoint is invalid and was ignored'
+          )
+        }
+      )
+
+      it('PJ07: the same session id in two tenants keeps two separate checkpoints', async () => {
+        const id = `shared-${++seq}`
+        const results = []
+        for (const tenantId of [tenantA, tenantB]) {
+          const svc = await service(tenantId)
+          const w = await svc.create(header(id))
+          const events = turns(tenantId, id, 1, tenantId === tenantA ? 3 : 7)
+          await w.append(events)
+          await w.close()
+          await seedCheckpoint(id, events, events.length, tenantId)
+          results.push(await svc.project(id))
+        }
+        expect(results.map((r) => r.origin)).toEqual(['cache', 'cache'])
+        expect(results.map((r) => r.projection.throughSequence)).toEqual([
+          12, 28
+        ])
+        // the owner role sees every tenant: one row per tenant, each with its own position
+        const rows = await admin.query(
+          `SELECT tenant_id, through_sequence FROM ${schema}.session_projection_checkpoints WHERE session_id=$1 ORDER BY tenant_id`,
+          [id]
+        )
+        expect(
+          rows.rows.map((r) => [r.tenant_id, Number(r.through_sequence)])
+        ).toEqual([
+          [tenantA, 12],
+          [tenantB, 28]
+        ])
+      })
+
+      it('PJ07: the row level security of the cache holds for the serving role, in both directions', async () => {
+        const id = `rls-${++seq}`
+        const events: Record<string, SessionEvent[]> = {}
+        for (const tenantId of [tenantA, tenantB]) {
+          const svc = await service(tenantId)
+          const w = await svc.create(header(id))
+          events[tenantId] = turns(tenantId, id, 1, 2)
+          await w.append(events[tenantId]!)
+          await w.close()
+          await seedCheckpoint(id, events[tenantId]!, 8, tenantId)
+        }
+        const client = await basePool.connect()
+        try {
+          const seen = async (tenantId: string) => {
+            await client.query('BEGIN')
+            await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
+              tenantId
+            ])
+            const r = await client.query(
+              `SELECT tenant_id FROM ${schema}.session_projection_checkpoints WHERE session_id=$1`,
+              [id]
+            )
+            await client.query('ROLLBACK')
+            return r.rows.map((x) => x.tenant_id)
+          }
+          expect(await seen(tenantA)).toEqual([tenantA])
+          expect(await seen(tenantB)).toEqual([tenantB])
+          expect(await seen('tenant-synthetic-C')).toEqual([])
+          await client.query('BEGIN')
+          await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
+            tenantB
+          ])
+          await expect(
+            client.query(
+              `UPDATE ${schema}.session_projection_checkpoints SET created_at = now() WHERE session_id=$1 AND tenant_id=$2`,
+              [id, tenantA]
+            )
+          ).resolves.toMatchObject({ rowCount: 0 })
+          await client.query('ROLLBACK')
+        } finally {
+          client.release()
+        }
+      })
+
+      it('PJ08: an unreadable cache is counted and reported, and an observer that throws changes nothing', async () => {
+        const { svc, w, id, events } = await seeded(10)
+        await w.close()
+        await seedCheckpoint(id, events, events.length)
+        const before = svc.projectionCacheStats()
+        cacheFailures.length = 0
+        await admin.query(
+          `REVOKE ALL ON ${schema}.session_projection_checkpoints FROM ${role}`
+        )
+        try {
+          const result = await svc.project(id)
+          expect(result).toMatchObject({
+            origin: 'rebuild',
+            cache: 'unavailable'
+          })
+          expect(svc.projectionCacheStats().readFailures).toBe(
+            before.readFailures + 1
+          )
+          expect(cacheFailures).toEqual([
+            { operation: 'read', sessionId: id, code: '42501' }
+          ])
+          expect(await verifyProjectionCache(svc, id)).toContain(
+            'the checkpoint cache cannot be read'
+          )
+        } finally {
+          await admin.query(
+            `GRANT SELECT, INSERT, UPDATE ON ${schema}.session_projection_checkpoints TO ${role}`
+          )
+        }
+        const noisy = await createPostgresSessionPersistence(
+          createPgPhysicalSessionPool({ connectionString: roleUrl }),
+          countingPool() as never,
+          {
+            tenantId: tenantA,
+            schemaName: schema,
+            maxOpenWriters: 2,
+            acquireTimeoutMs: 3000,
+            onProjectionCacheFailure: () => {
+              throw new Error('observer broke')
+            }
+          }
+        )
+        await admin.query(
+          `REVOKE SELECT ON ${schema}.session_projection_checkpoints FROM ${role}`
+        )
+        try {
+          expect((await (noisy.service as any).project(id)).origin).toBe(
+            'rebuild'
+          )
+        } finally {
+          await admin.query(
+            `GRANT SELECT, INSERT, UPDATE ON ${schema}.session_projection_checkpoints TO ${role}`
+          )
+        }
+      })
+
+      it('PJ08: a schema without the checkpoint table projects from the log', async () => {
+        const bare = `pars02b_${suffix}`
+        const { runSessionEventMigrations } =
+          await import('../session-events.ts')
+        await runSessionEventMigrations(admin, { schemaName: bare })
+        try {
+          await admin.query(`GRANT USAGE ON SCHEMA ${bare} TO ${role}`)
+          await admin.query(
+            `GRANT SELECT, INSERT ON ${bare}.session_events, ${bare}.session_streams TO ${role}`
+          )
+          await admin.query(
+            `GRANT UPDATE (next_sequence) ON ${bare}.session_streams TO ${role}`
+          )
+          await admin.query(
+            `GRANT SELECT ON ${bare}.schema_migrations TO ${role}`
+          )
+          const svc = (
+            await createPostgresSessionPersistence(
+              createPgPhysicalSessionPool({ connectionString: roleUrl }),
+              countingPool() as never,
+              {
+                tenantId: tenantA,
+                schemaName: bare,
+                maxOpenWriters: 2,
+                acquireTimeoutMs: 3000
+              }
+            )
+          ).service as any
+          const id = `bare-${++seq}`
+          const w = await svc.create(header(id))
+          const events = turns(tenantA, id, 1, 3)
+          await w.append(events)
+          await w.close()
+          const result = await svc.project(id)
+          expect(result).toMatchObject({
+            origin: 'rebuild',
+            cache: 'unavailable'
+          })
+          expect(result.projection).toEqual(api.projectSession(events))
+        } finally {
+          await admin.query(`DROP SCHEMA IF EXISTS ${bare} CASCADE`)
+        }
+      })
+
+      it('SP-G: a consistent but wrong checkpoint is served by project and found by the check', async () => {
+        const { svc, w, id, events } = await seeded(12)
+        await w.close()
+        await seedCheckpoint(id, events, events.length, tenantA, (row) => {
+          const state = JSON.parse(JSON.stringify(row.state))
+          state.turns.total = 99
+          return {
+            ...row,
+            state,
+            stateDigest: api.sessionProjectionStateDigest(state)
+          }
+        })
+        const served = await svc.project(id)
+        expect(served.origin).toBe('cache')
+        expect(served.projection.turns.total).toBe(99)
+        const problems = await verifyProjectionCache(svc, id)
+        expect(problems).toHaveLength(1)
+        expect(problems[0]).toContain('differs from the log rebuilt from zero')
+      })
+
+      it('I2: a log whose turn comes back is refused from zero, accepted by the fold at a cut, and found by the check', async () => {
+        const id = `corrupt-${++seq}`
+        const svc = await service()
+        const w = await svc.create(header(id))
+        const c = (k: string, n: number) => [
+          mk(tenantA, id, n, 'turn/start', k, { correlationId: k }),
+          mk(tenantA, id, n + 1, 'turn/end', k, {
+            correlationId: k,
+            stopReason: 'COMPLETED'
+          })
+        ]
+        const events = [
+          ...c('a', 1),
+          ...c('b', 3),
+          mk(tenantA, id, 5, 'turn/start', 'a', { correlationId: 'a' })
+        ]
+        await w.append(events)
+        await w.close()
+        await expect(svc.project(id)).rejects.toMatchObject({
+          name: 'SessionPersistenceCorruptionError'
+        })
+        await seedCheckpoint(id, events, 4)
+        const folded = await svc.project(id)
+        expect(folded.origin).toBe('incremental')
+        const problems = await verifyProjectionCache(svc, id)
+        expect(problems).toHaveLength(1)
+        expect(problems[0]).toContain('interleaved')
+      })
+
+      it('PJ10: a fork projects like its source up to the cut, without the cache, and a compaction event is just folded', async () => {
+        const { svc, w, id, events } = await seeded(6)
+        await w.close()
+        await seedCheckpoint(id, events, events.length)
+        const child = await svc.fork(id, header(`child-${id}`))
+        const cut = child.inheritedEventCount
+        expect(cut).toBe(events.length)
+        await child.close()
+        const forked = await svc.project(`child-${id}`)
+        expect(forked.origin).toBe('rebuild')
+        expect(forked.projection).toEqual(
+          api.projectSession(events.slice(0, cut))
+        )
+        const again = await svc.open(id, 'write')
+        const marker = mk(
+          tenantA,
+          id,
+          events.length + 1,
+          'context/compacted',
+          'cmp',
+          {
+            throughSequence: 3,
+            summary: 'PATIENT-SUMMARY',
+            sourceDigest: 'a'.repeat(64),
+            strategyVersion: 'v1'
+          }
+        )
+        await again.append([marker])
+        await again.close()
+        const result = await svc.project(id)
+        expect(result.origin).toBe('incremental')
+        expect(result.projection).toEqual(
+          api.projectSession([...events, marker])
+        )
+        expect(result.projection.compaction).toMatchObject({
+          count: 1,
+          throughSequence: 3
+        })
+        expect(result.projection.turns.completed).toBe(6)
+        expect(JSON.stringify(result.projection)).not.toContain('PATIENT-')
+      })
+
+      it('a checkpoint that cannot continue the log is ignored and the log decides (rebuild, not an error)', async () => {
+        const { svc, w, id, events } = await seeded(1)
+        await w.close()
+        // digests are consistent but the state claims the open turn already ended: the tail's
+        // own turn/end would be its second one
+        await seedCheckpoint(id, events, 2, tenantA, (row) => {
+          const state = JSON.parse(JSON.stringify(row.state))
+          state.open.endCount = 1
+          state.open.end = { stopReason: 'COMPLETED', sequence: 2 }
+          return {
+            ...row,
+            state,
+            stateDigest: api.sessionProjectionStateDigest(state)
+          }
+        })
+        const result = await svc.project(id)
+        expect(result).toMatchObject({ origin: 'rebuild', cache: 'invalid' })
+        expect(result.projection).toEqual(api.projectSession(events))
+      })
+
+      it('a hole in the pages of the log is corruption, never a shorter projection', async () => {
+        const { w, id } = await seeded(3)
+        await w.close()
+        const holey = {
+          connect: async () => {
+            const client = await basePool.connect()
+            const query = client.query.bind(client) as (
+              ...a: unknown[]
+            ) => Promise<any>
+            ;(client as any).query = async (...a: unknown[]) => {
+              const result = await query(...a)
+              if (/sequence>=/.test(String(a[0])) && result.rows.length > 2)
+                return { ...result, rows: result.rows.slice(0, -1) }
+              return result
+            }
+            return client
+          }
+        }
+        const svc = (
+          await createPostgresSessionPersistence(
+            createPgPhysicalSessionPool({ connectionString: roleUrl }),
+            holey as never,
+            {
+              tenantId: tenantA,
+              schemaName: schema,
+              maxOpenWriters: 2,
+              acquireTimeoutMs: 3000
+            }
+          )
+        ).service as any
+        await expect(svc.project(id)).rejects.toMatchObject({
+          name: 'SessionPersistenceCorruptionError',
+          message: expect.stringContaining('gap')
+        })
+      })
+
+      it('the cache table keeps row level security forced, and an aborted request never gets a cached answer', async () => {
+        const flags = await admin.query(
+          `SELECT relrowsecurity AS on, relforcerowsecurity AS forced FROM pg_class
+            WHERE oid = to_regclass($1)`,
+          [`${schema}.session_projection_checkpoints`]
+        )
+        expect(flags.rows).toEqual([{ on: true, forced: true }])
+        const { svc, w, id, events } = await seeded(3)
+        await w.close()
+        await seedCheckpoint(id, events, events.length)
+        const abort = new AbortController()
+        abort.abort()
+        await expect(
+          svc.project(id, { signal: abort.signal })
+        ).rejects.toMatchObject({
+          name: 'AbortError'
+        })
+        expect((await svc.project(id)).origin).toBe('cache')
+      })
+
+      it('refuses a missing session, a bad id and a request that is already aborted', async () => {
+        const svc = await service()
+        await expect(svc.project('no-such-session')).rejects.toMatchObject({
+          name: 'SessionPersistenceNotFoundError'
+        })
+        await expect(svc.project('')).rejects.toMatchObject({
+          name: 'SessionHeaderValidationError'
+        })
+        const abort = new AbortController()
+        abort.abort()
+        await expect(
+          svc.project('p1', { signal: abort.signal })
+        ).rejects.toMatchObject({
+          name: 'AbortError'
+        })
+      })
+
+      it('the cache guard: only the owner writes, only a real point, never backwards, never beyond the log', async () => {
+        const { svc, w, id, events } = await seeded(6)
+        await w.close()
+        await seedCheckpoint(id, events, 12)
+        const head = await admin.query(
+          `SELECT header_json FROM ${schema}.session_streams WHERE session_id=$1 AND tenant_id=$2`,
+          [id, tenantA]
+        )
+        const point = async (n: number) =>
+          (
+            await admin.query(
+              `SELECT input_digest FROM ${schema}.session_events WHERE session_id=$1 AND tenant_id=$2 AND sequence=$3`,
+              [id, tenantA, n]
+            )
+          ).rows[0]?.input_digest as string
+        const write = async (
+          n: number,
+          digest: string,
+          headerDigest: string
+        ) => {
+          await asAdmin()
+          const row = api.sessionCheckpointRow(
+            api.projectSession(events.slice(0, Math.min(n, events.length))),
+            head.rows[0].header_json,
+            digest
+          )
+          return admin.query(
+            `UPDATE ${schema}.session_projection_checkpoints
+                SET through_sequence=$3, tail_input_digest=$4, header_digest=$5, state=$6::jsonb, state_digest=$7
+              WHERE tenant_id=$1 AND session_id=$2`,
+            [
+              tenantA,
+              id,
+              n,
+              digest,
+              headerDigest,
+              JSON.stringify(row.state),
+              row.stateDigest
+            ]
+          )
+        }
+        const headerDigest = api.sessionHeaderDigest(head.rows[0].header_json)
+        await expect(write(11, await point(11), headerDigest)).rejects.toThrow(
+          /only advances/
+        )
+        await expect(write(18, 'c'.repeat(64), headerDigest)).rejects.toThrow(
+          /point differs/
+        )
+        await expect(
+          write(18, await point(18), 'c'.repeat(64))
+        ).rejects.toThrow(/header differs/)
+        await expect(write(9999, 'c'.repeat(64), headerDigest)).rejects.toThrow(
+          /beyond the log/
+        )
+        await expect(
+          write(18, await point(18), headerDigest)
+        ).resolves.toBeDefined()
+        // another writer owns the stream: its checkpoint is not for anyone else to write
+        const owner = await svc.open(id, 'write')
+        try {
+          const rival = new Client({ connectionString: url })
+          await rival.connect()
+          try {
+            await rival.query("SELECT set_config('cvg.tenant_id', $1, false)", [
+              tenantA
+            ])
+            await expect(
+              rival.query(
+                `UPDATE ${schema}.session_projection_checkpoints SET created_at = now() WHERE session_id=$1`,
+                [id]
+              )
+            ).rejects.toThrow(/owned by another writer/)
+          } finally {
+            await rival.end()
+          }
+        } finally {
+          await owner.close()
+        }
+        await expect(
+          admin.query(`TRUNCATE ${schema}.session_projection_checkpoints`)
+        ).rejects.toThrow(/not truncated in bulk/)
+        // a checkpoint needs its stream
+        await asAdmin()
+        await expect(
+          admin.query(
+            `INSERT INTO ${schema}.session_projection_checkpoints
+               (tenant_id,session_id,projection_id,projection_version,through_sequence,tail_input_digest,header_digest,state,state_digest)
+             VALUES ($1,'no-such-stream','x',1,1,$2,$2,'{}'::jsonb,$2)`,
+            [tenantA, 'a'.repeat(64)]
+          )
+        ).rejects.toThrow()
+      })
     })
   }
 )

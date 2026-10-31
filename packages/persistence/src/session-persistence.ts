@@ -13,6 +13,9 @@ import type {
   SessionHeaderV1,
   SessionPersistence,
   SessionPersistenceForkOptions,
+  SessionProjection,
+  SessionProjectionCacheState,
+  SessionProjectionResult,
   SessionResume,
   SessionPersistenceOptions
 } from '@cvg/harness-contracts'
@@ -36,6 +39,10 @@ import {
   SessionForkRefusedError,
   analyzeSessionLog,
   checkSessionFork,
+  SESSION_PROJECTION_ID,
+  foldSessionProjection,
+  judgeSessionCheckpoint,
+  projectSession,
   planSessionFork,
   materializeSessionEvent,
   sessionEventInputDigest,
@@ -77,6 +84,22 @@ export interface PostgresSessionPersistenceOptions {
   /** Declared by the composition; saturation refuses without a partial claim. */
   readonly maxOpenWriters: number
   readonly acquireTimeoutMs?: number
+  /**
+   * SPEC 0292 I8: called, without any message text, each time the projection cache cannot be read
+   * or written. The failure never fails a projection, an append, a flush or a close; this is how
+   * it stays visible. Errors thrown by the callback are ignored.
+   */
+  readonly onProjectionCacheFailure?: (failure: {
+    readonly operation: 'read' | 'write'
+    readonly sessionId: string
+    readonly code?: string
+  }) => void
+}
+
+/** Counters of the projection cache, for the composition and for `verifyProjectionCache`. */
+export interface SessionProjectionCacheStats {
+  readonly readFailures: number
+  readonly writeFailures: number
 }
 
 interface StreamRow {
@@ -623,6 +646,239 @@ class PostgresSessionPersistence implements SessionPersistence {
       await handle.close().catch(() => undefined)
       throw error
     }
+  }
+
+  #cacheFailures = { read: 0, write: 0 }
+  projectionCacheStats(): SessionProjectionCacheStats {
+    return {
+      readFailures: this.#cacheFailures.read,
+      writeFailures: this.#cacheFailures.write
+    }
+  }
+  #cacheFailed(
+    operation: 'read' | 'write',
+    sessionId: string,
+    error: unknown
+  ): void {
+    this.#cacheFailures[operation] += 1
+    const code = (error as { code?: unknown } | null)?.code
+    try {
+      this.options.onProjectionCacheFailure?.({
+        operation,
+        sessionId,
+        ...(typeof code === 'string' ? { code } : {})
+      })
+    } catch {
+      // a failing observer must not turn a cache failure into a request failure
+    }
+  }
+
+  /**
+   * SPEC 0292 §4. One REPEATABLE READ transaction reads the stream, the checkpoint and the part of
+   * the log it needs. An intact checkpoint at the head is `cache`; one behind the head is folded
+   * with the validated tail (`incremental`); anything else reads the whole log through the same
+   * validation as `read` and projects it (`rebuild`). Nothing is written.
+   */
+  async project(
+    id: string,
+    projectOptions: SessionPersistenceOptions = {}
+  ): Promise<SessionProjectionResult> {
+    if (typeof id !== 'string' || id.length === 0 || id.length > 200)
+      throw new SessionHeaderValidationError('Invalid session id')
+    const signal = projectOptions.signal
+    if (signal?.aborted) throw abortError()
+    const schema = quote(this.options.schemaName)
+    const tenant = this.options.tenantId
+    let client: PostgresPoolClient
+    try {
+      client = await this.readPool.connect()
+    } catch (cause) {
+      throw new SessionStorageUnavailableError(
+        'Session database unavailable',
+        id,
+        { cause }
+      )
+    }
+    let releaseError: Error | undefined
+    try {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+      await client.query("SET LOCAL statement_timeout = '5s'")
+      await client.query("SELECT set_config('cvg.tenant_id', $1, true)", [
+        tenant
+      ])
+      const stream = await client.query<StreamRow>(
+        `SELECT writer_lock_id, header_json, inherited_event_count, next_sequence, format_version
+           FROM ${schema}.session_streams WHERE tenant_id=$1 AND session_id=$2`,
+        [tenant, id]
+      )
+      const row = stream.rows[0]
+      if (!row)
+        throw new SessionPersistenceNotFoundError('Session not found', id)
+      const meta = parseStream(row, id)
+      let cache: SessionProjectionCacheState = 'absent'
+      const checkpoint = await this.#readCheckpoint(client, id, meta)
+      if (checkpoint.state === 'valid') {
+        try {
+          const result = await this.#fromCheckpoint(
+            client,
+            id,
+            meta.head,
+            checkpoint.projection,
+            checkpoint.pointDigest
+          )
+          if (result) {
+            await client.query('COMMIT')
+            return result
+          }
+          cache = 'invalid'
+        } catch (error) {
+          // a checkpoint that does not continue the log is not served: the log decides
+          if (!(error instanceof SessionPersistenceCorruptionError)) throw error
+          cache = 'invalid'
+        }
+      } else cache = checkpoint.state
+      if (signal?.aborted) throw abortError()
+      const events = await this.#readRange(client, id, 1, meta.head)
+      const projection = projectSession(events)
+      await client.query('COMMIT')
+      return {
+        projection,
+        origin: 'rebuild',
+        throughSequence: projection.throughSequence,
+        cache
+      }
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {
+        releaseError = new Error('Session projection cleanup failed')
+      })
+      if (error instanceof SessionPersistenceError || isAbort(error))
+        throw error
+      throw new SessionStorageUnavailableError(
+        'Session projection failed',
+        id,
+        { cause: error }
+      )
+    } finally {
+      client.release(releaseError)
+    }
+  }
+
+  /** The checkpoint row, judged. A read that fails is counted and logged, never raised. */
+  async #readCheckpoint(
+    client: PostgresPoolClient,
+    id: string,
+    meta: { headerText: string; head: number }
+  ): Promise<
+    | { state: 'absent' | 'invalid' | 'unavailable' }
+    | { state: 'valid'; projection: SessionProjection; pointDigest: string }
+  > {
+    const schema = quote(this.options.schemaName)
+    let found
+    try {
+      await client.query('SAVEPOINT projection_cache')
+      found = await client.query<{
+        projection_version: number
+        through_sequence: string
+        tail_input_digest: string
+        header_digest: string
+        state: unknown
+        state_digest: string
+      }>(
+        `SELECT projection_version, through_sequence, tail_input_digest, header_digest, state, state_digest
+           FROM ${schema}.session_projection_checkpoints
+          WHERE tenant_id=$1 AND session_id=$2 AND projection_id=$3`,
+        [this.options.tenantId, id, SESSION_PROJECTION_ID]
+      )
+      await client.query('RELEASE SAVEPOINT projection_cache')
+    } catch (error) {
+      await client.query('ROLLBACK TO SAVEPOINT projection_cache')
+      this.#cacheFailed('read', id, error)
+      return { state: 'unavailable' }
+    }
+    const row = found.rows[0]
+    if (!row) return { state: 'absent' }
+    const verdict = judgeSessionCheckpoint(
+      {
+        projectionVersion: row.projection_version,
+        throughSequence: Number(row.through_sequence),
+        tailInputDigest: row.tail_input_digest,
+        headerDigest: row.header_digest,
+        state: row.state,
+        stateDigest: row.state_digest
+      },
+      meta
+    )
+    if (!verdict.ok) return { state: 'invalid' }
+    return {
+      state: 'valid',
+      projection: verdict.projection,
+      pointDigest: row.tail_input_digest
+    }
+  }
+
+  /**
+   * `cache` or `incremental` from a checkpoint the pure judgement accepted, or `undefined` when
+   * the event at its point is not the one it names. Reads the point event and the tail only.
+   */
+  async #fromCheckpoint(
+    client: PostgresPoolClient,
+    id: string,
+    head: number,
+    checkpoint: SessionProjection,
+    pointDigest: string
+  ): Promise<SessionProjectionResult | undefined> {
+    const schema = quote(this.options.schemaName)
+    const point = await client.query<{ input_digest: string }>(
+      `SELECT input_digest FROM ${schema}.session_events WHERE tenant_id=$1 AND session_id=$2 AND sequence=$3`,
+      [this.options.tenantId, id, checkpoint.throughSequence]
+    )
+    if (point.rows[0]?.input_digest !== pointDigest) return undefined
+    if (checkpoint.throughSequence === head)
+      return {
+        projection: checkpoint,
+        origin: 'cache',
+        throughSequence: head,
+        cache: 'hit'
+      }
+    const tail = await this.#readRange(
+      client,
+      id,
+      checkpoint.throughSequence + 1,
+      head
+    )
+    const projection = foldSessionProjection(checkpoint, tail)
+    return {
+      projection,
+      origin: 'incremental',
+      throughSequence: projection.throughSequence,
+      cache: 'hit'
+    }
+  }
+
+  /** Events `from..to` in pages, each one checked like `read` checks it; a hole is corruption. */
+  async #readRange(
+    client: PostgresPoolClient,
+    id: string,
+    from: number,
+    to: number
+  ): Promise<SessionEvent[]> {
+    const schema = quote(this.options.schemaName)
+    const out: SessionEvent[] = []
+    let expected = from
+    while (expected <= to) {
+      const page = await client.query<EventRow>(
+        `SELECT record, input_digest FROM ${schema}.session_events
+          WHERE tenant_id=$1 AND session_id=$2 AND sequence>=$3 AND sequence<$4 ORDER BY sequence ASC`,
+        [this.options.tenantId, id, expected, Math.min(expected + PAGE, to + 1)]
+      )
+      if (page.rows.length !== Math.min(PAGE, to + 1 - expected))
+        throw new SessionPersistenceCorruptionError('Session log has a gap', id)
+      for (const item of page.rows) {
+        out.push(checkEvent(item, id, this.options.tenantId, expected))
+        expected++
+      }
+    }
+    return out
   }
 
   #reserveWriter(): void {
@@ -1505,4 +1761,45 @@ export async function verifySessionFork(
   }
   const [source, child] = [await side(sourceId), await side(childId)]
   return checkSessionFork(source, child)
+}
+
+/**
+ * SPEC 0292 §5. Rebuilds the projection from the whole log through the validated reader and
+ * compares it with what `project` serves, reporting every problem found: a cache that differs,
+ * an invalid or unreadable checkpoint, a log the full analysis refuses (which `fold` may accept),
+ * and cache writes that failed. It is the one operation that validates the prefix behind a
+ * checkpoint (SP-G). An empty list means the cache and the log agree.
+ */
+export async function verifyProjectionCache(
+  service: SessionPersistence & {
+    projectionCacheStats?: () => SessionProjectionCacheStats
+  },
+  id: string
+): Promise<readonly string[]> {
+  const problems: string[] = []
+  let rebuilt: SessionProjection
+  const reader = await service.open(id, 'read')
+  try {
+    const { events } = await reader.read(0)
+    rebuilt = projectSession(events)
+  } catch (error) {
+    if (error instanceof SessionPersistenceCorruptionError)
+      return [`the log does not hold up from zero: ${error.message}`]
+    throw error
+  } finally {
+    await reader.close()
+  }
+  const served = await service.project(id)
+  if (canonicalizeJson(served.projection) !== canonicalizeJson(rebuilt))
+    problems.push(
+      `the projection served from ${served.origin} differs from the log rebuilt from zero`
+    )
+  if (served.cache === 'invalid')
+    problems.push('the checkpoint is invalid and was ignored')
+  if (served.cache === 'unavailable')
+    problems.push('the checkpoint cache cannot be read')
+  const stats = service.projectionCacheStats?.()
+  if (stats && stats.writeFailures > 0)
+    problems.push(`${stats.writeFailures} checkpoint write(s) failed`)
+  return problems
 }

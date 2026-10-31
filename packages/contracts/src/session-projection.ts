@@ -88,3 +88,19 @@ export interface SessionProjection {
   readonly open?: OpenGroup
   readonly closed: ClosedTurns
 }
+
+/** SPEC 0292 §4: where a projection came from, and what the checkpoint cache did for it. */
+export type SessionProjectionOrigin = 'cache' | 'incremental' | 'rebuild'
+export type SessionProjectionCacheState =
+  | 'hit'
+  | 'absent'
+  | 'invalid'
+  | 'unavailable'
+
+export interface SessionProjectionResult {
+  readonly projection: SessionProjection
+  readonly origin: SessionProjectionOrigin
+  readonly throughSequence: number
+  /** `hit` for `cache` and `incremental`; otherwise why the log had to be read whole. */
+  readonly cache: SessionProjectionCacheState
+}
