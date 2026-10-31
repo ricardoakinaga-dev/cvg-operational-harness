@@ -665,7 +665,12 @@ class PostgresSessionPersistence implements SessionPersistence {
     const handle = await this.open(id, 'write', resumeOptions)
     try {
       const { events } = await handle.read(0)
-      return { handle, analysis: analyzeSessionLog(events) }
+      const analysis = analyzeSessionLog(events)
+      // The whole log is in hand for the per-turn analysis (S04): the owner keeps the projection
+      // of it, so that its first checkpoint does not read the log a second time (SPEC 0292 I8).
+      // The reducer is the one that just analysed it, so this cannot refuse what that accepted.
+      writerCapabilities.get(handle)?.seedProjection(projectSession(events))
+      return { handle, analysis }
     } catch (error) {
       await handle.close().catch(() => undefined)
       throw error
@@ -1199,7 +1204,11 @@ class PostgresSessionHandle implements SessionHandle {
         appendInput: (input, digest) =>
           this.#admit(undefined, () => this.#appendInputAtomic(input, digest)),
         read: (afterSequence, limit) =>
-          this.read(afterSequence, limit).then((r) => r.events)
+          this.read(afterSequence, limit).then((r) => r.events),
+        seedProjection: (projection) => {
+          // the owner holds the lock, so the log it just read is the log it has
+          this.#projection ??= projection
+        }
       })
   }
   get header(): SessionHeaderV1 {
@@ -1802,6 +1811,8 @@ interface WriterCapability {
   active(): boolean
   appendInput(input: SessionEventAppend, digest: string): Promise<SessionEvent>
   read(afterSequence: number, limit: number): Promise<readonly SessionEvent[]>
+  /** SPEC 0292 §7 slice 4: hands the owner the projection of the log it has just read whole. */
+  seedProjection(projection: SessionProjection): void
 }
 /** Private: only handles issued by this module's factory are ever in here. */
 const writerCapabilities = new WeakMap<object, WriterCapability>()

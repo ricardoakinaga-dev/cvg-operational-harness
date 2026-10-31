@@ -295,24 +295,24 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 16 cartões, cerca de 141 dias de engenharia (faixa 91–179).
 
-| Cartão  | Título                                         | Tam. | Prio. | Estado | Depende de       |
-| ------- | ---------------------------------------------- | ---- | ----- | ------ | ---------------- |
-| PAR-M01 | Streaming no gateway com um resultado terminal | M    | P0    | `TODO` | PAR-K03          |
-| PAR-M02 | Requisição congelada antes do adaptador        | P    | P2    | `TODO` | PAR-M01          |
-| PAR-M03 | Entrada multimodal de imagem                   | M    | P1    | `TODO` | PAR-M01, PAR-T04 |
-| PAR-M05 | Modelo padrão e seleção por sessão             | P    | P2    | `TODO` | PAR-K05          |
-| PAR-S01 | Persistência pública de sessão entre processos | G    | P0    | `TODO` | PAR-K03          |
-| PAR-S02 | Projeções de sessão com cache                  | M    | P1    | `TODO` | PAR-S01          |
-| PAR-S03 | Estatísticas, esboço de turnos e título        | M    | P2    | `TODO` | PAR-S02          |
-| PAR-S04 | Fork e retomada de sessão                      | M    | P1    | `TODO` | PAR-S01          |
-| PAR-S05 | Consulta de sessões com rastreio               | M    | P1    | `TODO` | PAR-S01          |
-| PAR-S06 | Busca textual nas sessões                      | G    | P2    | `TODO` | PAR-S05          |
-| PAR-S07 | Formatos novos e export/import versionado      | M    | P2    | `TODO` | PAR-S02          |
-| PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `TODO` | PAR-M01, PAR-K03 |
-| PAR-C02 | Pressão de tokens antes do dispatch            | P    | P1    | `TODO` | PAR-M01          |
-| PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `TODO` | PAR-S01          |
-| PAR-C04 | Descarregamento de imagens antigas             | M    | P2    | `TODO` | PAR-C03, PAR-M03 |
-| PAR-D01 | Storage de domínio tipado sobre PostgreSQL     | M    | P2    | `TODO` | PAR-S01          |
+| Cartão  | Título                                         | Tam. | Prio. | Estado        | Depende de       |
+| ------- | ---------------------------------------------- | ---- | ----- | ------------- | ---------------- |
+| PAR-M01 | Streaming no gateway com um resultado terminal | M    | P0    | `TODO`        | PAR-K03          |
+| PAR-M02 | Requisição congelada antes do adaptador        | P    | P2    | `TODO`        | PAR-M01          |
+| PAR-M03 | Entrada multimodal de imagem                   | M    | P1    | `TODO`        | PAR-M01, PAR-T04 |
+| PAR-M05 | Modelo padrão e seleção por sessão             | P    | P2    | `TODO`        | PAR-K05          |
+| PAR-S01 | Persistência pública de sessão entre processos | G    | P0    | `TODO`        | PAR-K03          |
+| PAR-S02 | Projeções de sessão com cache                  | M    | P1    | `IN_PROGRESS` | PAR-S01          |
+| PAR-S03 | Estatísticas, esboço de turnos e título        | M    | P2    | `TODO`        | PAR-S02          |
+| PAR-S04 | Fork e retomada de sessão                      | M    | P1    | `TODO`        | PAR-S01          |
+| PAR-S05 | Consulta de sessões com rastreio               | M    | P1    | `TODO`        | PAR-S01          |
+| PAR-S06 | Busca textual nas sessões                      | G    | P2    | `TODO`        | PAR-S05          |
+| PAR-S07 | Formatos novos e export/import versionado      | M    | P2    | `TODO`        | PAR-S02          |
+| PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `TODO`        | PAR-M01, PAR-K03 |
+| PAR-C02 | Pressão de tokens antes do dispatch            | P    | P1    | `TODO`        | PAR-M01          |
+| PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `TODO`        | PAR-S01          |
+| PAR-C04 | Descarregamento de imagens antigas             | M    | P2    | `TODO`        | PAR-C03, PAR-M03 |
+| PAR-D01 | Storage de domínio tipado sobre PostgreSQL     | M    | P2    | `TODO`        | PAR-S01          |
 
 ### PAR-M01 — Streaming no gateway com um resultado terminal
 
@@ -361,12 +361,13 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-S02 — Projeções de sessão com cache
 
-- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `IN_PROGRESS`.
 - Origem: G1/SESSION-04. Absorve: P100-020.
 - Hoje: Nenhuma projeção de estado atual.
 - Entrega: Projeções reconstruídas do log (estado atual, pendências, metas, todos) com cache de checkpoint.
 - Depende de: PAR-S01.
 - Aceite: Projeção reconstruída do zero é igual à do cache; cada item cita o evento de origem.
+- Execução atual: BUILD local da [SPEC 0292](../02_spec/0292_par_s02_session_projections.md) R1 (recibo 25), em quatro fatias, branch `claude/aud0625-par-s02-build-d9`, ainda sem aceite nem integração: fatia 1 `493e8ed29` (redutor de turnos e projeção pura; aprovada pela Codex em `bb8e460e0`), fatia 2 `8b53c92e8` (migração 0036 opt-in, `project`, `verifyProjectionCache`), fatia 3 `856362113` (o dono do stream grava o checkpoint), fatia 4 (`resumeSession` entrega ao dono a projeção do log que acabou de analisar). Notas [0292b](../02_spec/0292b_checkpoint_guard_and_stops_note.md). Revisão das fatias 2 a 4 pendente. [Evidência](../04_audit/evidence/AUD0625-PAR-S02-D9-20261031/SLICE4-RESULT.md).
 
 ### PAR-S03 — Estatísticas, esboço de turnos e título
 

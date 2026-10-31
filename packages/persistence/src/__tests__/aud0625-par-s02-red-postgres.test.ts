@@ -1231,6 +1231,45 @@ describe.skipIf(!url)(
         expect(Number((await stored(id))?.through_sequence)).toBe(200)
       })
 
+      it('slice 4: a resumed writer already holds the projection of the log it analysed, so its first checkpoint reads nothing', async () => {
+        const id = fresh('w-resume')
+        const slow = await service(tenantA, {
+          projectionCheckpointEvery: 100000
+        })
+        const first = await slow.create(header(id))
+        const events = lines(tenantA, id, 1, 25) // 100 events, no checkpoint
+        await first.append(events)
+        await first.close()
+        const svc = await service(tenantA, { projectionCheckpointEvery: 50 })
+        const more = lines(tenantA, id, 101, 20)
+        // control: a plain open has no projection yet and has to read the log to build one
+        const plain = await svc.open(id, 'write')
+        rowsFetched = 0
+        await plain.append(more.slice(0, 60)) // 100 + 60 events: due
+        expect(rowsFetched).toBeGreaterThan(0)
+        await plain.close()
+        expect(Number((await stored(id))?.through_sequence)).toBe(160)
+        // resumed: the full read for the analysis seeds the owner; nothing is read again
+        const id2 = fresh('w-resume2')
+        const other = await slow.create(header(id2))
+        const events2 = lines(tenantA, id2, 1, 25)
+        await other.append(events2)
+        await other.close()
+        const { handle, analysis } = await svc.resumeSession(id2)
+        expect(analysis.turns).toHaveLength(25)
+        rowsFetched = 0
+        await handle.append(lines(tenantA, id2, 101, 20).slice(0, 60))
+        expect(rowsFetched).toBe(0)
+        expect(Number((await stored(id2))?.through_sequence)).toBe(160)
+        await handle.close()
+        expect((await svc.project(id2)).projection).toEqual(
+          api.projectSession([
+            ...events2,
+            ...lines(tenantA, id2, 101, 20).slice(0, 60)
+          ])
+        )
+      })
+
       it('a fork child is written with the same rule and does not inherit the cache', async () => {
         const id = fresh('w-fork-src')
         const svc = await service(tenantA, { projectionCheckpointEvery: 6 })
