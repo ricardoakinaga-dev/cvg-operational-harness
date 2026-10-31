@@ -23,6 +23,11 @@ import type { PostgresQueryable } from './postgres.ts'
 import { runPostgresMigrations } from './postgres-migrations.ts'
 
 const migrations = ['0028_session_events', '0034_session_writer_ownership']
+/** SPEC 0292: the opt-in checkpoint cache of the session projection, after the two above. */
+const projectionMigrations = [
+  ...migrations,
+  '0036_session_projection_checkpoints'
+]
 function schemaName(raw: string): string {
   if (!/^[a-z][a-z0-9_]{0,62}$/.test(raw))
     throw new SessionEventError(
@@ -39,6 +44,16 @@ export async function runSessionEventMigrations(
   await runPostgresMigrations(client, {
     schemaName: schemaName(options.schemaName),
     migrations
+  })
+}
+/** Run as migration authority in the dedicated schema, after (or together with) the session tables. */
+export async function runSessionProjectionMigrations(
+  client: PostgresQueryable,
+  options: { readonly schemaName: string }
+): Promise<void> {
+  await runPostgresMigrations(client, {
+    schemaName: schemaName(options.schemaName),
+    migrations: projectionMigrations
   })
 }
 interface EventRow {

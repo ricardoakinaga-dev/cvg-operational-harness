@@ -1,4 +1,5 @@
 import type { SessionEvent, SessionJson } from './session-events.ts'
+import type { SessionProjectionResult } from './session-projection.ts'
 
 /** SPEC 0221 + recomposition f64a1b89: first slice (owner, create/open/read/append/flush/close). */
 export type SessionAccess = 'read' | 'write'
@@ -97,4 +98,13 @@ export interface SessionPersistence {
     id: string,
     options?: SessionPersistenceOptions
   ): Promise<SessionResume>
+  /**
+   * SPEC 0292 §4: the projection of the session log, from the checkpoint cache when it is intact
+   * and from the log otherwise. It never writes the cache (the owner of the stream does) and
+   * never proves the integrity of the prefix: that is `verifyProjectionCache` (SP-G).
+   */
+  project(
+    id: string,
+    options?: SessionPersistenceOptions
+  ): Promise<SessionProjectionResult>
 }

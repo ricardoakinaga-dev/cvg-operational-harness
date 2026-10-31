@@ -8,10 +8,12 @@ import type {
   TurnReport
 } from '@cvg/harness-contracts'
 import { sessionEventInputDigest } from './events.ts'
+import { SessionPersistenceError } from './persistence.ts'
 import {
-  SessionPersistenceCorruptionError,
-  SessionPersistenceError
-} from './persistence.ts'
+  EMPTY_TURN_ANALYSIS,
+  finishTurnAnalysis,
+  foldTurnAnalysis
+} from './turn-analysis.ts'
 
 /** SPEC 0287 §3-§4: pure analysis of a session log and planning of a fork. No IO, no clock. */
 export const SESSION_FORK_MAX_DEPTH = 16
@@ -36,91 +38,21 @@ export class SessionForkRefusedError extends SessionPersistenceError {
 
 export type { SessionLogAnalysis, TurnReport }
 
-const UNCERTAIN_OUTCOMES: ReadonlySet<unknown> = new Set([
-  'deadline',
-  'cancelled',
-  'threw',
-  'confirm_failed'
-])
-
-/** A log that cannot be grouped into turns without guessing is a corrupt log (review of slice 1). */
-function unanalyzable(reason: string): never {
-  throw new SessionPersistenceCorruptionError(
-    `Session log is not analyzable: ${reason}`
-  )
-}
-
-interface Group {
-  correlationId: string
-  events: SessionEvent[]
-}
-
-function groupTurns(events: readonly SessionEvent[]): Group[] {
-  const groups: Group[] = []
-  const closed = new Set<string>()
-  let previous = 0
-  for (const e of events) {
-    if (e.sequence !== previous + 1)
-      unanalyzable('sequences are not contiguous from 1')
-    previous = e.sequence
-    const last = groups.at(-1)
-    if (last && last.correlationId === e.correlationId) last.events.push(e)
-    else {
-      if (closed.has(e.correlationId)) unanalyzable('turns are interleaved')
-      if (last) closed.add(last.correlationId)
-      groups.push({ correlationId: e.correlationId, events: [e] })
-    }
-  }
-  return groups
-}
-
-function report(group: Group): TurnReport {
-  const { events } = group
-  const ends = events.filter((e) => e.type === 'turn/end')
-  if (ends.length > 1) unanalyzable('a turn has more than one turn/end')
-  const open = new Map<string, string[]>() // toolId -> operationKeys awaiting a result
-  const uncertain: string[] = []
-  for (const e of events) {
-    const payload = e.payload as Record<string, unknown>
-    if (e.type === 'tool/call') {
-      const queue = open.get(payload.toolId as string) ?? []
-      queue.push(payload.operationKey as string)
-      open.set(payload.toolId as string, queue)
-    } else if (e.type === 'tool/result') {
-      const key = open.get(payload.toolId as string)?.shift()
-      if (key !== undefined && UNCERTAIN_OUTCOMES.has(payload.outcome))
-        uncertain.push(key)
-    }
-  }
-  for (const queue of open.values()) uncertain.push(...queue)
-  // Only a lone compaction marker has no turn of its own; it is atomic.
-  const marker = events.every((e) => e.type === 'context/compacted')
-  const hasUser = events.some((e) => e.type === 'message/user')
-  const hasAssistant = events.some((e) => e.type === 'message/assistant')
-  const end = ends[0]
-  const stopReason = end
-    ? ((end.payload as Record<string, unknown>).stopReason as string)
-    : undefined
-  let state: TurnReport['state']
-  if (marker) state = 'completed'
-  else if (!end) state = 'open'
-  else if (stopReason === 'COMPLETED' && (!hasUser || hasAssistant))
-    state = 'completed'
-  else state = 'ended'
-  return {
-    correlationId: group.correlationId,
-    firstSequence: events[0]!.sequence,
-    lastSequence: events.at(-1)!.sequence,
-    state,
-    ...(stopReason === undefined ? {} : { stopReason }),
-    uncertainEffects: uncertain
-  }
-}
-
 export function analyzeSessionLog(
   events: readonly SessionEvent[]
 ): SessionLogAnalysis {
-  const turns = groupTurns(events).map(report)
+  const turns: TurnReport[] = []
+  const deferred: { error?: unknown } = {}
+  const context = {
+    closedIds: new Set<string>(),
+    deferred,
+    onClose: (report: TurnReport) => {
+      turns.push(report)
+    }
+  }
+  const state = foldTurnAnalysis(EMPTY_TURN_ANALYSIS, events, context)
+  finishTurnAnalysis(state, context)
+  if (deferred.error !== undefined) throw deferred.error
   let inheritableThrough = 0
   for (const t of turns) {
     if (t.state !== 'completed' || t.uncertainEffects.length > 0) break
