@@ -51,8 +51,13 @@ function store(
   }
 }
 
-const server = (sessionEvents: SessionEventStore) =>
-  buildServer({ sessionEvents } as never)
+const server = (
+  sessionEvents: SessionEventStore,
+  options: Record<string, unknown> = {}
+) =>
+  buildServer({
+    sessionEventStreams: { events: sessionEvents, ...options }
+  } as never)
 const get = (
   app: ReturnType<typeof server>,
   url: string,
@@ -181,6 +186,143 @@ describe('PAR-A01 RED witnesses (fail until the BUILD)', () => {
       const res = await get(app, '/v1/sessions/s1/events/stream?maxEvents=1')
       expect(res.body).toContain('exam.lookup')
       expect(res.body).not.toContain('DADO-SINTETICO-SENSIVEL')
+    }
+  )
+})
+
+// R1 (review of the session 07, P3-7): `inject` waits for the end of the response and cannot reach
+// cancellation, slow readers, revocation or shutdown; these witnesses use a real listener and a
+// client that reads by chunks. They fail today because the route does not exist.
+describe('PAR-A01 R1 witnesses with a real listener (fail until the BUILD)', () => {
+  const listen = async (
+    sessionEvents: SessionEventStore,
+    options: Record<string, unknown> = {}
+  ) => {
+    const app = server(sessionEvents, options)
+    const base = await app.listen({ port: 0, host: '127.0.0.1' })
+    return { app, base }
+  }
+  const open = (base: string, path: string, signal?: AbortSignal) =>
+    fetch(`${base}${path}`, {
+      headers: OPERATOR,
+      ...(signal ? { signal } : {})
+    })
+
+  it.fails(
+    'RED-7: a cancelled stream gives its slot back (one stream per operator)',
+    async () => {
+      const { app, base } = await listen(
+        store({ [`${TENANT_A}|s1`]: [1, 2, 3] }, TENANT_A),
+        { limits: { perOperator: 1 } }
+      )
+      try {
+        const abort = new AbortController()
+        const first = await open(
+          base,
+          '/v1/sessions/s1/events/stream',
+          abort.signal
+        )
+        expect(first.status).toBe(200)
+        const second = await open(base, '/v1/sessions/s1/events/stream')
+        expect(second.status).toBe(429)
+        await second.body?.cancel()
+        abort.abort()
+        await new Promise((r) => setTimeout(r, 100))
+        const third = await open(
+          base,
+          '/v1/sessions/s1/events/stream?maxEvents=1'
+        )
+        expect(third.status).toBe(200)
+        await third.body?.cancel()
+      } finally {
+        await app.close()
+      }
+    }
+  )
+
+  it.fails(
+    'RED-8: closing the app with a stream open ends the stream with server_closing, in time',
+    async () => {
+      const { app, base } = await listen(
+        store({ [`${TENANT_A}|s1`]: [1] }, TENANT_A)
+      )
+      const res = await open(base, '/v1/sessions/s1/events/stream')
+      expect(res.status).toBe(200)
+      const reader = res.body!.getReader()
+      await reader.read()
+      const started = Date.now()
+      await app.close()
+      expect(Date.now() - started).toBeLessThan(6000)
+      let text = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        text += new TextDecoder().decode(value)
+      }
+      expect(text).toContain('server_closing')
+    }
+  )
+
+  it.fails(
+    'RED-9: HEAD does not run the loop and answers 405 with Allow: GET',
+    async () => {
+      const { app, base } = await listen(
+        store({ [`${TENANT_A}|s1`]: [1] }, TENANT_A)
+      )
+      try {
+        const res = await fetch(`${base}/v1/sessions/s1/events/stream`, {
+          method: 'HEAD',
+          headers: OPERATOR
+        })
+        expect(res.status).toBe(405)
+        expect(res.headers.get('allow')).toBe('GET')
+      } finally {
+        await app.close()
+      }
+    }
+  )
+
+  it.fails(
+    'RED-10: a field the whitelist does not name, a message text and an unknown type never leave',
+    async () => {
+      const odd = {
+        ...event(TENANT_A, 's1', 1),
+        type: 'turn/end',
+        payload: {
+          correlationId: 'c',
+          stopReason: 'COMPLETED',
+          surprise: 'CAMPO-NOVO-SENSIVEL'
+        }
+      } as unknown as SessionEvent
+      const text = {
+        ...event(TENANT_A, 's1', 2),
+        type: 'message/user',
+        payload: { text: 'TEXTO-DE-MENSAGEM-SENSIVEL' }
+      } as unknown as SessionEvent
+      const unknown = {
+        ...event(TENANT_A, 's1', 3),
+        type: 'turn/paused',
+        payload: { reason: 'MOTIVO-DE-TIPO-NOVO' }
+      } as unknown as SessionEvent
+      const app = server({
+        openSession: async (i) => i,
+        append: async () => {
+          throw new Error('not used')
+        },
+        read: async (i) =>
+          [odd, text, unknown].filter(
+            (e) => e.sequence > (i.afterSequence ?? 0)
+          )
+      })
+      const res = await get(app, '/v1/sessions/s1/events/stream?maxEvents=3')
+      expect(ids(res.body)).toEqual([1, 2, 3])
+      for (const secret of [
+        'CAMPO-NOVO-SENSIVEL',
+        'TEXTO-DE-MENSAGEM-SENSIVEL',
+        'MOTIVO-DE-TIPO-NOVO'
+      ])
+        expect(res.body).not.toContain(secret)
+      expect(res.body).toContain('payloadOmitted')
     }
   )
 })
