@@ -39,10 +39,15 @@ export async function assertApprovalOriginGuard(
     type: number
     security_definer: boolean
     config: string[] | null
+    unconditional: boolean
+    arguments: number
+    columns: string
     definition: string
   }>(
     `SELECT t.tgenabled AS enabled, t.tgtype AS type,
             p.prosecdef AS security_definer, p.proconfig AS config,
+            t.tgqual IS NULL AS unconditional, t.tgnargs AS arguments,
+            t.tgattr::text AS columns,
             pg_get_functiondef(p.oid) AS definition
        FROM pg_trigger t
        JOIN pg_proc p ON p.oid = t.tgfoid
@@ -57,6 +62,10 @@ export async function assertApprovalOriginGuard(
     row === undefined ||
     row.enabled !== 'O' ||
     row.type !== BEFORE_UPDATE_FOR_EACH_ROW ||
+    // no WHEN condition, no arguments and no column list (UPDATE OF ...): it fires on every update
+    row.unconditional !== true ||
+    row.arguments !== 0 ||
+    row.columns !== '' ||
     row.security_definer !== false ||
     row.config?.length !== 1 ||
     row.config[0] !== 'search_path=pg_catalog, pg_temp'

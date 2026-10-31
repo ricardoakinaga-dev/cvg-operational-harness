@@ -236,6 +236,33 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
         [`DROP TRIGGER ${trigger} ON ${table}`, createTrigger('UPDATE')]
       ],
       [
+        'the trigger only fires on an update of the status column',
+        [
+          `DROP TRIGGER ${trigger} ON ${table}`,
+          `CREATE TRIGGER ${trigger} BEFORE UPDATE OF status ON ${table}
+             FOR EACH ROW EXECUTE FUNCTION ${fn}`
+        ],
+        [`DROP TRIGGER ${trigger} ON ${table}`, createTrigger('UPDATE')]
+      ],
+      [
+        'the trigger has a WHEN condition that is never true',
+        [
+          `DROP TRIGGER ${trigger} ON ${table}`,
+          `CREATE TRIGGER ${trigger} BEFORE UPDATE ON ${table}
+             FOR EACH ROW WHEN (false) EXECUTE FUNCTION ${fn}`
+        ],
+        [`DROP TRIGGER ${trigger} ON ${table}`, createTrigger('UPDATE')]
+      ],
+      [
+        'the trigger is recreated with an argument',
+        [
+          `DROP TRIGGER ${trigger} ON ${table}`,
+          `CREATE TRIGGER ${trigger} BEFORE UPDATE ON ${table}
+             FOR EACH ROW EXECUTE FUNCTION ${schema}.cvg_runtime_approvals_origin_immutable('skip')`
+        ],
+        [`DROP TRIGGER ${trigger} ON ${table}`, createTrigger('UPDATE')]
+      ],
+      [
         'the function body is replaced by a no-op',
         [
           `CREATE OR REPLACE FUNCTION ${fn} RETURNS trigger LANGUAGE plpgsql
