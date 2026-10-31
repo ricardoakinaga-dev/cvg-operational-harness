@@ -5,8 +5,11 @@ export type ProcessServiceErrorCode =
   | 'service_closed'
   | 'service_busy'
   | 'unavailable'
+  | 'admission_refused'
 
-/** Raised before any slot is reserved or process created. Messages never carry values. */
+/** Legacy errors precede launch. Future native admission may first clean a launcher.
+ * Messages never carry host paths or supplied values.
+ */
 export class ProcessServiceError extends Error {
   constructor(
     readonly code: ProcessServiceErrorCode,
@@ -14,5 +17,13 @@ export class ProcessServiceError extends Error {
   ) {
     super(message)
     this.name = 'ProcessServiceError'
+  }
+}
+import type { ProcessAdmissionReason } from './containment.ts'
+
+export class ProcessAdmissionError extends ProcessServiceError {
+  constructor(readonly reason: ProcessAdmissionReason) {
+    super('admission_refused', 'process profile admission refused')
+    this.name = 'ProcessAdmissionError'
   }
 }

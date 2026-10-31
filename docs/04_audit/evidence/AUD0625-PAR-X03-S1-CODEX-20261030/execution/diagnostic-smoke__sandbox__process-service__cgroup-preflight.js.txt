@@ -1,0 +1,175 @@
+import { constants, openSync, readSync, closeSync, lstatSync, statfsSync, accessSync } from 'node:fs';
+import { isAbsolute, normalize, join, dirname, basename, sep } from 'node:path';
+import { ProcessServiceError } from "./errors.js";
+const MOUNT = '/sys/fs/cgroup';
+const CGROUP2 = 0x63677270;
+const TMPFS = 0x01021994;
+const CONTROLLERS = ['cpu', 'memory', 'pids'];
+const MAX_READ = 8192;
+const CHECKS = [
+    ['linux', 'architecture_unsupported'],
+    ['identity', 'delegation_invalid'],
+    ['cgroupFilesystem', 'cgroup_unavailable'],
+    ['rootOwned', 'delegation_invalid'],
+    ['rootEmpty', 'delegation_invalid'],
+    ['ownerInSupervisor', 'delegation_invalid'],
+    ['controllers', 'controller_missing'],
+    ['kernelFiles', 'kernel_feature_missing'],
+    ['runtimePrivate', 'delegation_invalid']
+];
+/** Pure test/diagnostic seam: even fabricated facts can never yield qualified:true. */
+export function assessProcessDelegation(facts) {
+    const failed = CHECKS.find(([name]) => facts[name] !== true);
+    return Object.freeze({
+        state: failed ? 'refused' : 'candidate',
+        qualified: false,
+        reason: failed?.[1] ?? 'qualification_missing',
+        checks: Object.freeze(CHECKS.map(([name]) => Object.freeze({ name, passed: facts[name] === true })))
+    });
+}
+const absolute = (p) => typeof p === 'string' &&
+    !p.includes('\0') &&
+    isAbsolute(p) &&
+    normalize(p) === p;
+function noSymlinks(path) {
+    let at = sep;
+    try {
+        for (const part of path.split(sep).filter(Boolean)) {
+            at = join(at, part);
+            if (!lstatSync(at).isDirectory())
+                return false;
+        }
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+/** Fixed-size read, including pseudo-files whose stat size is zero; never follow final symlinks. */
+function small(path) {
+    let fd;
+    let result;
+    try {
+        fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        const buffer = Buffer.alloc(MAX_READ + 1);
+        const size = readSync(fd, buffer, 0, buffer.length, 0);
+        result =
+            size > MAX_READ ? undefined : buffer.subarray(0, size).toString('utf8');
+    }
+    catch {
+        result = undefined;
+    }
+    finally {
+        if (fd !== undefined) {
+            try {
+                closeSync(fd);
+            }
+            catch {
+                // A read whose descriptor did not close cleanly cannot support admission.
+                // Do not retry close: on Linux the descriptor may already have been reused.
+                result = undefined;
+            }
+        }
+    }
+    return result;
+}
+function ownedDirectory(path, privateMode) {
+    try {
+        const stat = lstatSync(path);
+        return (stat.isDirectory() &&
+            stat.uid === process.geteuid() &&
+            (!privateMode || (stat.mode & 0o777) === 0o700));
+    }
+    catch {
+        return false;
+    }
+}
+function filesystem(path, magic) {
+    try {
+        return statfsSync(path).type === magic;
+    }
+    catch {
+        return false;
+    }
+}
+function requiredFiles(root) {
+    const readable = [
+        'cpu.max',
+        'cpu.stat',
+        'memory.max',
+        'memory.events',
+        'memory.oom.group',
+        'memory.swap.max',
+        'pids.max',
+        'pids.events'
+    ];
+    try {
+        const kill = join(root, 'cgroup.kill');
+        if (!lstatSync(kill).isFile())
+            return false;
+        accessSync(kill, constants.W_OK);
+        return (small(join(root, 'cgroup.type'))?.trim() === 'domain' &&
+            readable.every((n) => small(join(root, n)) !== undefined));
+    }
+    catch {
+        return false;
+    }
+}
+function controllers(root) {
+    let path = root;
+    for (;;) {
+        const available = small(join(path, 'cgroup.controllers'))?.trim().split(/\s+/) ?? [];
+        const enabled = small(join(path, 'cgroup.subtree_control'))?.trim().split(/\s+/) ?? [];
+        if (!CONTROLLERS.every((n) => available.includes(n) && enabled.includes(n)))
+            return false;
+        if (path === MOUNT)
+            return true;
+        // No internal processes in distributing domains, except the kernel root domain.
+        if (small(join(path, 'cgroup.procs'))?.trim() !== '')
+            return false;
+        path = dirname(path);
+    }
+}
+/** Read-only observation, without mkdir/write/exec/systemctl. Native admission must revalidate. */
+export async function inspectProcessDelegation(input) {
+    if (!input ||
+        typeof input !== 'object' ||
+        typeof input.instance !== 'string' ||
+        !/^[a-z0-9-]{1,64}$/.test(input.instance) ||
+        !absolute(input.root) ||
+        !absolute(input.runtimeDirectory) ||
+        !absolute(input.expectedControlGroup) ||
+        !input.root.startsWith(MOUNT + '/') ||
+        (input.signal !== undefined && !(input.signal instanceof AbortSignal))) {
+        throw new ProcessServiceError('invalid_request', 'invalid delegation input');
+    }
+    input.signal?.throwIfAborted();
+    await Promise.resolve();
+    input.signal?.throwIfAborted();
+    const identity = input.root === MOUNT + input.expectedControlGroup &&
+        basename(input.root) ===
+            `cvg-process-qualification@${input.instance}.service` &&
+        basename(input.runtimeDirectory) === input.instance &&
+        basename(dirname(input.runtimeDirectory)) === 'cvg-process-qualification';
+    const rootSafe = identity && noSymlinks(input.root);
+    const runtimeSafe = identity && noSymlinks(input.runtimeDirectory);
+    const current = small('/proc/self/cgroup')
+        ?.split('\n')
+        .find((n) => n.startsWith('0::'))
+        ?.slice(3);
+    const facts = {
+        linux: process.platform === 'linux',
+        identity,
+        cgroupFilesystem: rootSafe && filesystem(input.root, CGROUP2),
+        rootOwned: rootSafe && ownedDirectory(input.root, false),
+        rootEmpty: rootSafe && small(join(input.root, 'cgroup.procs'))?.trim() === '',
+        ownerInSupervisor: current === input.expectedControlGroup + '/supervisor',
+        controllers: rootSafe && controllers(input.root),
+        kernelFiles: rootSafe && requiredFiles(input.root),
+        runtimePrivate: runtimeSafe &&
+            ownedDirectory(input.runtimeDirectory, true) &&
+            filesystem(input.runtimeDirectory, TMPFS)
+    };
+    input.signal?.throwIfAborted();
+    return assessProcessDelegation(facts);
+}

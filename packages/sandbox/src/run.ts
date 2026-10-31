@@ -3,6 +3,12 @@ import { resolve, sep } from 'node:path'
 import type { SandboxHandle } from '@cvg/harness-contracts'
 import type { ProcessContainmentProfile } from './process-profile.ts'
 import { createProcessService } from './process-service/service.ts'
+import { ProcessAdmissionError } from './process-service/errors.ts'
+import { verifiedProcessOutcome } from './process-service/containment.ts'
+import type {
+  ProcessAdmissionReason,
+  ProcessContainmentV1
+} from './process-service/containment.ts'
 import type {
   ProcessCleanup,
   ProcessCause,
@@ -10,6 +16,7 @@ import type {
 } from './process-service/types.ts'
 
 export interface ContainedRunRequest {
+  readonly requiredContainment?: 'namespace-observed' | 'cgroup-guardian'
   /** Pure argv array — never a shell string, never interpolated. */
   readonly argv: readonly string[]
   /** Handle granted by the sandbox gate; must allow subprocesses. */
@@ -29,6 +36,8 @@ export interface ContainedRunRequest {
 }
 
 export interface ContainedRunResult {
+  readonly containment?: ProcessContainmentV1
+  readonly admissionReason?: ProcessAdmissionReason
   readonly exitCode: number | 'timeout' | 'spawn_failed' | 'cancelled'
   readonly stdout: string
   readonly stderr: string
@@ -99,6 +108,9 @@ export function runContained(
     let outcome
     try {
       const launched = await serviceFor(request.bwrapPath).launch({
+        ...(request.requiredContainment !== undefined
+          ? { requiredContainment: request.requiredContainment }
+          : {}),
         consumer: 'shell',
         // An absent or copied profile is refused by the launch preparation, with its own reason.
         profile: request.processProfile as ProcessContainmentProfile,
@@ -128,17 +140,34 @@ export function runContained(
           error instanceof Error
             ? error.message
             : 'process_service_unavailable',
-        truncated: false
+        truncated: false,
+        ...(error instanceof ProcessAdmissionError
+          ? { admissionReason: error.reason }
+          : {})
       }
     }
     const detail = {
       cleanup: outcome.cleanup,
-      cause: outcome.cause
+      cause: outcome.cause,
+      containment: outcome.containment
     }
     const text = {
       stdout: outcome.stdout ?? '',
       stderr: outcome.stderr ?? '',
       truncated: outcome.truncated
+    }
+    // A cached or faulty service cannot satisfy an explicit B requirement with an A result.
+    if (
+      !verifiedProcessOutcome(outcome) ||
+      (request.requiredContainment === 'cgroup-guardian' &&
+        outcome.containment.profile !== 'cgroup-guardian')
+    ) {
+      return {
+        exitCode: 'spawn_failed',
+        ...text,
+        stderr: 'process_containment_unverified',
+        ...detail
+      }
     }
     switch (outcome.cause) {
       case 'exit':

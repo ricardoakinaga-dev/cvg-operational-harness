@@ -1,0 +1,70 @@
+from pathlib import Path
+import subprocess,os,sys,json,time,datetime,signal,ctypes
+r=Path('/mnt/dados/cvg-work/aud0625-par-x03-slice1-codex-20261030');c=r/'candidate';name=sys.argv[1];cap=int(sys.argv[2]);cmd=sys.argv[3:]
+assert os.getuid()==1000
+libc=ctypes.CDLL(None,use_errno=True);assert libc.prctl(36,1,0,0,0)==0 # child subreaper, this runner only
+for d in ['home','tmp','cache']:(r/d).mkdir(exist_ok=True)
+env={k:v for k,v in os.environ.items() if k in ['LANG','LC_ALL','TZ']};env.update(PATH='/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin',HOME=str(r/'home'),TMPDIR=str(r/'tmp'),XDG_CACHE_HOME=str(r/'cache'),NPM_CONFIG_CACHE=str(r/'cache/npm'),CVG_REVIEW_TRACE_PATH=str(r/(name+'-observations.jsonl')))
+extra=json.loads((r/'env.json').read_text()) if (r/'env.json').exists() else {}
+env.update(extra)
+rec={'name':name,'command':cmd,'cwd':str(c),'timeout_seconds':cap,'started_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'uid':os.getuid(),'real_credentials_inherited':False,'profile':'nice15/ioniceBE7','child_subreaper':True};known={}
+def proc(pid):
+ try:
+  s=Path('/proc/'+str(pid)+'/stat').read_text().rsplit(') ',1)[1].split();return {'pid':pid,'state':s[0],'ppid':int(s[1]),'starttime':int(s[19])}
+ except (FileNotFoundError,ProcessLookupError,PermissionError):return None
+def children(pid):
+ try:return [int(x) for x in Path(f'/proc/{pid}/task/{pid}/children').read_text().split()]
+ except (FileNotFoundError,ProcessLookupError,PermissionError):return []
+def observe(pid):
+ for child in children(pid):
+  row=proc(child)
+  if row:known[(child,row['starttime'])]=row;observe(child)
+reaped_during_run=[]
+start=time.monotonic();timed=False
+with (r/(name+'.log')).open('wb') as log:
+ p=subprocess.Popen(cmd,cwd=c,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True);rec['pid']=p.pid
+ while p.poll() is None:
+  observe(os.getpid())
+  # Reproduce PID1 reaping: reap only already-dead adopted children while the workload runs.
+  # Never signal live descendants here; preserve any surviving process for final accounting.
+  for candidate_pid in children(os.getpid()):
+   if candidate_pid == p.pid:continue
+   candidate_row=proc(candidate_pid)
+   if not candidate_row or candidate_row['ppid']!=os.getpid() or candidate_row['state']!='Z':continue
+   try:
+    got,status=os.waitpid(candidate_pid,os.WNOHANG)
+    if got:reaped_during_run.append(dict(candidate_row,status=status,elapsed_seconds=round(time.monotonic()-start,3)))
+   except ChildProcessError:pass
+  if time.monotonic()-start>cap:
+   timed=True
+   try:os.killpg(p.pid,signal.SIGTERM)
+   except ProcessLookupError:pass
+   try:p.wait(timeout=2)
+   except subprocess.TimeoutExpired:
+    try:os.killpg(p.pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    p.wait(timeout=2)
+   break
+  time.sleep(.02)
+ p.wait();rec.update(exit_code=p.returncode,timed_out=timed,reaped=True)
+adopted=[];cleanup_start=time.monotonic()
+while time.monotonic()-cleanup_start<4:
+ observe(os.getpid());direct=children(os.getpid())
+ if not direct:break
+ for pid in direct:
+  row=proc(pid)
+  if not row or row['ppid']!=os.getpid():continue
+  if row['state']!='Z':
+   try:os.kill(pid,signal.SIGKILL)
+   except ProcessLookupError:pass
+  try:
+   got,status=os.waitpid(pid,os.WNOHANG)
+   if got:adopted.append({'pid':got,'status':status,'starttime':row['starttime']})
+  except ChildProcessError:pass
+ time.sleep(.02)
+remaining=[]
+for (pid,st),row in known.items():
+ current=proc(pid)
+ if current and current['starttime']==st:remaining.append(current)
+rec.update(duration_seconds=round(time.monotonic()-start,3),observed_process_generations=len(known),adopted_reaped=adopted,adopted_zombies_reaped_during_run=reaped_during_run,remaining_owned_processes=remaining,observed_children=list(known.values()),observation_note='20ms sampling may miss short-lived children; subreaper plus final generation checks cover surviving descendants')
+(r/(name+'.json')).write_text(json.dumps(rec,indent=2)+'\n');print(json.dumps({k:v for k,v in rec.items() if k not in ['observed_children','command']}));sys.exit(0 if rec['exit_code']==0 and not timed and not remaining else 1)

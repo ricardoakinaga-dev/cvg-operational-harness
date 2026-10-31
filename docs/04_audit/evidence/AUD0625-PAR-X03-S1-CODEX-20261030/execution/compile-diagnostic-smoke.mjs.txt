@@ -1,0 +1,13 @@
+import ts from './candidate/node_modules/typescript/lib/typescript.js';
+import {readFileSync,writeFileSync,mkdirSync,copyFileSync} from 'node:fs';
+import {join} from 'node:path';
+const root=new URL('.',import.meta.url).pathname;const out=join(root,'diagnostic-smoke');
+mkdirSync(join(out,'sandbox/process-service'),{recursive:true});writeFileSync(join(out,'package.json'),JSON.stringify({type:'module'}));
+for(const name of ['cgroup-preflight','errors']){
+ const file=join(root,'candidate/packages/sandbox/src/process-service',name+'.ts');
+ const result=ts.transpileModule(readFileSync(file,'utf8'),{fileName:file,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,rewriteRelativeImportExtensions:true},reportDiagnostics:true});
+ if(result.diagnostics?.some(d=>d.category===ts.DiagnosticCategory.Error))throw new Error('compiler diagnostic');
+ writeFileSync(join(out,'sandbox/process-service',name+'.js'),result.outputText);
+}
+copyFileSync(join(root,'candidate/deploy/systemd/user/qualification-entry.mjs'),join(out,'qualification-entry.mjs'));
+console.log(JSON.stringify({kind:'DISPOSABLE_COMPILED_DIAGNOSTIC_ONLY',typescript:ts.version,modules:2,installed:false}));
