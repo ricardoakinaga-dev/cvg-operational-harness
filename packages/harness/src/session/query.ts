@@ -220,6 +220,8 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
       checkAborted(signal)
       throw new SessionQueryError('unavailable', 'the trace root source failed')
     }
+    // absence is not classified for a caller that has already left
+    checkAborted(signal)
     if (input.approvalId !== undefined && found.length === 0)
       throw new SessionQueryError('not_found', 'trace root not found')
     for (const approval of found) {
@@ -358,37 +360,40 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
         eventId: string
         correlationId: string
         toolId: string
-        inherited: boolean
       }[] = []
       const results = new Map<string, SessionEvent[]>()
       const callsPerTurnTool = new Map<string, number>()
       const ends = new Map<string, SessionEvent>()
-      const sessionOf = async (index: number): Promise<string | undefined> => {
-        while (order.length <= index && !complete) {
-          if (!spendCall()) return undefined
-          let page: SessionListPage
-          try {
-            page = await list({
-              ...(cursor === undefined ? {} : { cursor }),
-              limit: SESSION_QUERY_MAX_LIMIT,
-              ...(signal ? { signal } : {})
-            })
-          } catch {
-            checkAborted(signal)
-            gaps.push({
-              reason: 'source_unavailable',
-              subject: { kind: 'sessions', id: 'listing' }
-            })
-            complete = true
-            return undefined
-          }
-          for (const item of page.items) {
-            summaries.set(item.sessionId, item)
-            add(item.sessionId)
-          }
-          if (page.nextCursor === null) complete = true
-          else cursor = page.nextCursor
+      /** One more page of the listing; false when the budget or the source stops it. */
+      const loadPage = async (): Promise<boolean> => {
+        if (!spendCall()) return false
+        let page: SessionListPage
+        try {
+          page = await list({
+            ...(cursor === undefined ? {} : { cursor }),
+            limit: SESSION_QUERY_MAX_LIMIT,
+            ...(signal ? { signal } : {})
+          })
+        } catch {
+          checkAborted(signal)
+          gaps.push({
+            reason: 'source_unavailable',
+            subject: { kind: 'sessions', id: 'listing' }
+          })
+          complete = true
+          return false
         }
+        for (const item of page.items) {
+          summaries.set(item.sessionId, item)
+          add(item.sessionId)
+        }
+        if (page.nextCursor === null) complete = true
+        else cursor = page.nextCursor
+        return true
+      }
+      const sessionOf = async (index: number): Promise<string | undefined> => {
+        while (order.length <= index && !complete)
+          if (!(await loadPage())) return undefined
         return order[index]
       }
       let scannedSessions = 0
@@ -453,10 +458,7 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
                 sequence: event.sequence,
                 eventId: event.eventId,
                 correlationId: event.correlationId,
-                toolId: payload.toolId as string,
-                inherited:
-                  event.sequence <=
-                  (summaries.get(sessionId)?.inheritedEventCount ?? 0)
+                toolId: payload.toolId as string
               })
             } else if (event.type === 'tool/result') {
               const slot = `${sessionId}\u0000${event.correlationId}\u0000${String(payload.toolId)}`
@@ -469,8 +471,32 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
         }
         if (stop) break
       }
-      // the links for what matched; a link the ceiling leaves out is always a gap
-      const real = calls_.filter((c) => !c.inherited)
+      // Inheritance is judged here, once the summaries are known: a hinted session is scanned
+      // before the listing is read, and a missing cut must not read as "nothing inherited".
+      // The scan above ends only when the listing is complete or a budget stopped it, so every
+      // cut that exists is known by now; one that is not (a session missing from the listing)
+      // is a gap, and its copies are not counted as original candidates.
+      const unknown = new Set<string>()
+      const inheritedOf = (c: { sessionId: string; sequence: number }) => {
+        const summary = summaries.get(c.sessionId)
+        if (summary === undefined) {
+          unknown.add(c.sessionId)
+          return false
+        }
+        return c.sequence <= summary.inheritedEventCount
+      }
+      const classified = calls_.map((c) => ({
+        ...c,
+        inherited: inheritedOf(c)
+      }))
+      for (const id of unknown)
+        gaps.push({
+          reason: 'source_unavailable',
+          subject: { kind: 'session', id }
+        })
+      const real = classified.filter(
+        (c) => !c.inherited && !unknown.has(c.sessionId)
+      )
       const push = (link: TraceLink): boolean => {
         if (links.length >= budgets.links) {
           exhausted('links')
@@ -479,7 +505,7 @@ export function createSessionQuery(options: SessionQueryOptions): SessionQuery {
         links.push(link)
         return true
       }
-      for (const c of calls_) {
+      for (const c of classified) {
         if (
           !push({
             kind: 'event',

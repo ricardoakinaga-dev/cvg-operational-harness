@@ -36,7 +36,12 @@ import {
   type JsonRpcSuccess,
   type SdkCapabilities
 } from './protocol.ts'
-import { isRequest, validRpcId } from './validators.ts'
+import {
+  isRequest,
+  projectSessionList,
+  projectSessionTrace,
+  validRpcId
+} from './validators.ts'
 
 /** Deterministic fallback budget for one SDK turn. */
 export const SDK_DEFAULT_BUDGET: ExecutionBudget = {
@@ -465,7 +470,7 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
       throw error instanceof SdkRequestError ? error : mapQueryError(error)
     }
     try {
-      return await port.list(input)
+      return projectSessionList(await port.list(input))
     } catch (error) {
       throw mapQueryError(error)
     }
@@ -494,10 +499,12 @@ export function createSdkServer(options: SdkServerOptions): SdkServer {
       )
     }
     try {
-      return await port.trace(
-        record.approvalId !== undefined
-          ? { approvalId: root }
-          : { operationKey: root }
+      return projectSessionTrace(
+        await port.trace(
+          record.approvalId !== undefined
+            ? { approvalId: root }
+            : { operationKey: root }
+        )
       )
     } catch (error) {
       throw mapQueryError(error)

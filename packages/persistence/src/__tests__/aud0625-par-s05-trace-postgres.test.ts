@@ -371,6 +371,90 @@ describe.skipIf(!url)('PAR-S05 slice 3 — the trace over PostgreSQL', () => {
     ).rejects.toThrow('caller left')
   })
 
+  it('F02: a signal that aborts while the connection is leased cancels every port, with a rollback', async () => {
+    // the abort fires after the real lease and before the first statement
+    const sent: string[] = []
+    const leasing = (abort: AbortController) =>
+      new Proxy(dataPool, {
+        get(target, prop, receiver) {
+          if (prop !== 'connect') return Reflect.get(target, prop, receiver)
+          return async () => {
+            const client = await target.connect()
+            const query = client.query.bind(client) as (
+              ...a: unknown[]
+            ) => Promise<unknown>
+            // from the lease on, nothing may be sent to the database
+            client.query = (async (...args: unknown[]) => {
+              if (
+                /BEGIN READ ONLY|runtime_approvals|effect_journal/.test(
+                  String(args[0])
+                )
+              )
+                sent.push(String(args[0]))
+              return query(...args)
+            }) as never
+            abort.abort()
+            return client
+          }
+        }
+      }) as never
+    for (const run of [
+      (pool: never, signal: AbortSignal) =>
+        new PostgresApprovalReadPort(pool).get(tenantA, 'appr-happy', signal),
+      (pool: never, signal: AbortSignal) =>
+        new PostgresApprovalReadPort(pool).listByOperationKey(
+          tenantA,
+          'op-amb',
+          5,
+          signal
+        ),
+      (pool: never, signal: AbortSignal) =>
+        new PostgresEffectJournalReadPort(pool).get(tenantA, 'op-happy', signal)
+    ]) {
+      const abort = new AbortController()
+      await expect(run(leasing(abort), abort.signal)).rejects.toMatchObject({
+        code: 'cancelled'
+      })
+    }
+    expect(sent).toEqual([])
+    // the connection went back to the pool clean: the next read works
+    expect(
+      await new PostgresEffectJournalReadPort(dataPool as never).get(
+        tenantA,
+        'op-none'
+      )
+    ).toBeUndefined()
+  })
+
+  it('F02: a read that finishes after the abort is not handed over', async () => {
+    const abort = new AbortController()
+    const slow = new Proxy(dataPool, {
+      get(target, prop, receiver) {
+        if (prop !== 'connect') return Reflect.get(target, prop, receiver)
+        return async () => {
+          const client = await target.connect()
+          const query = client.query.bind(client) as (
+            ...a: unknown[]
+          ) => Promise<unknown>
+          client.query = (async (...args: unknown[]) => {
+            const out = await query(...args)
+            // the caller leaves once the data has been read, before the COMMIT
+            if (String(args[0]).includes('FROM effect_journal')) abort.abort()
+            return out
+          }) as never
+          return client
+        }
+      }
+    }) as never
+    await expect(
+      new PostgresEffectJournalReadPort(slow).get(
+        tenantA,
+        'op-happy',
+        abort.signal
+      )
+    ).rejects.toMatchObject({ code: 'cancelled' })
+  })
+
   it('the ports refuse a bad tenant, a bad limit and an aborted call', async () => {
     const approvals = new PostgresApprovalReadPort(dataPool as never)
     const effects = new PostgresEffectJournalReadPort(dataPool as never)

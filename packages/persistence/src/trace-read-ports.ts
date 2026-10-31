@@ -45,10 +45,14 @@ async function readOnly<T>(
   if (!parsed.success) throw new TraceReadError('invalid_input')
   try {
     return await withTenantContext(pool, parsed.data, async (client) => {
+      // the signal may have fired while the connection was being leased
+      if (signal?.aborted) throw new TraceReadError('cancelled')
       await client.query('BEGIN READ ONLY')
       try {
         await client.query("SET LOCAL statement_timeout = '5s'")
         const value = await body(client)
+        // a read that finished after the abort is not handed to a caller that left
+        if (signal?.aborted) throw new TraceReadError('cancelled')
         await client.query('COMMIT')
         return value
       } catch (error) {

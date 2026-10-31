@@ -119,7 +119,10 @@ export function validParams(request: JsonRpcRequest): boolean {
   }
 }
 
-function onlyKeys(p: Record<string, unknown>, allowed: string[]): boolean {
+function onlyKeys(
+  p: Record<string, unknown>,
+  allowed: readonly string[]
+): boolean {
   return Object.keys(p).every((key) => allowed.includes(key))
 }
 
@@ -271,6 +274,102 @@ const GAP_REASONS = new Set([
   'source_unavailable',
   'budget_exhausted'
 ])
+const BUDGET_KINDS = new Set([
+  'sessions',
+  'events',
+  'bytes',
+  'calls',
+  'deadline',
+  'links'
+])
+
+/** The public shape, by allow list (SPEC 0295 Q6/Q7): nothing else leaves, nothing else is read. */
+const LIST_KEYS = ['items', 'nextCursor', 'examined', 'skippedUnadopted']
+const ITEM_KEYS = [
+  'sessionId',
+  'createdAt',
+  'isSeeded',
+  'inheritedEventCount',
+  'parentSession',
+  'agentPreset',
+  'origin'
+]
+const TRACE_KEYS = ['root', 'links', 'gaps', 'truncated', 'observed']
+const LINK_KEYS: Record<string, readonly string[]> = {
+  approval: ['kind', 'approvalId', 'status', 'executionRef', 'originSessionId'],
+  effect: ['kind', 'operationKey', 'state', 'executionRef'],
+  event: [
+    'kind',
+    'sessionId',
+    'sequence',
+    'eventId',
+    'type',
+    'correlationId',
+    'toolId',
+    'outcome',
+    'inherited'
+  ]
+}
+const pick = (
+  value: unknown,
+  allowed: readonly string[]
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  if (typeof value === 'object' && value !== null && !Array.isArray(value))
+    for (const key of allowed)
+      if (key in value && (value as Record<string, unknown>)[key] !== undefined)
+        out[key] = (value as Record<string, unknown>)[key]
+  return out
+}
+
+/** The server's projection of a `session.list` result: only the public fields. */
+export function projectSessionList(value: unknown): unknown {
+  const base = pick(value, LIST_KEYS)
+  return {
+    ...base,
+    ...(Array.isArray(base.items)
+      ? { items: base.items.map((item) => pick(item, ITEM_KEYS)) }
+      : {})
+  }
+}
+
+/** The server's projection of a `session.trace` result: only the public fields. */
+export function projectSessionTrace(value: unknown): unknown {
+  const base = pick(value, TRACE_KEYS)
+  return {
+    ...base,
+    ...(typeof base.root === 'object' && base.root !== null
+      ? { root: pick(base.root, ['kind', 'id']) }
+      : {}),
+    ...(Array.isArray(base.links)
+      ? {
+          links: base.links.map((link) => {
+            const kind = (link as { kind?: unknown } | null)?.kind
+            return pick(
+              link,
+              typeof kind === 'string' && kind in LINK_KEYS
+                ? LINK_KEYS[kind]!
+                : ['kind']
+            )
+          })
+        }
+      : {}),
+    ...(Array.isArray(base.gaps)
+      ? {
+          gaps: base.gaps.map((gap) => {
+            const out = pick(gap, ['reason', 'subject'])
+            return 'subject' in out
+              ? { ...out, subject: pick(out.subject, ['kind', 'id']) }
+              : out
+          })
+        }
+      : {}),
+    ...(typeof base.observed === 'object' && base.observed !== null
+      ? { observed: pick(base.observed, ['approval', 'effect', 'events']) }
+      : {})
+  }
+}
+
 const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0
 const optionalText = (v: unknown): boolean => v === undefined || text(v)
 
@@ -288,7 +387,9 @@ function validList(
     !natural(r.examined) ||
     r.examined > 1000 ||
     !natural(r.skippedUnadopted) ||
-    r.skippedUnadopted > r.examined
+    // what was returned and what was left out both come from the examined window
+    r.items.length + r.skippedUnadopted > r.examined ||
+    !onlyKeys(r, LIST_KEYS)
   )
     return false
   const filter = canonicalSessionFilter(p.filter)
@@ -297,6 +398,7 @@ function validList(
     const item = record(value)
     if (
       !item ||
+      !onlyKeys(item, ITEM_KEYS) ||
       !validIdentifier(item.sessionId) ||
       ids.has(item.sessionId) ||
       !natural(item.createdAt) ||
@@ -338,7 +440,9 @@ function validTrace(
     !Array.isArray(r.links) ||
     r.links.length > 100 ||
     !Array.isArray(r.gaps) ||
-    typeof r.truncated !== 'boolean'
+    typeof r.truncated !== 'boolean' ||
+    !onlyKeys(r, TRACE_KEYS) ||
+    !onlyKeys(root, ['kind', 'id'])
   )
     return false
   const observed = record(r.observed)
@@ -355,6 +459,12 @@ function validTrace(
   const linksOk = r.links.every((value: unknown) => {
     const link = record(value)
     if (!link) return false
+    if (
+      typeof link.kind !== 'string' ||
+      !(link.kind in LINK_KEYS) ||
+      !onlyKeys(link, LINK_KEYS[link.kind]!)
+    )
+      return false
     switch (link.kind) {
       case 'approval':
         return (
@@ -369,7 +479,8 @@ function validTrace(
           text(link.state) &&
           optionalText(link.executionRef)
         )
-      case 'event':
+      default:
+        // 'event': the kind was checked against the closed list above
         return (
           text(link.sessionId) &&
           natural(link.sequence) &&
@@ -381,17 +492,33 @@ function validTrace(
           optionalText(link.outcome) &&
           typeof link.inherited === 'boolean'
         )
-      default:
-        return false
     }
   })
   const gapsOk = r.gaps.every((value: unknown) => {
     const gap = record(value)
-    if (!gap || typeof gap.reason !== 'string' || !GAP_REASONS.has(gap.reason))
+    if (
+      !gap ||
+      typeof gap.reason !== 'string' ||
+      !GAP_REASONS.has(gap.reason) ||
+      !onlyKeys(gap, ['reason', 'subject'])
+    )
       return false
-    if (gap.subject === undefined) return true
-    const subject = record(gap.subject)
-    return !!subject && text(subject.kind) && text(subject.id)
+    const subject = gap.subject === undefined ? undefined : record(gap.subject)
+    if (gap.subject !== undefined && !subject) return false
+    // an exhausted budget says which one, from the closed list
+    if (gap.reason === 'budget_exhausted')
+      return (
+        !!subject &&
+        BUDGET_KINDS.has(subject.kind as string) &&
+        onlyKeys(subject, ['kind', 'id']) &&
+        text(subject.id)
+      )
+    if (subject === undefined) return true
+    return (
+      onlyKeys(subject, ['kind', 'id']) &&
+      text(subject.kind) &&
+      text(subject.id)
+    )
   })
   // a truncated trace says which budget; a complete one never claims it
   const exhausted = r.gaps.some(
