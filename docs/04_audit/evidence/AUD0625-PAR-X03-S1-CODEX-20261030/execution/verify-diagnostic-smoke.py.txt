@@ -1,0 +1,10 @@
+from pathlib import Path
+import subprocess,json,hashlib
+from datetime import datetime,timezone
+r=Path(__file__).parent
+node='/home/ricardo/.nvm/versions/node/v22.23.2/bin/node'
+p=subprocess.run([node,str(r/'diagnostic-smoke/qualification-entry.mjs'),'--instance','aud0625'],capture_output=True,text=True)
+report=json.loads(p.stdout);assert p.returncode==78 and report['state']=='refused' and report['qualified'] is False,(p.returncode,p.stdout,p.stderr)
+rows=[{'path':str(f.relative_to(r/'diagnostic-smoke')),'sha256':hashlib.sha256(f.read_bytes()).hexdigest()} for f in (r/'diagnostic-smoke').rglob('*') if f.is_file()]
+record={'kind':'ACTUAL_COMPILED_ENTRY_REFUSAL_OUTSIDE_UNIT','observed_at_utc':datetime.now(timezone.utc).isoformat(),'command_exit':p.returncode,'expected_exit':78,'output':report,'stderr':p.stderr,'installed':False,'unit_activated':False,'payloads':0,'cgroup_writes':0,'files':rows,'limit':'Local disposable ESM transpilation is not installation or full-package qualification; source separately typechecked'}
+(r/'diagnostic-smoke-result.json').write_text(json.dumps(record,indent=2)+'\n');print(json.dumps(record))

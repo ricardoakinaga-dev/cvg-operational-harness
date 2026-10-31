@@ -1,0 +1,56 @@
+# CODE R2 FINAL — APPROVE_SCOPED_STATIC
+
+Crítica independente, não autora, direta e sem filhos da 0294 slice1. **0 P1, 0 P2, 0 P3 abertos; 0 mandatory; F01/P2 e F02/P3 CLOSED_STATIC.** Nenhuma regressão direta da reparação observada no escopo conferido. Este aceite é apenas da conferência estática final solicitada; não concede aceite de testes, integração, qualificação B/native/runtime ou produção.
+
+R2 conhece R1 por desenho; não alega cegueira. Foram lidos os achados/REVIEW R1 e o freeze aprovado, não o plano de reparo, relatório interpretativo ou resultados do builder. Não houve reparo nem terceira rodada.
+
+Início UTC `2026-10-31T00:12:15.721059+00:00`; deadline `2026-10-31T00:22:15.721059+00:00`; conclusão da avaliação `2026-10-31T00:14:35.143964+00:00`; **139.423s de 600s**. Candidata isolada: `/mnt/dados/cvg-work/aud0625-par-x03-slice1-codex-20261030/candidate`. Base declarada pelo freeze: `9a8ab4c7a8980b8de61e2cfc5c56b1e6f902c5f2` (sem alegação de novo commit ou árvore integral certificada).
+
+## Fechamento de CODE-R1-F01 / P2
+
+Critérios S1-01/S1-03; SPEC0294R2 §4.3 e freeze, contrato de relatório. Âncoras: `containment.ts:146`, `:189`, `:199`, `:235`, `:269`; `run.ts:161`, `:175`.
+
+A verificação comum agora valida resources/seccomp **antes** de separar A e B. Limites obrigatórios são inteiros seguros positivos; swap é zero; quota de workspace é positiva ou null. Os quatro contadores de events e os dois de peaks passam por verificação de inteiro seguro não negativo com reason null, ou value null com motivo fechado. São conferidos backend/groupId, motivos das variantes degradadas, modo/arquitetura, ambos os profileIds fechados e formato do digest seccomp. B continua exigindo guardian/independência true/resources applied/seccomp applied; A conserva independência false e owner/guardian.
+
+A contraprova R1 de A com `pidsMax:-1` agora chega a false antes do retorno A. Contadores negativos/fracionários/inseguros, null sem motivo e perfil seccomp desconhecido também recusam antes da projeção de exit0, nos dois perfis. `run.ts:149`/`:165` conserva a causa observada no retorno spawn_failed. O produtor A atual continua emitindo not_required, pelos mesmos helpers de mirrors.
+
+Fontes dos testes: `par-x03-contracts.test.ts:173` cobre limites e todos os contadores nos dois perfis; `:234` cobre perfil seccomp; `:248`/`:311` preservam variantes degradadas e limites válidos dos contadores; `par-x03-adapter.test.ts:96` reproduz o A inválido e exige spawn_failed/cause exit. **Fontes inspecionadas; testes NOT_RUN.** A aceitação estrutural de um B sintético não autentica prova nativa nem admite workload.
+
+## Fechamento de CODE-R1-F02 / P3
+
+Critério S1-04. Âncoras: `cgroup-preflight.ts:96`, `:110`, `:208`, `:217`, `:165`; teste `par-x03-preflight.test.ts:267`.
+
+`small` mantém o resultado até terminar o finally. `closeSync` agora tem catch local que converte o resultado para undefined, sem propagar erro bruto nem repetir close. Membership indefinido falha ownerInSupervisor; cgroup.procs indefinido falha rootEmpty; leituras incertas de controllers/arquivos falham os respectivos fatos. O relatório público deriva apenas de checks/motivos fechados e qualified:false. Os pontos de cancelamento permanecem fora do leitor, em `:197`, `:199` e `:227`; abort continua excepcional e não vira candidate.
+
+O seam lança erro contendo path e os casos novos para cgroup.procs e memory.swap.max exigem refused/qualified:false, ausência do root no JSON e fd simulado liberado. Não há caso separado para close de membership/controllers nem combinação read+close; o fechamento destes fluxos é sustentado pela mesma implementação estática. **Nenhuma falha real de descritor foi induzida e nenhum teste foi executado.**
+
+## Regressões diretas e critérios
+
+| Critério | Resultado e âncoras |
+| --- | --- |
+| S1-01 | Conforme estaticamente no escopo R2; F01 fechado, mirrors centrais e motivos preservados (`containment.ts:110`, `:126`, `:269`; `types.ts:84`; `errors.ts:24`; `index.ts:61`). |
+| S1-02 | Preservado: B válido sempre recusado antes de slot/profile/spawn (`service.ts:155–164`, `:206`, `:230`); desconhecido invalid_request (`:74`); cache encaminha requisito e adaptador recusa A para B (`run.ts:110`, `:161`). |
+| S1-03 | Recursos inválidos, unverified, versão desconhecida, mirrors divergentes e cleanup sujo não projetam sucesso; causa preservada (`containment.ts:269`; `run.ts:149–175`). |
+| S1-04 | F02 fechado estaticamente; inputs host/paths normalizados/AbortSignal, UID/fs/symlinks/controllers/runtime preservados (`cgroup-preflight.ts:78`, `:181–228`). Apenas leitura; candidate sempre qualified:false e sem autoridade. |
+| S1-05 | Unit/entry/runbook e teste de artefato idênticos a R1; oneshot, argumentos fechados, sem interface de payload ou ação de ativação. Empacotamento/efeito da unit não provados. |
+| S1-06 | Fontes de testes/seams examinadas; somente três testes S1 alterados. Testes/mutantes/types/lint/coverage do lead não certificados. Nativo continua NOT_RUN. |
+| S1-07 | 14/14 fontes exatas PRE/POST; quatro pins fornecidos conferem; oito identidades de inputs estáveis no POST. 14 preimagens R1 conferem com seu manifesto. Cinco caminhos mudaram e nove permanecem idênticos a R1. |
+
+Os cinco caminhos alterados são containment.ts, cgroup-preflight.ts e os testes contracts/adapter/preflight. O diff próprio está em [r1-r2.diff](r1-r2.diff); identidade de cada preimagem/caminho em [baseline-comparison.json](baseline-comparison.json). Os demais nove caminhos foram conferidos contra os hashes R1 e suas fronteiras relevantes foram relidas. Não se declara migração de consumidores externos ou aceite global do repositório.
+
+## Pins e evidência
+
+- Manifesto R2: `945541115d67f69b7e018f539489ec385d5b295f433ac2a55cecb740c486a6b2`.
+- Freeze: `5ad836fe812aee7f43e6aa7393c68f26cc3f7d09d98dd046dd8cf2bb5fe78089`.
+- SPEC R2: `551f477ac2bcf1a531c719ac6a660b1dbaae3ef9ce7998ced9cbfef70465dc1e`.
+- human26: `ae6a077850f8db3aa8d2b01f10055a1917814e9389677577f941a415245acef1`.
+- Parecer freeze-r2: `ed57ccabc4dec9b659509d5a8bf3916c886b46ec70f673f2cabbe7fc5fcc391c`.
+- Manifesto externo R1: `5d20f175eb8e8f46b07a2d45cd72816f2f8b2fa80c5f218324590b5a8d6ad56f`.
+
+[findings.json](findings.json) contém critérios, âncoras, achados fechados, counts, limites e hashes individuais. [PRE.json](PRE.json), [POST.json](POST.json) e [input-pins-pre.json](input-pins-pre.json) registram integridade; [input-identity.json](input-identity.json) fixa os demais inputs. [artifact-hashes.json](artifact-hashes.json) vincula todos os artefatos próprios, exceto ele mesmo para evitar autorreferência.
+
+## Limitações e handoff
+
+Apenas leitura/hash/diff e escrita em `review/code-r2/`. Sem imports da aplicação, testes, helper/launcher/payload, diagnóstico real do host, PG/Docker, rede, systemd ou escrita em cgroup. Sem filhos, fontes/pares/main/index/ledgers/claims/plano alterados, commit ou push. Skills engineering-framework/orchestrate aplicadas em modo direto de crítica. As restrições específicas desta atribuição limitam escrita e suprimem atualização de ledgers/coordenação. GBrain NOT_ATTEMPTED_USER_PROHIBITED; append/readback e deltas canônicos ficam pendentes com o lead, sem alegação de sincronização.
+
+Não resta mandatory estático observado nesta reparação. Evidência executável pertence ao lead, e qualificação B/native/runtime permanece fora do escopo e não provada. Produção **NO_GO**. Próxima ação: o lead combina este parecer com seus checks puros/seams paralelos e dispõe evidências/ledgers sob sua própria responsabilidade; esta revisão não inicia reparo ou nova rodada.

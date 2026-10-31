@@ -28,7 +28,12 @@ export interface ShellRunRequest {
 }
 
 export interface ShellRunResult {
-  readonly exitCode: number | 'timeout' | 'spawn_failed' | 'cancelled'
+  readonly exitCode:
+    | number
+    | 'timeout'
+    | 'spawn_failed'
+    | 'cancelled'
+    | 'cleanup_failed'
   readonly stdout: string
   readonly stderr: string
   readonly truncated: boolean
@@ -359,6 +364,9 @@ export function createShellTool(options: ShellToolOptions): ToolDefinition {
         return failed('effect_uncertain: cleanup_incomplete after cancellation')
       }
 
+      if (result.exitCode === 'cleanup_failed') {
+        return failed('effect_uncertain: cleanup_incomplete')
+      }
       if (result.exitCode === 'spawn_failed') {
         return failed(
           `containment failed: the command could not be launched inside the sandbox${result.stderr ? `: ${result.stderr}` : ''}`

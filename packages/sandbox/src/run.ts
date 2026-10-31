@@ -3,6 +3,15 @@ import { resolve, sep } from 'node:path'
 import type { SandboxHandle } from '@cvg/harness-contracts'
 import type { ProcessContainmentProfile } from './process-profile.ts'
 import { createProcessService } from './process-service/service.ts'
+import { ProcessAdmissionError } from './process-service/errors.ts'
+import {
+  consistentProcessContainment,
+  verifiedProcessOutcome
+} from './process-service/containment.ts'
+import type {
+  ProcessAdmissionReason,
+  ProcessContainmentV1
+} from './process-service/containment.ts'
 import type {
   ProcessCleanup,
   ProcessCause,
@@ -10,6 +19,7 @@ import type {
 } from './process-service/types.ts'
 
 export interface ContainedRunRequest {
+  readonly requiredContainment?: 'namespace-observed' | 'cgroup-guardian'
   /** Pure argv array — never a shell string, never interpolated. */
   readonly argv: readonly string[]
   /** Handle granted by the sandbox gate; must allow subprocesses. */
@@ -29,7 +39,14 @@ export interface ContainedRunRequest {
 }
 
 export interface ContainedRunResult {
-  readonly exitCode: number | 'timeout' | 'spawn_failed' | 'cancelled'
+  readonly containment?: ProcessContainmentV1
+  readonly admissionReason?: ProcessAdmissionReason
+  readonly exitCode:
+    | number
+    | 'timeout'
+    | 'spawn_failed'
+    | 'cancelled'
+    | 'cleanup_failed'
   readonly stdout: string
   readonly stderr: string
   readonly truncated: boolean
@@ -99,6 +116,9 @@ export function runContained(
     let outcome
     try {
       const launched = await serviceFor(request.bwrapPath).launch({
+        ...(request.requiredContainment !== undefined
+          ? { requiredContainment: request.requiredContainment }
+          : {}),
         consumer: 'shell',
         // An absent or copied profile is refused by the launch preparation, with its own reason.
         profile: request.processProfile as ProcessContainmentProfile,
@@ -128,7 +148,10 @@ export function runContained(
           error instanceof Error
             ? error.message
             : 'process_service_unavailable',
-        truncated: false
+        truncated: false,
+        ...(error instanceof ProcessAdmissionError
+          ? { admissionReason: error.reason }
+          : {})
       }
     }
     const detail = {
@@ -140,18 +163,42 @@ export function runContained(
       stderr: outcome.stderr ?? '',
       truncated: outcome.truncated
     }
+    // This checks a returned result, after launch; pre-launch B admission belongs to the service.
+    // A cached or faulty service cannot satisfy an explicit B requirement with an A result.
+    if (
+      !consistentProcessContainment(outcome) ||
+      (request.requiredContainment === 'cgroup-guardian' &&
+        outcome.containment.profile !== 'cgroup-guardian')
+    ) {
+      return {
+        exitCode: 'spawn_failed',
+        ...text,
+        stderr: 'process_containment_unverified',
+        ...detail
+      }
+    }
+    if (!verifiedProcessOutcome(outcome)) {
+      // A launched command may have effects even when its tree is not proven quiescent.
+      return {
+        exitCode: 'cleanup_failed',
+        ...text,
+        ...detail,
+        containment: outcome.containment
+      }
+    }
+    const verifiedDetail = { ...detail, containment: outcome.containment }
     switch (outcome.cause) {
       case 'exit':
         return {
           exitCode: outcome.exitCode ?? 'spawn_failed',
           ...text,
-          ...detail
+          ...verifiedDetail
         }
       case 'timeout':
-        return { exitCode: 'timeout', ...text, ...detail }
+        return { exitCode: 'timeout', ...text, ...verifiedDetail }
       case 'cancelled':
       case 'dispose':
-        return { exitCode: 'cancelled', ...text, ...detail }
+        return { exitCode: 'cancelled', ...text, ...verifiedDetail }
       default:
         // spawn_failed, startup_timeout, signal, output_limit: containment or launcher
         // faults, never a normal exit status. The reason is the launcher's, not the payload's.
@@ -159,7 +206,7 @@ export function runContained(
           exitCode: 'spawn_failed',
           ...text,
           stderr: text.stderr || outcome.secondaryErrors.join('; '),
-          ...detail
+          ...verifiedDetail
         }
     }
   })()

@@ -7,7 +7,8 @@ import {
   validateProcessEnv,
   type EnvAllowlist
 } from './env.ts'
-import { ProcessServiceError } from './errors.ts'
+import { ProcessAdmissionError, ProcessServiceError } from './errors.ts'
+import { ownerContainment, containmentMirrors } from './containment.ts'
 import { DEFAULT_LIMIT_CAPS, validateProcessLimits } from './limits.ts'
 import {
   DEFAULT_PROC_ROOT,
@@ -70,6 +71,12 @@ function checkRequest(
   }
   if (request === null || typeof request !== 'object') bad('request')
   if (!PROCESS_CONSUMERS.includes(request.consumer)) bad('consumer')
+  if (
+    request.requiredContainment !== undefined &&
+    request.requiredContainment !== 'namespace-observed' &&
+    request.requiredContainment !== 'cgroup-guardian'
+  )
+    bad('requiredContainment')
   if (request.mode !== 'oneshot' && request.mode !== 'persistent') bad('mode')
   // The profile itself (absent, copied, stale) is judged by the launch preparation.
   if (request.handle === undefined || request.handle === null) bad('handle')
@@ -147,6 +154,9 @@ export function createProcessService(
       throw new ProcessServiceError('service_closed', 'the service is closed')
     const limits = checkRequest(request, caps)
     const env = validateProcessEnv(request.consumer, request.env, allowlist)
+    // No native guardian is qualified in slice1. Refuse before slot/profile/spawn, never A.
+    if (request.requiredContainment === 'cgroup-guardian')
+      throw new ProcessAdmissionError('qualification_missing')
     if (reserved >= maxConcurrent)
       throw new ProcessServiceError('service_busy', 'too many launches')
     const id = `proc-${(sequence += 1)}-${randomBytes(4).toString('hex')}`
@@ -179,9 +189,7 @@ export function createProcessService(
           leftover: 0,
           unverified: 0
         },
-        profile: 'namespace-observed',
-        ownerIndependent: false,
-        landlock: { applied: false },
+        ...containmentMirrors(ownerContainment({ applied: false })),
         secondaryErrors: secondary
       }
       return {
@@ -466,9 +474,9 @@ function supervise(s: Supervision): Supervised {
           }),
       truncated,
       cleanup,
-      profile: 'namespace-observed',
-      ownerIndependent: false,
-      landlock: landlock ? landlock.report() : { applied: false },
+      ...containmentMirrors(
+        ownerContainment(landlock ? landlock.report() : { applied: false })
+      ),
       secondaryErrors: [...secondary]
     }
     cleanupTimersAndListeners()
