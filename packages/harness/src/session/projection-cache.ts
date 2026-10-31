@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import {
   SESSION_PROJECTION_VERSION,
+  CanonicalJsonError,
   canonicalizeJson,
   type SessionProjection
 } from '@cvg/harness-contracts'
@@ -172,8 +173,18 @@ export function judgeSessionCheckpoint(
   if (!isProjectionShape(row.state)) return refuse('state is malformed')
   if (row.state.throughSequence !== row.throughSequence)
     return refuse('state position differs from the checkpoint position')
-  if (sessionProjectionStateDigest(row.state) !== row.stateDigest)
-    return refuse('state digest differs')
+  // The canonicalizer is its own budget (depth 64, 20,000 nodes, fail-fast), so a hostile state
+  // costs a bounded walk. A state that passes the shape but cannot be canonicalized is an invalid
+  // checkpoint (rebuild), not a storage failure.
+  let digest: string
+  try {
+    digest = sessionProjectionStateDigest(row.state)
+  } catch (error) {
+    if (error instanceof CanonicalJsonError)
+      return refuse('state is not canonical')
+    throw error
+  }
+  if (digest !== row.stateDigest) return refuse('state digest differs')
   if (row.headerDigest !== sessionHeaderDigest(stream.headerText))
     return refuse('stream header differs')
   if (row.throughSequence < 1 || row.throughSequence > stream.head)
