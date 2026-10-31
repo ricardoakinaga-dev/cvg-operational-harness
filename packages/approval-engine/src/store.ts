@@ -1,5 +1,17 @@
 import type { ApprovalRecord, ApprovalStatus } from './contracts.ts'
 
+/** SPEC 0291 I1: the origin recorded at request time never changes, nor appears afterwards. */
+export function assertOriginUnchanged(
+  before: ApprovalRecord,
+  after: ApprovalRecord
+): void {
+  if (
+    before.origin?.conversationId !== after.origin?.conversationId ||
+    before.origin?.sessionId !== after.origin?.sessionId
+  )
+    throw new Error('Approval origin is immutable')
+}
+
 export interface ApprovalQuery {
   tenantId: string
   status?: ApprovalStatus
@@ -48,6 +60,7 @@ export class InMemoryApprovalStore implements ApprovalStore {
     const current = this.#records.get(key)
     if (!current || current.status !== expectedStatus) return undefined
     const next = update(current)
+    assertOriginUnchanged(current, next)
     this.#records.set(key, next)
     return next
   }

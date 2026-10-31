@@ -194,4 +194,53 @@ describe('P3-CONTEXT — context engine', () => {
     ])
     expect(context.allowedDecisionTypes).toEqual(['RESPOND', 'CALL_TOOL'])
   })
+
+  it('SPEC 0293 shows the runtime rendering of a tool result instead of its summary', async () => {
+    const engine = new DefaultContextEngine()
+    const tool = {
+      ...observation(
+        1,
+        'TOOL_RESULT',
+        { status: 'SUCCEEDED' },
+        'resumo cortado'
+      ),
+      rendering: {
+        form: 'preview' as const,
+        text: 'BLOCO-DE-PREVIA',
+        bytes: 9000,
+        sha256: 'abc',
+        stored: true,
+        locator: 'spill_x'
+      }
+    }
+    const context = await engine.build(buildInput([tool]))
+    const toolItem = context.contextItems.find((item) =>
+      item.contextId.startsWith('tool.')
+    )
+    expect(toolItem?.content).toContain('BLOCO-DE-PREVIA')
+    expect(toolItem?.content).not.toContain('resumo cortado')
+  })
+
+  it('SPEC 0293 ignores a rendering carried by anything but a tool result', async () => {
+    const engine = new DefaultContextEngine()
+    const knowledge = {
+      ...observation(
+        2,
+        'KNOWLEDGE_RESULT',
+        { items: [] },
+        'resumo do conhecimento'
+      ),
+      rendering: {
+        form: 'inline' as const,
+        text: 'RENDERING-FORJADO',
+        bytes: 1,
+        sha256: 'x',
+        stored: false
+      }
+    }
+    const context = await engine.build(buildInput([knowledge]))
+    const text = context.contextItems.map((item) => item.content).join('\n')
+    expect(text).toContain('resumo do conhecimento')
+    expect(text).not.toContain('RENDERING-FORJADO')
+  })
 })

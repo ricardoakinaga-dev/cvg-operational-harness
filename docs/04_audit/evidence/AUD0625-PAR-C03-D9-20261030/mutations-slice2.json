@@ -1,0 +1,163 @@
+[
+ {
+  "id": "B1",
+  "what": "tenant left out of the HMAC input",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "          input.tenantId,\n          input.sessionId,\n          input.operationKey,\n          input.sha256\n        ].join",
+  "new": "          input.sessionId,\n          input.operationKey,\n          input.sha256\n        ].join"
+ },
+ {
+  "id": "B2",
+  "what": "session left out of the HMAC input",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "          input.sessionId,\n          input.operationKey,\n          input.sha256\n        ].join",
+  "new": "          input.operationKey,\n          input.sha256\n        ].join"
+ },
+ {
+  "id": "B3",
+  "what": "operation key left out of the HMAC input",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "          input.operationKey,\n          input.sha256\n        ].join",
+  "new": "          input.sha256\n        ].join"
+ },
+ {
+  "id": "B4",
+  "what": "content hash left out of the HMAC input",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "          input.operationKey,\n          input.sha256\n        ].join",
+  "new": "          input.operationKey\n        ].join"
+ },
+ {
+  "id": "B5",
+  "what": "locator stored in clear",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "const hash = locatorHash(locator)",
+  "new": "const hash = locator"
+ },
+ {
+  "id": "B6",
+  "what": "short key accepted",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "if (!key || key.length < MIN_KEY_BYTES) {",
+  "new": "if (!key || key.length < 1) {"
+ },
+ {
+  "id": "B7",
+  "what": "missing key accepted (empty key)",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "const key = await this.#key?.()\n    if (!key || key.length < MIN_KEY_BYTES) {",
+  "new": "const key = (await this.#key?.()) ?? Buffer.alloc(32)\n    if (!key || key.length < MIN_KEY_BYTES) {"
+ },
+ {
+  "id": "B8",
+  "what": "expiry boundary off by one on read",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "expires_at <= $6 AS expired",
+  "new": "expires_at < $6 AS expired"
+ },
+ {
+  "id": "B9",
+  "what": "sweep deletes the live rows",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "WHERE tenant_id=$1 AND expires_at <= $2 LIMIT $3)",
+  "new": "WHERE tenant_id=$1 AND expires_at > $2 LIMIT $3)"
+ },
+ {
+  "id": "B10",
+  "what": "a repeated write replaces a live object (renews expiry)",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3 AND expires_at <= $4`,",
+  "new": "WHERE tenant_id=$1 AND session_id=$2 AND locator_hash=$3 AND $4::timestamptz IS NOT NULL`,"
+ },
+ {
+  "id": "B11",
+  "what": "a repeated write overwrites instead of keeping the row",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "ON CONFLICT (tenant_id, session_id, locator_hash) DO NOTHING",
+  "new": "ON CONFLICT (tenant_id, session_id, locator_hash) DO UPDATE SET expires_at = EXCLUDED.expires_at"
+ },
+ {
+  "id": "B12",
+  "what": "expired object served",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "if (row.expired) throw new SpillExpired('Spill object expired')",
+  "new": "// served"
+ },
+ {
+  "id": "B13",
+  "what": "read cap ignored",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "const length = Math.min(input.length, this.#policy.readMaxBytes)",
+  "new": "const length = input.length"
+ },
+ {
+  "id": "B14",
+  "what": "read offset off by one",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "          input.offset + 1,",
+  "new": "          input.offset,"
+ },
+ {
+  "id": "B15",
+  "what": "foreign tenant write not refused",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "if (input.tenantId !== this.#tenantId) {\n      throw new SpillError('Tenant differs from the bound spill store')\n    }",
+  "new": "// no tenant check"
+ },
+ {
+  "id": "B16",
+  "what": "cancellation not honoured on write",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "if (input.signal?.aborted) throw new SpillCancelled('Spill write cancelled')",
+  "new": "// no cancel check"
+ },
+ {
+  "id": "B17",
+  "what": "a lost COMMIT reported as a plain failure",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "if (committing && !readOnly) {",
+  "new": "if (false as boolean) {"
+ },
+ {
+  "id": "B18",
+  "what": "stored size limit not enforced",
+  "file": "packages/persistence/src/spill-store-postgres.ts",
+  "old": "if (bytes > this.#policy.maxStoredBytes) {",
+  "new": "if (false as boolean) {"
+ },
+ {
+  "id": "B19",
+  "what": "immutability trigger dropped",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "CREATE TRIGGER spill_objects_no_update BEFORE UPDATE ON spill_objects\n  FOR EACH ROW EXECUTE FUNCTION reject_spill_object_update();\n",
+  "new": ""
+ },
+ {
+  "id": "B20",
+  "what": "row level security policy dropped",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "CREATE POLICY spill_objects_tenant_isolation ON spill_objects\n  USING (tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))\n  WITH CHECK (tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));",
+  "new": "CREATE POLICY spill_objects_tenant_isolation ON spill_objects\n  USING (true) WITH CHECK (true);"
+ },
+ {
+  "id": "B21",
+  "what": "byte length check dropped",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "content bytea NOT NULL CHECK (octet_length(content) = byte_length),",
+  "new": "content bytea NOT NULL,"
+ },
+ {
+  "id": "B22",
+  "what": "truncate allowed",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "CREATE TRIGGER spill_objects_no_truncate BEFORE TRUNCATE ON spill_objects\n  FOR EACH STATEMENT EXECUTE FUNCTION reject_spill_object_update();\n",
+  "new": ""
+ },
+ {
+  "id": "B23",
+  "what": "expiry must be after creation check dropped",
+  "file": "packages/persistence/migrations/0037_tool_output_spill.sql",
+  "old": "expires_at timestamptz NOT NULL CHECK (expires_at > created_at),",
+  "new": "expires_at timestamptz NOT NULL,"
+ }
+]

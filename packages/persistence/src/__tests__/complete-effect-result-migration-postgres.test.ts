@@ -185,9 +185,11 @@ describe('SPEC 0225 migration 0033 — closed expansion of the effect journal', 
     )
     const versions = rows.map((r) => r.version as string)
     expect(versions).toContain('0033_complete_tool_result_journal')
+    // In order: 0033 follows every earlier migration; later ones (0035, SPEC 0291) may follow it.
     expect(versions.indexOf('0033_complete_tool_result_journal')).toBe(
-      versions.length - 1
+      versions.indexOf('0035_runtime_approval_origin') - 1
     )
+    expect(versions.at(-1)).toBe('0035_runtime_approval_origin')
   })
 
   itWithPostgres(

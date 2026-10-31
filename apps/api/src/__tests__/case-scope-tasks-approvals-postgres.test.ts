@@ -1267,7 +1267,9 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
     try {
       await runPostgresMigrations(client, {
         schemaName: legacySchema,
-        migrations: LEGACY_BEFORE_0029
+        // SPEC 0291: the runtime approval store writes the origin columns, so the schema
+        // needs the additive 0035 on top of 0000–0027 (it does not depend on 0029).
+        migrations: [...LEGACY_BEFORE_0029, '0035_runtime_approval_origin']
       })
       const id = randomUUID()
       const conversationId = `conv_legacy28_${id}`

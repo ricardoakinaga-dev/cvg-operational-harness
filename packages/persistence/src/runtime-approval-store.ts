@@ -97,6 +97,8 @@ export interface RuntimeApprovalRow extends QueryResultRow {
   data_classification: string | null
   proposal_payload: unknown
   operation_key: string | null
+  origin_conversation_id: string | null
+  origin_session_id: string | null
   revision: number | string
   created_at: Date | string
   updated_at: Date | string
@@ -118,7 +120,8 @@ const runtimeApprovalColumns = `
   used_reservation_ids, reserved_at, executing_at, released_at, failed_at,
   uncertain_at, confirmed_at, confirmation_evidence_ref, proposal_id,
   proposal_hash, capability, data_classification, proposal_payload,
-  operation_key, revision, created_at, updated_at`
+  operation_key, origin_conversation_id, origin_session_id, revision,
+  created_at, updated_at`
 
 /**
  * Single source of truth for the mutation column order. `recordValues` must
@@ -171,7 +174,9 @@ const persistedColumns = [
   'capability',
   'data_classification',
   'proposal_payload',
-  'operation_key'
+  'operation_key',
+  'origin_conversation_id',
+  'origin_session_id'
 ] as const
 
 const insertColumns = [
@@ -324,7 +329,17 @@ export function mapRuntimeApprovalRow(row: RuntimeApprovalRow): ApprovalRecord {
     ...(row.proposal_payload !== null
       ? { proposalPayload: row.proposal_payload }
       : {}),
-    ...(row.operation_key !== null ? { operationKey: row.operation_key } : {})
+    ...(row.operation_key !== null ? { operationKey: row.operation_key } : {}),
+    ...(row.origin_conversation_id !== null
+      ? {
+          origin: {
+            conversationId: row.origin_conversation_id,
+            ...(row.origin_session_id !== null
+              ? { sessionId: row.origin_session_id }
+              : {})
+          }
+        }
+      : {})
   }
 }
 
@@ -377,7 +392,9 @@ function recordValues(record: ApprovalRecord): unknown[] {
     record.proposalPayload === undefined
       ? null
       : JSON.stringify(record.proposalPayload),
-    record.operationKey ?? null
+    record.operationKey ?? null,
+    record.origin?.conversationId ?? null,
+    record.origin?.sessionId ?? null
   ]
 }
 
@@ -495,6 +512,12 @@ export class PostgresApprovalAuthority implements ApprovalAuthority {
     )
   }
 
+  /**
+   * @internal Latent primitive with no production caller. It does NOT check the approval origin
+   * (SPEC 0291, I2): the runtime checks it in `#runExecutionTurn` before any reservation. A caller
+   * added here must bring the origin check with it; `aud0625-approval-origin-guard.test.ts` fails
+   * when one appears.
+   */
   verifyAndConsume(input: {
     tenantId: string
     approvalId: string

@@ -1172,6 +1172,33 @@ export class GovernedAgentRuntime {
       return finish('denied', 'payload_mismatch', decision)
     }
 
+    // SPEC 0291 I2: an approval is executable only where it was asked, and never by a library
+    // turn when it was made for a durable execution. A library request always records its
+    // origin, while the durable adapter records an executionRef and no origin; the engine also
+    // writes executionRef when it confirms an effect, so executionRef alone does not say who
+    // asked. Denied before any reservation, so the approval stays APPROVED and unconsumed.
+    // Runs before the replay branch below.
+    if (record.origin === undefined && record.executionRef !== undefined) {
+      appendAudit('runtime.denied', { code: 'origin_mismatch' })
+      return finish('denied', 'origin_mismatch', decision)
+    }
+    if (record.origin !== undefined) {
+      if (
+        record.origin.conversationId !== input.conversationId ||
+        (record.origin.sessionId !== undefined &&
+          record.origin.sessionId !== input.sessionId)
+      ) {
+        appendAudit('runtime.denied', { code: 'origin_mismatch' })
+        return finish('denied', 'origin_mismatch', decision)
+      }
+    } else {
+      // I3: records older than the SPEC keep working, visibly, until the tolerance is removed.
+      appendAudit('runtime.origin_unbound', { phase: 'approval' })
+      telemetry.recordMetric('approval_origin_unbound_total', 1, {
+        capability: input.capability
+      })
+    }
+
     // A replay may only answer for the exact operation the approval bound, so
     // it runs after every binding check above (ENG-012).
     if (record.status === 'EXECUTED') {

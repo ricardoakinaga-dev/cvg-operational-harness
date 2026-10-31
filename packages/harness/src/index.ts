@@ -1,6 +1,7 @@
 export * from './createOperationalHarness.ts'
 export * from './compaction.ts'
 export * from './model-compaction.ts'
+export * from './spill/index.ts'
 export * from './session/index.ts'
 export {
   CapabilityRegistry,
