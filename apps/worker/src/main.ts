@@ -527,7 +527,9 @@ async function runPostgresContinuousWorker(env: NodeJS.ProcessEnv) {
       operation: 'spill_sweep'
     })
   }
-  telemetry.log('worker.sweeps_disabled', {
+  // Only the approval and journal sweeps wait for the approval engine composition (AAA-21); the
+  // spill sweep above is independent of it, so the event names what it switches off.
+  telemetry.log('worker.approval_sweeps_disabled', {
     reason: 'approval_engine_composition_pending_aaa21',
     operation: 'sweep'
   })

@@ -196,6 +196,99 @@ describeWithPostgres('worker PostgreSQL role preflight', () => {
     }
   })
 
+  // SPEC 0291 I1 (wave 6 P3): the worker refuses to start when the origin of a runtime approval
+  // could change or cannot be written, instead of failing at the first approval.
+  it('SPEC0291: the kernel prerequisites need the approval origin guard, and refuse every way of losing it', async () => {
+    const role = await createRole(
+      'p0291',
+      'NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION'
+    )
+    await grantInventory(role)
+    const pool = poolFor(role)
+    const table = `${schema}.runtime_approvals`
+    const fn = `${schema}.cvg_runtime_approvals_origin_immutable()`
+    const trigger = 'runtime_approvals_origin_immutable'
+    const definition = (
+      await admin.query<{ def: string }>(
+        `SELECT pg_get_functiondef('${fn}'::regprocedure) AS def`
+      )
+    ).rows[0]!.def
+    const createTrigger = (events: string) =>
+      `CREATE TRIGGER ${trigger} BEFORE ${events} ON ${table}
+         FOR EACH ROW EXECUTE FUNCTION ${fn}`
+    const cases: Array<[string, string[], string[]]> = [
+      [
+        'the trigger is dropped',
+        [`DROP TRIGGER ${trigger} ON ${table}`],
+        [createTrigger('UPDATE')]
+      ],
+      [
+        'the trigger is disabled',
+        [`ALTER TABLE ${table} DISABLE TRIGGER ${trigger}`],
+        [`ALTER TABLE ${table} ENABLE TRIGGER ${trigger}`]
+      ],
+      [
+        'the trigger also fires on insert',
+        [
+          `DROP TRIGGER ${trigger} ON ${table}`,
+          createTrigger('INSERT OR UPDATE')
+        ],
+        [`DROP TRIGGER ${trigger} ON ${table}`, createTrigger('UPDATE')]
+      ],
+      [
+        'the function body is replaced by a no-op',
+        [
+          `CREATE OR REPLACE FUNCTION ${fn} RETURNS trigger LANGUAGE plpgsql
+             SET search_path = pg_catalog, pg_temp AS $$ BEGIN RETURN NEW; END $$`
+        ],
+        [definition]
+      ],
+      [
+        'the function becomes SECURITY DEFINER',
+        [`ALTER FUNCTION ${fn} SECURITY DEFINER`],
+        [`ALTER FUNCTION ${fn} SECURITY INVOKER`]
+      ],
+      [
+        'the function loses its pinned search_path',
+        [`ALTER FUNCTION ${fn} RESET search_path`],
+        [`ALTER FUNCTION ${fn} SET search_path = pg_catalog, pg_temp`]
+      ],
+      [
+        'an origin column is missing',
+        [
+          `ALTER TABLE ${table} RENAME COLUMN origin_session_id TO origin_session_gone`
+        ],
+        [
+          `ALTER TABLE ${table} RENAME COLUMN origin_session_gone TO origin_session_id`
+        ]
+      ]
+    ]
+    try {
+      await expect(
+        assertPostgresKernelPrerequisites(pool, tenant)
+      ).resolves.toBeUndefined()
+      for (const [label, damage, repair] of cases) {
+        for (const sql of damage) await admin.query(sql)
+        try {
+          await expect(
+            assertPostgresKernelPrerequisites(pool, tenant),
+            label
+          ).rejects.toMatchObject({
+            code: 'kernel_runtime_prerequisites_missing'
+          })
+        } finally {
+          for (const sql of repair) await admin.query(sql)
+        }
+        await expect(
+          assertPostgresKernelPrerequisites(pool, tenant),
+          `${label}: repaired`
+        ).resolves.toBeUndefined()
+      }
+    } finally {
+      await pool.end()
+    }
+  })
+
   it('SPEC0249 AC01: the kernel prerequisites refuse an effect journal without RLS', async () => {
     const role = await createRole(
       'p0249b',
