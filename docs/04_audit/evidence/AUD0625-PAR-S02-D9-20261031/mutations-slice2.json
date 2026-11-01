@@ -1,0 +1,219 @@
+[
+ {
+  "id": "J1",
+  "what": "version not checked",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "  if (row.projectionVersion !== SESSION_PROJECTION_VERSION)\n    return refuse('projection version differs')\n",
+  "new": ""
+ },
+ {
+  "id": "J2",
+  "what": "state shape not checked",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "  if (!isProjectionShape(row.state)) return refuse('state is malformed')\n",
+  "new": "  if (!isProjectionShape(row.state) && false as boolean) return refuse('state is malformed')\n"
+ },
+ {
+  "id": "J3",
+  "what": "state position vs checkpoint position not checked",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "  if (row.state.throughSequence !== row.throughSequence)\n    return refuse('state position differs from the checkpoint position')\n",
+  "new": ""
+ },
+ {
+  "id": "J4",
+  "what": "state digest not checked",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "  if (sessionProjectionStateDigest(row.state) !== row.stateDigest)\n    return refuse('state digest differs')\n",
+  "new": ""
+ },
+ {
+  "id": "J5",
+  "what": "header digest not checked",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "  if (row.headerDigest !== sessionHeaderDigest(stream.headerText))\n    return refuse('stream header differs')\n",
+  "new": ""
+ },
+ {
+  "id": "J6",
+  "what": "position above the head tolerated",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "row.throughSequence < 1 || row.throughSequence > stream.head",
+  "new": "row.throughSequence < 1"
+ },
+ {
+  "id": "J7",
+  "what": "position zero tolerated",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "row.throughSequence < 1 || row.throughSequence > stream.head",
+  "new": "row.throughSequence > stream.head"
+ },
+ {
+  "id": "J8",
+  "what": "digest depends on the raw key order",
+  "file": "packages/harness/src/session/projection-cache.ts",
+  "old": "sha256(canonicalizeJson(projection))",
+  "new": "sha256(JSON.stringify(projection))"
+ },
+ {
+  "id": "S1",
+  "what": "the point event is not compared with the checkpoint",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "    if (point.rows[0]?.input_digest !== pointDigest) return undefined\n",
+  "new": ""
+ },
+ {
+  "id": "S2",
+  "what": "a checkpoint at the head is not served as cache",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "    if (checkpoint.throughSequence === head)\n      return {",
+  "new": "    if (false as boolean)\n      return {"
+ },
+ {
+  "id": "S3",
+  "what": "the tail starts at the point, not after it",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "      checkpoint.throughSequence + 1,\n      head\n    )\n    const projection = foldSessionProjection",
+  "new": "      checkpoint.throughSequence,\n      head\n    )\n    const projection = foldSessionProjection"
+ },
+ {
+  "id": "S4",
+  "what": "a corrupt continuation of a checkpoint is raised, not rebuilt",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "          if (!(error instanceof SessionPersistenceCorruptionError)) throw error\n          cache = 'invalid'",
+  "new": "          throw error"
+ },
+ {
+  "id": "S5",
+  "what": "an unreadable cache fails the projection",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "      await client.query('ROLLBACK TO SAVEPOINT projection_cache')\n      this.#cacheFailed('read', id, error)\n      return { state: 'unavailable' }",
+  "new": "      throw error"
+ },
+ {
+  "id": "S6",
+  "what": "cache failures are not counted",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "    this.#cacheFailures[operation] += 1\n",
+  "new": ""
+ },
+ {
+  "id": "S7",
+  "what": "a failing observer propagates",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "    } catch {\n      // a failing observer must not turn a cache failure into a request failure\n    }",
+  "new": "    } catch (error) {\n      throw error\n    }"
+ },
+ {
+  "id": "S8",
+  "what": "a hole in the log is not detected",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "      if (page.rows.length !== Math.min(PAGE, to + 1 - expected))\n        throw new SessionPersistenceCorruptionError('Session log has a gap', id)\n",
+  "new": ""
+ },
+ {
+  "id": "S9",
+  "what": "a rebuild trusts the cache state even when invalid",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "      } else cache = checkpoint.state\n",
+  "new": "      } else cache = 'absent'\n"
+ },
+ {
+  "id": "S10",
+  "what": "the checkpoint query ignores the tenant",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "          WHERE tenant_id=$1 AND session_id=$2 AND projection_id=$3`,\n        [this.options.tenantId, id, SESSION_PROJECTION_ID]",
+  "new": "          WHERE session_id=$2 AND projection_id=$3 AND $1::text IS NOT NULL`,\n        [this.options.tenantId, id, SESSION_PROJECTION_ID]"
+ },
+ {
+  "id": "S11",
+  "what": "an aborted request is not refused",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "    const signal = projectOptions.signal\n    if (signal?.aborted) throw abortError()\n    const schema",
+  "new": "    const signal = projectOptions.signal\n    const schema"
+ },
+ {
+  "id": "V1",
+  "what": "verify ignores a differing projection",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "  if (canonicalizeJson(served.projection) !== canonicalizeJson(rebuilt))",
+  "new": "  if (false as boolean)"
+ },
+ {
+  "id": "V2",
+  "what": "verify does not report an invalid checkpoint",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "  if (served.cache === 'invalid')\n    problems.push('the checkpoint is invalid and was ignored')\n",
+  "new": ""
+ },
+ {
+  "id": "V3",
+  "what": "verify does not report an unreadable cache",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "  if (served.cache === 'unavailable')\n    problems.push('the checkpoint cache cannot be read')\n",
+  "new": ""
+ },
+ {
+  "id": "V4",
+  "what": "verify swallows a log that does not hold up",
+  "file": "packages/persistence/src/session-persistence.ts",
+  "old": "    if (error instanceof SessionPersistenceCorruptionError)\n      return [`the log does not hold up from zero: ${error.message}`]\n    throw error",
+  "new": "    throw error"
+ },
+ {
+  "id": "M1",
+  "what": "the guard does not require the stream owner",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "  IF NOT pg_try_advisory_xact_lock((to_regclass('session_streams')::oid::bigint - 2147483648)::integer, lock_id) THEN",
+  "new": "  IF false THEN"
+ },
+ {
+  "id": "M2",
+  "what": "the guard does not check the point against the log",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "  IF point_digest IS DISTINCT FROM NEW.tail_input_digest THEN",
+  "new": "  IF false THEN"
+ },
+ {
+  "id": "M3",
+  "what": "the guard does not check the header digest",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "  IF NEW.header_digest IS DISTINCT FROM encode(sha256(convert_to(header, 'UTF8')), 'hex') THEN",
+  "new": "  IF false THEN"
+ },
+ {
+  "id": "M4",
+  "what": "the guard allows going backwards",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "     OR NEW.through_sequence < OLD.through_sequence) THEN",
+  "new": "     OR false) THEN"
+ },
+ {
+  "id": "M5",
+  "what": "the guard allows a position beyond the log",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "  IF NEW.through_sequence > head THEN",
+  "new": "  IF false THEN"
+ },
+ {
+  "id": "M6",
+  "what": "no tenant policy on the cache",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "  USING (tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''))\n  WITH CHECK (tenant_id = NULLIF(current_setting('cvg.tenant_id', true), ''));\n\n-- Only the owner",
+  "new": "  USING (true)\n  WITH CHECK (true);\n\n-- Only the owner"
+ },
+ {
+  "id": "M7",
+  "what": "row level security not forced",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "ALTER TABLE session_projection_checkpoints FORCE ROW LEVEL SECURITY;\n",
+  "new": ""
+ },
+ {
+  "id": "M8",
+  "what": "bulk truncate allowed",
+  "file": "packages/persistence/migrations/0036_session_projection_checkpoints.sql",
+  "old": "CREATE TRIGGER session_projection_checkpoints_no_truncate BEFORE TRUNCATE ON session_projection_checkpoints\n  FOR EACH STATEMENT EXECUTE FUNCTION reject_session_projection_checkpoint_truncate();\n",
+  "new": ""
+ }
+]

@@ -1,0 +1,169 @@
+# Freeze técnico — 0294 fatia 1
+
+Base `9a8ab4c7a8980b8de61e2cfc5c56b1e6f902c5f2`; SPEC R2 SHA256
+`551f477ac2bcf1a531c719ac6a660b1dbaae3ef9ce7998ced9cbfef70465dc1e`;
+recibo human26. DF28367 atribui esta fatia ao Codex. O parecer independente
+deste documento é necessário antes da implementação do delta. Sem aprovação
+por inferência, ativação de unit, escrita em cgroup, payload ou pressão.
+
+## Resultado da fatia
+
+1. Tipos públicos `ProcessContainmentV1`, recursos/seccomp/contadores e recusa
+   `admission_refused`, com espelhos legados derivados da mesma observação.
+2. Caminho A atual emite `containment.version=1`, `namespace-observed`,
+   `executor:owner`, `ownerIndependent:false`, recursos/seccomp `not_required`.
+   Não é evidência de B. Causas, fila persistente, Landlock, timers e cleanup A
+   permanecem os mesmos. `ProcessCleanup.observed` admite o futuro `cgroup`.
+3. Requisito explícito `requiredContainment` no serviço e em `runContained`:
+   ausência ou `namespace-observed` seleciona A; `cgroup-guardian` sempre recusa
+   com `admission_refused/qualification_missing` nesta fatia, antes de reservar
+   slot/preparar perfil/spawn. Valor desconhecido é `invalid_request`. Cache do
+   serviço legado não transforma pedido B em A. Nenhuma API recebe BPF/cgroup
+   do payload.
+4. `runContained` confere versão/estado e espelhos do resultado; cleanup_failed,
+   unverified ou espelho divergente impedem retorno de sucesso, preservando a
+   causa observada. A recusa pré-launch continua sem outcome inventado.
+5. Inspeção de delegação somente leitura, com resultado `candidate` ou `refused`,
+   **sempre `qualified:false` e sem token que possa admitir workload**.
+6. Template de unit e entrada de qualificação concreta revisáveis. Não instalar,
+   habilitar ou iniciar. O teste de filho cgroup vazio fica NOT_RUN até existir
+   a unit ativada por operador no caminho aprovado; não usar user@1000.service
+   como substituto. Nenhum mkdir/write na árvore real de cgroups nesta fatia.
+
+## Contrato de relatório
+
+Transcrever a união e os tipos da seção 4.3 da SPEC com prefixo `Process` e
+readonly; números conhecidos em limits são inteiros seguros positivos, swap=0,
+workspace quota positiva ou null. Counter é inteiro seguro não negativo ou
+null com motivo fechado; ausência nunca vira zero. `cgroup-guardian` observado
+exige executor guardian, independência true, recursos e seccomp applied.
+`unverified` exige independência false e recursos unknown.
+
+`ProcessOutcome` conserva campos de causa/status/saída e deriva profile,
+ownerIndependent e landlock da união por um helper único. Validar coerência do
+relatório no adaptador antes de mapear exit; não emitir B nesta fatia. IOCTL_DEV
+é calculado como handled apenas quando ABI>=5 e o bit tratado está presente;
+granted continua false no perfil. Não ampliar o ruleset atual.
+
+`ProcessAdmissionError extends ProcessServiceError` usa code admission_refused e
+reason da união fechada da SPEC. Mensagem e reason não contêm path/valor do host.
+O comentário de ProcessServiceError distingue erros legados pré-processo de
+admissão futura que poderá exigir cleanup de launcher.
+
+## Preflight e fronteira de confiança
+
+API host: `inspectProcessDelegation({root, runtimeDirectory, instance,
+expectedControlGroup, signal?})`. Exigir Linux, instance `[a-z0-9-]{1,64}`,
+paths absolutos normalizados sem NUL ou componentes symlink, root sob mount
+cgroup2 `/sys/fs/cgroup`, basename `cvg-process-qualification@<instance>.service`,
+e root igual ao ControlGroup esperado relativo ao mount. O ControlGroup é
+input da composição operadora, não parâmetro de ferramenta/SDK.
+
+O leitor real usa lstat por componente, statfs magic cgroup2/tmpfs, UID efetivo,
+leituras limitadas de arquivos e `/proc/self/cgroup`; não executa systemctl,
+shell, mkdir, write, kill ou payload. Raiz sem processos diretos; dono deve
+estar exatamente na folha `<root>/supervisor`. Controladores cpu/memory/pids
+disponíveis e habilitados na raiz e pais relevantes até o mount. Conferir
+cgroup.type=domain, cgroup.kill, arquivos cpu.max/stat, memory.max/events/
+oom.group/swap.max e pids.max/events. Estes arquivos na raiz demonstram
+disponibilidade, **não aplicação de limites do futuro workload**.
+
+RuntimeDirectory é a pasta de instância criada pela unit, absoluta, tmpfs,
+UID efetivo, modo0700; leases ainda não são criados pelo leitor. A futura
+supervisão nativa fixa dirfd/inode/boot-id/generations e revalida tudo antes
+de qualquer efeito. Lstat+read nesta API não é defesa TOCTOU para admissão:
+é diagnóstico sem autoridade. Resultado público usa motivos fechados e nomes
+de checks, nunca caminhos/erros brutos. Abort lança cancelamento; não vira
+candidate. Leitura ausente/incerta recusa. Leitura real pode demonstrar recusa
+no host atual; fixture comum jamais é chamada de cgroup qualificado.
+
+Um avaliador puro de fatos permite testar cada condição sem fabricar cgroupfs.
+O leitor do host e o avaliador são separados, mas ambos os relatórios conservam
+qualified:false. Fatos injetados são seam de teste/diagnóstico e não autoridade
+de lançamento. Piso Linux5.14 e systemd254 é documental; clone3/pidfd e
+pertencimento ainda exigem probes nativos nas fatias seguintes, nunca
+qualificados só por os.release.
+
+## Unit e entrada
+
+Destino: `deploy/systemd/user/cvg-process-qualification@.service`.
+Sem [Install], Restart=no, UMask0077, RuntimeDirectory0700/Preserve=yes,
+Delegate=cpu memory pids, DelegateSubgroup=supervisor, KillMode=control-group
+como fallback de parada da UNIT, não prova de cleanup de workload.
+
+ExecStart usa dois caminhos absolutos do host sob `%h/.local/libexec/cvg/`:
+`node22` e `qualification-entry.mjs --instance %i`. A entrada desta fatia é
+somente diagnóstico e não recebe comando arbitrário: resolve a própria posição
+em `/proc/self/cgroup`, valida basename/instance e lê a RuntimeDirectory
+específica de `%t`. Emite JSON sem paths, qualified:false e termina; Type=oneshot
+com RemainAfterExit=no. Ela não mantém uma unit utilizável para workload.
+
+Os dois arquivos e o módulo compilado do sandbox precisam de manifesto de
+instalação revisado e hashes fixados pelo operador antes de ativação. Esta fatia
+não instala nem afirma que `%h/.local/libexec/cvg/node22` já existe. A entrada
+importa `./sandbox/process-service/cgroup-preflight.js` do mesmo pacote instalado;
+o empacotamento deve conservar os módulos compilados necessários. Um runbook
+explica build, paths, hashes, ausência de payload e por que o diagnóstico que
+termina não concede delegação utilizável às fatias seguintes. Verificação
+estática do template é evidência distinta de instalação/start e efeito real.
+
+## Congelamento prospectivo para as próximas fatias
+
+Estes contratos são definidos agora; não implementar nem qualificar seu nativo
+nesta fatia. Cada implementação futura precisa de sua revisão e digest de build.
+
+- Guardião single-thread C, setsid, sem PDEATHSIG, pai do bwrap criado por
+  clone3/CLONE_INTO_CGROUP; autoridade única de causa/limpeza. Pai Node perdido
+  por pidfd ou EOF => owner_lost interno e fechamento imediato. Primeira causa
+  anterior fica. Dono parado não bloqueia deadline/cleanup; stdio payload
+  dono↔payload. Não prometer entrega ao dono morto.
+- Frames guardião: tamanho uint32 big-endian seguido de JSON UTF-8, 1..4096
+  bytes. Envelope fechado {version:1, nonce:hex32, sequence:safeInteger,
+  kind, data}. Seq começa0 para admitted; comandos começam1, sem repetição ou
+  reordenação aceita; repetição idempotente não executa segunda limpeza.
+  kind = admitted/status/closed no retorno; stop/dispose no comando. data
+  discriminado por kind e fechado no schema implementado da fatia2a. Não aceitar
+  protocolo parcial como prova; schema detalhado/corpus/digest será input do
+  gate daquela fatia antes de criar um filho.
+- FDs privados todos CLOEXEC desde criação/duplicação; inventário e números
+  efetivos fixados por lançamento no manifest nativo. Apenas stdio0/1/2 no
+  payload. Guardião único leitor de status/prova. Lease sob runtime tmpfs da
+  instância/leases/nonce, lock de inode estável, final.json<=4096 por dirfd/
+  O_NOFOLLOW/temp+sync+rename+sync; geração/boot-id/inode e retenção até consumo,
+  nunca mero checksum de JSON. Não há janitor executável nesta fatia.
+- Prova helper v2: objeto fechado {version:2,landlock:{applied,abi,handledFs,
+  handledNet,scoped},seccomp:{applied:true,mode:2,arch:'x86_64',profileId,
+  policyDigest}}; teto4096, uma prova em canal privado após aplicar política.
+  policyDigest é digest esperado do helper compilado/revisado, não digest
+  autodeclarado como autoridade. V1 continua apenas no A legado; perfil v2
+  obrigatório recusa V1/arquitetura/digest/direitos divergentes.
+- Manifesto seccomp prospectivo para ELF **estático sem libc**, entrada _start:
+  elf-qual-v1 permite somente x86_64 read(0),write(1),close(3),getpid(39),
+  execve(59),exit(60),exit_group(231); elf-sentinel-deny-v1 remove getpid.
+  Arch diferente, x32 bit ou syscall fora => KILL_PROCESS. Calcular JSON/prova
+  antes do filtro; depois somente write/close/execve/_exit. Não serve a ELF
+  dinâmico, Node, MCP ou LSP. Nenhum BPF externo ou bwrap --seccomp.
+  Compilar/aplicar/observar filtro e ELF é gate futuro da fatia4; esta lista
+  não é evidência de funcionamento nem permite ativação.
+
+## Seleção fechada de testes sem payload
+
+Executar apenas os três arquivos puros já enumerados e testes novos S1 que não importem reviewedNodeProfile/hostProbe nem compilem C ou criem payload. Spies do serviço e mocks do adaptador exercitam as fronteiras; não substituir o spawn fictício por execução de Node, shell, bwrap ou helper. Regressões nativas X01/X02 e qualificação de CPU/memória/pids/seccomp são NOT_RUN sob human26. Nenhum sucesso de seam é prova de contenção nativa. Baseline atual desses três arquivos:118PASS0skip, sem payload.
+
+## Critérios e verificações
+
+| ID | Critério que pode rejeitar o delta | Procedimento |
+| --- | --- | --- |
+| S1-01 | União/mirrors/admission reason coerentes; A nunca vira B | unitários de tipos/relatório, teste de serviço real com spawn seam e adapter; types/lint |
+| S1-02 | Pedido B não chega a prepare/spawn nem ocupa slot; cache não degrada | serviço/adapter com spy e chamada A posterior, valores inválidos |
+| S1-03 | Unverified/cleanup_failed nunca retornam sucesso, causa preservada | testes de projeção usando outcomes válidos e inválidos |
+| S1-04 | Preflight falha fechado em cada requisito/abort, sem I/O de escrita | fatos sintéticos positivos/negativos + leitor em fixtures e recusa real do host |
+| S1-05 | Unit/entry têm caminhos/args fechados e nenhum efeito de ativação | review independente, parse/validação estática e runbook |
+| S1-06 | Regressores X01/X02 relevantes preservados, mutantes rejeitados por asserção | somente testes puros/seams com spawn fictício: par-x01-process-service-core, par-x02-landlock-status, par-x01-spawn-boundary e novos testes S1; mutantes guardB/mirror/preflight. Suites de helper, launch, serviço nativo e persistência nativa ficam NOT_RUN |
+| S1-07 | Fontes imutáveis/pins/receipts e evidência honesta | diff/preservação de inputs, T1 links/formato/higiene/scan; source+commit final |
+
+Cobertura dos novos arquivos por arquivo100S/B/F/L quando configurada; não
+substitui o full wave5 ainda sob 07/DF. Não repetir full nem mexer em políticas.
+Fatia1 entrega implementação com revisão independente; cgroup vazio real,
+clone3/pidfd, unit ativada, pressão e B ficam NOT_RUN, com bloqueio explícito
+antes das fatias executáveis correspondentes.

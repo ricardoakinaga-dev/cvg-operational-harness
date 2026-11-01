@@ -58,4 +58,21 @@ export type {
   ProcessOutcome,
   ProcessService
 } from './process-service/types.ts'
-export { ProcessServiceError } from './process-service/errors.ts'
+export {
+  ProcessServiceError,
+  ProcessAdmissionError
+} from './process-service/errors.ts'
+export type {
+  ProcessDelegationInput,
+  ProcessDelegationFacts,
+  ProcessDelegationReport
+} from './process-service/cgroup-preflight.ts'
+export type {
+  ProcessContainmentV1,
+  ProcessReadReason,
+  ProcessAdmissionReason,
+  ProcessCounter,
+  ProcessResourceLimits,
+  ProcessResources,
+  ProcessSeccompReport
+} from './process-service/containment.ts'

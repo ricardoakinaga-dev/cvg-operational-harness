@@ -38,8 +38,12 @@ def equivalent(test, a, b):
 class InteropTests(unittest.IsolatedAsyncioTestCase):
     async def test_oracle_projection_all_nine_schemas_and_js_canonical_upper_bound(self):
         oracle = await node_json('oracle')
-        for key in ('protocol_version', 'methods', 'error_codes', 'transport_error_codes', 'stop_reasons', 'event_fingerprints'):
+        for key in ('protocol_version', 'error_codes', 'transport_error_codes', 'stop_reasons', 'event_fingerprints'):
             equivalent(self, oracle[key], _CONTRACT[key])
+        # additive v1: the TS vocabulary may grow; this mirror implements its prefix and ignores the rest
+        known = len(_CONTRACT['methods'])
+        equivalent(self, oracle['methods'][:known], _CONTRACT['methods'])
+        self.assertEqual(oracle['methods'][known:], ['session.list', 'session.trace'])
         equivalent(self, oracle['catalog'], CATALOG)
         self.assertTrue(all('/dist/' in p and '/src/' not in p for p in oracle['public_resolution']))
         for event, actual_size in zip(oracle['events'], oracle['canonical_sizes']):

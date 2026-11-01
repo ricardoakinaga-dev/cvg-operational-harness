@@ -7,7 +7,7 @@
 
 ## Extensão Claude100 — 17/10/2026
 
-Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado dos 266 PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
+Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado das 272 capacidades do escopo PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
 
 Este 0380 permanece a fonte do estado e da execução dos PAR reaproveitados; o 0383 possui apenas o estado dos C100 e o encaminhamento dos aceites Claude. Uma implementação comum tem um único dono, claim e tarefa; serve aos dois catálogos somente depois de qualificada em cada um. Carriers opcionais não se tornam pré-requisitos por mera associação. A extensão não substitui 0379/0380, não concede BUILD T3/T4 e não altera a trilha de produção 0374.
 
@@ -29,6 +29,10 @@ Regras da carteira:
 3. Divergência deliberada só sai do denominador por decisão registrada (D2/D4 do roadmap), com nova versão da medida. Nada é excluído em silêncio.
 4. Um writer por arquivo compartilhado (schema, lockfile, contratos públicos, ledgers). Cartões paralelos têm caminhos disjuntos e claim próprio.
 5. Uma revisão independente por cartão e no máximo dois retrabalhos (proposta D3). Se a revisão rejeitar duas vezes, o cartão volta para replanejamento, sem novo ciclo de crítica.
+
+<a id="escopo-par-cap-vigente"></a>
+
+Escopo vigente em 31/10/2026: **272 capacidades**, pela emenda D1 do [recibo32](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-32.json), sobre a correção para 270 do [recibo30](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-30.json). A [medida r3-denominator-272](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/measure.json) publica o hash do [catálogo versionado](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/catalog-272.json.gz); os 270 IDs e descrições anteriores ficam verbatim, com G1/SPILL-03 e G1/SESSION-07 acrescentados. Totais atuais: G1=52, G2=71, G3=56, G4=47 e G5=46. O catálogo histórico de16/10 tinha 266 capacidades. A emenda não altera os 111 cartões PAR nem seus estados, dependências ou aceites: Q01/F01 continua aberto, 355 propostas aguardam revisão semântica e as 26 relações das duas capacidades novas permanecem propostas. Não há novo ciclo de crítica por inferência, PASS funcional, autorização de BUILD ou produção. Em WEB-02, o DNS pelo proxy é exceção documentada da referência; o CVG mantém validação/fixação universal ou proxy desligado, conforme o mesmo recibo32.
 
 ## Resumo
 
@@ -110,7 +114,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Fase F0 · prioridade P0 · tamanho M · trilha T1 · relevância hospitalar alta · estado `IN_PROGRESS`.
 - Origem: 266 capacidades da análise PARE100-GAP (G1–G5). Absorve: P100-003.
 - Hoje: Matriz de 44.132 folhas estáticas (30.586 STATIC, 13.546 UNKNOWN), sem nenhum PASS funcional; levantamento por capacidade feito em 16/10 por leitura.
-- Entrega: Revisar as 266 capacidades com fonte (caminho e commit da referência), relevância, classe (EQUIVALENTE, EQUIVALENTE_GOVERNADA ou DIVERGENTE_DECIDIDA) e procedimento de aceite. As folhas estáticas ficam como rastreabilidade, ligadas a uma capacidade.
+- Entrega: Revisar as 272 capacidades do escopo autorizado vigente com fonte (caminho e commit da referência), relevância, classe (EQUIVALENTE, EQUIVALENTE_GOVERNADA ou DIVERGENTE_DECIDIDA) e procedimento de aceite. As folhas estáticas ficam como rastreabilidade, ligadas a uma capacidade.
 - Depende de: PAR-G01.
 - Aceite: Nenhuma capacidade sem procedimento e cartão; denominador publicado com hash; qualquer mudança de escopo exige decisão registrada e nova versão da medida.
 
@@ -295,24 +299,24 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 16 cartões, cerca de 141 dias de engenharia (faixa 91–179).
 
-| Cartão  | Título                                         | Tam. | Prio. | Estado | Depende de       |
-| ------- | ---------------------------------------------- | ---- | ----- | ------ | ---------------- |
-| PAR-M01 | Streaming no gateway com um resultado terminal | M    | P0    | `TODO` | PAR-K03          |
-| PAR-M02 | Requisição congelada antes do adaptador        | P    | P2    | `DONE` | PAR-M01          |
-| PAR-M03 | Entrada multimodal de imagem                   | M    | P1    | `TODO` | PAR-M01, PAR-T04 |
-| PAR-M05 | Modelo padrão e seleção por sessão             | P    | P2    | `TODO` | PAR-K05          |
-| PAR-S01 | Persistência pública de sessão entre processos | G    | P0    | `DONE` | PAR-K03          |
-| PAR-S02 | Projeções de sessão com cache                  | M    | P1    | `TODO` | PAR-S01          |
-| PAR-S03 | Estatísticas, esboço de turnos e título        | M    | P2    | `TODO` | PAR-S02          |
-| PAR-S04 | Fork e retomada de sessão                      | M    | P1    | `DONE` | PAR-S01          |
-| PAR-S05 | Consulta de sessões com rastreio               | M    | P1    | `TODO` | PAR-S01          |
-| PAR-S06 | Busca textual nas sessões                      | G    | P2    | `TODO` | PAR-S05          |
-| PAR-S07 | Formatos novos e export/import versionado      | M    | P2    | `TODO` | PAR-S02          |
-| PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `DONE` | PAR-M01, PAR-K03 |
-| PAR-C02 | Pressão de tokens antes do dispatch            | P    | P1    | `TODO` | PAR-M01          |
-| PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `TODO` | PAR-S01          |
-| PAR-C04 | Descarregamento de imagens antigas             | M    | P2    | `TODO` | PAR-C03, PAR-M03 |
-| PAR-D01 | Storage de domínio tipado sobre PostgreSQL     | M    | P2    | `TODO` | PAR-S01          |
+| Cartão  | Título                                         | Tam. | Prio. | Estado        | Depende de       |
+| ------- | ---------------------------------------------- | ---- | ----- | ------------- | ---------------- |
+| PAR-M01 | Streaming no gateway com um resultado terminal | M    | P0    | `TODO`        | PAR-K03          |
+| PAR-M02 | Requisição congelada antes do adaptador        | P    | P2    | `DONE`        | PAR-M01          |
+| PAR-M03 | Entrada multimodal de imagem                   | M    | P1    | `TODO`        | PAR-M01, PAR-T04 |
+| PAR-M05 | Modelo padrão e seleção por sessão             | P    | P2    | `TODO`        | PAR-K05          |
+| PAR-S01 | Persistência pública de sessão entre processos | G    | P0    | `DONE`        | PAR-K03          |
+| PAR-S02 | Projeções de sessão com cache                  | M    | P1    | `IN_PROGRESS` | PAR-S01          |
+| PAR-S03 | Estatísticas, esboço de turnos e título        | M    | P2    | `TODO`        | PAR-S02          |
+| PAR-S04 | Fork e retomada de sessão                      | M    | P1    | `DONE`        | PAR-S01          |
+| PAR-S05 | Consulta de sessões com rastreio               | M    | P1    | `TODO`        | PAR-S01          |
+| PAR-S06 | Busca textual nas sessões                      | G    | P2    | `TODO`        | PAR-S05          |
+| PAR-S07 | Formatos novos e export/import versionado      | M    | P2    | `TODO`        | PAR-S02          |
+| PAR-C01 | Compactação por modelo sob pressão             | M    | P1    | `DONE`        | PAR-M01, PAR-K03 |
+| PAR-C02 | Pressão de tokens antes do dispatch            | P    | P1    | `TODO`        | PAR-M01          |
+| PAR-C03 | Spill de saídas grandes e poda de resultados   | M    | P1    | `DONE`        | PAR-S01          |
+| PAR-C04 | Descarregamento de imagens antigas             | M    | P2    | `TODO`        | PAR-C03, PAR-M03 |
+| PAR-D01 | Storage de domínio tipado sobre PostgreSQL     | M    | P2    | `TODO`        | PAR-S01          |
 
 ### PAR-M01 — Streaming no gateway com um resultado terminal
 
@@ -361,12 +365,13 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-S02 — Projeções de sessão com cache
 
-- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `IN_PROGRESS`.
 - Origem: G1/SESSION-04. Absorve: P100-020.
 - Hoje: Nenhuma projeção de estado atual.
 - Entrega: Projeções reconstruídas do log (estado atual, pendências, metas, todos) com cache de checkpoint.
 - Depende de: PAR-S01.
 - Aceite: Projeção reconstruída do zero é igual à do cache; cada item cita o evento de origem.
+- Execução atual: BUILD local da [SPEC 0292](../02_spec/0292_par_s02_session_projections.md) R1 (recibo 25), em quatro fatias, branch `claude/aud0625-par-s02-build-d9`, ainda sem aceite nem integração: fatia 1 `493e8ed29` (redutor de turnos e projeção pura; aprovada pela Codex em `bb8e460e0`), fatia 2 `8b53c92e8` (migração 0036 opt-in, `project`, `verifyProjectionCache`), fatia 3 `856362113` (o dono do stream grava o checkpoint), fatia 4 (`resumeSession` entrega ao dono a projeção do log que acabou de analisar). Notas [0292b](../02_spec/0292b_checkpoint_guard_and_stops_note.md). Revisão das fatias 2 a 4 pendente. [Evidência](../04_audit/evidence/AUD0625-PAR-S02-D9-20261031/SLICE4-RESULT.md).
 
 ### PAR-S03 — Estatísticas, esboço de turnos e título
 
@@ -434,7 +439,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 ### PAR-C03 — Spill de saídas grandes e poda de resultados
 
-- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `TODO`.
+- Fase F2 · prioridade P1 · tamanho M · trilha T3 · relevância hospitalar alta · estado `DONE` (escopo local/CI, onda 6 mesclada em #37 `0ab1f0d96`; produção `NO_GO`).
 - Origem: G1/SPILL-01, SPILL-02, COMP-03; G2/SH-04. Absorve: P100-021; SPEC0224.
 - Hoje: Saídas truncadas em 1 MiB sem arquivo de continuação; spill só proposto na SPEC0224.
 - Entrega: Armazenamento de texto grande com localizador opaco, prévia de cabeça e cauda e poda de resultado de ferramenta.

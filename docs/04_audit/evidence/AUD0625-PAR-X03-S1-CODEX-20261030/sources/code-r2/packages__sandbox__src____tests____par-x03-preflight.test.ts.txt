@@ -1,0 +1,287 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+const fs = vi.hoisted(() => ({
+  dirs: new Map<string, { uid?: number; mode?: number; symlink?: boolean }>(),
+  files: new Map<string, string>(),
+  fds: new Map<number, string>(),
+  magic: new Map<string, number>(),
+  denied: new Set<string>(),
+  statErrors: new Set<string>(),
+  readErrors: new Set<string>(),
+  closes: vi.fn(),
+  closeErrors: new Set<string>(),
+  next: 10
+}))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const overrides = {
+    constants: { O_RDONLY: 0, O_NOFOLLOW: 0x20000, O_NONBLOCK: 0x800, W_OK: 2 },
+    lstatSync: (p: string) => {
+      if (fs.statErrors.has(p)) throw new Error('synthetic metadata error')
+      const d = fs.dirs.get(p)
+      if (d)
+        return {
+          isDirectory: () => !d.symlink,
+          isFile: () => false,
+          uid: d.uid ?? process.geteuid!(),
+          mode: d.mode ?? 0o40700
+        }
+      if (fs.files.has(p))
+        return { isDirectory: () => false, isFile: () => true }
+      throw new Error('synthetic missing')
+    },
+    openSync: (p: string) => {
+      if (!fs.files.has(p)) throw new Error('synthetic missing')
+      const fd = fs.next++
+      fs.fds.set(fd, p)
+      return fd
+    },
+    readSync: (fd: number, b: Buffer) => {
+      const p = fs.fds.get(fd)!
+      if (fs.readErrors.has(p)) throw new Error('synthetic read error')
+      const data = Buffer.from(fs.files.get(p)!)
+      data.copy(b)
+      return Math.min(data.length, b.length)
+    },
+    closeSync: (fd: number) => {
+      fs.closes(fd)
+      const p = fs.fds.get(fd)!
+      fs.fds.delete(fd)
+      if (fs.closeErrors.has(p))
+        throw new Error('synthetic close failure at ' + p)
+    },
+    statfsSync: (p: string) => {
+      if (!fs.magic.has(p)) throw new Error('synthetic fs unavailable')
+      return { type: fs.magic.get(p) }
+    },
+    accessSync: (p: string) => {
+      if (fs.denied.has(p)) throw new Error('synthetic denied')
+    }
+  }
+  return { ...actual, ...overrides, default: { ...actual, ...overrides } }
+})
+import {
+  assessProcessDelegation,
+  inspectProcessDelegation
+} from '../process-service/cgroup-preflight.ts'
+import type { ProcessDelegationFacts } from '../process-service/cgroup-preflight.ts'
+const root = '/sys/fs/cgroup/cvg-process-qualification@synthetic.service'
+const runtime = '/run/user/1000/cvg-process-qualification/synthetic'
+const input = {
+  root,
+  runtimeDirectory: runtime,
+  instance: 'synthetic',
+  expectedControlGroup: '/cvg-process-qualification@synthetic.service'
+}
+const all: ProcessDelegationFacts = {
+  linux: true,
+  identity: true,
+  cgroupFilesystem: true,
+  rootOwned: true,
+  rootEmpty: true,
+  ownerInSupervisor: true,
+  controllers: true,
+  kernelFiles: true,
+  runtimePrivate: true
+}
+beforeEach(() => {
+  fs.dirs.clear()
+  fs.files.clear()
+  fs.fds.clear()
+  fs.magic.clear()
+  fs.denied.clear()
+  fs.statErrors.clear()
+  fs.readErrors.clear()
+  fs.closes.mockClear()
+  fs.closeErrors.clear()
+  for (const p of [
+    '/',
+    '/sys',
+    '/sys/fs',
+    '/sys/fs/cgroup',
+    root,
+    '/run',
+    '/run/user',
+    '/run/user/1000',
+    '/run/user/1000/cvg-process-qualification',
+    runtime
+  ])
+    fs.dirs.set(p, {})
+  fs.magic.set(root, 0x63677270)
+  fs.magic.set(runtime, 0x01021994)
+  for (const d of [root, '/sys/fs/cgroup'])
+    for (const name of ['cgroup.controllers', 'cgroup.subtree_control'])
+      fs.files.set(d + '/' + name, 'cpu memory pids\n')
+  fs.files.set(root + '/cgroup.procs', '')
+  fs.files.set(root + '/cgroup.type', 'domain\n')
+  fs.files.set(root + '/cgroup.kill', '')
+  for (const name of [
+    'cpu.max',
+    'cpu.stat',
+    'memory.max',
+    'memory.events',
+    'memory.oom.group',
+    'memory.swap.max',
+    'pids.max',
+    'pids.events'
+  ])
+    fs.files.set(root + '/' + name, 'synthetic-availability-only\n')
+  fs.files.set(
+    '/proc/self/cgroup',
+    '0::' + input.expectedControlGroup + '/supervisor\n'
+  )
+})
+describe('0294 S1 diagnostic facts never grant authority', () => {
+  it('positive synthetic facts yield only a frozen candidate, never qualified', () => {
+    const report = assessProcessDelegation(all)
+    expect(report).toMatchObject({
+      state: 'candidate',
+      qualified: false,
+      reason: 'qualification_missing'
+    })
+    expect(Object.isFrozen(report.checks)).toBe(true)
+  })
+  it.each(Object.keys(all) as (keyof ProcessDelegationFacts)[])(
+    'refuses when %s is missing or false',
+    (key) => {
+      for (const value of [false, undefined, 'true'])
+        expect(
+          assessProcessDelegation({ ...all, [key]: value } as never)
+        ).toMatchObject({ state: 'refused', qualified: false })
+    }
+  )
+})
+describe('0294 S1 reader through synthetic filesystem, no native qualification', () => {
+  it('reads ownership/filesystems/empty root/supervisor/controllers but cannot qualify a launch', async () => {
+    const report = await inspectProcessDelegation(input)
+    expect(report).toMatchObject({
+      state: 'candidate',
+      qualified: false,
+      reason: 'qualification_missing'
+    })
+    expect(report.checks.every((c) => c.passed)).toBe(true)
+    expect(JSON.stringify(report)).not.toContain('/sys')
+    expect(fs.fds.size).toBe(0)
+    expect(fs.closes).toHaveBeenCalled()
+  })
+  it.each([
+    null,
+    { ...input, instance: '../escape' },
+    { ...input, instance: '' },
+    { ...input, root: 'relative' },
+    { ...input, root: root + '/..' },
+    { ...input, root: '/tmp/x' },
+    { ...input, root: root + '\0x' },
+    { ...input, root: root + '//x' },
+    { ...input, runtimeDirectory: 'relative' },
+    { ...input, expectedControlGroup: 'relative' },
+    { ...input, signal: {} }
+  ])('refuses malformed host inputs before observing', async (bad) => {
+    await expect(inspectProcessDelegation(bad as never)).rejects.toMatchObject({
+      code: 'invalid_request'
+    })
+    expect(fs.closes).not.toHaveBeenCalled()
+  })
+  it('rejects another control group, unit identity, or runtime instance', async () => {
+    for (const patch of [
+      { expectedControlGroup: '/other' },
+      { instance: 'other' },
+      { runtimeDirectory: '/run/other' },
+      { runtimeDirectory: '/run/wrong/synthetic' }
+    ])
+      expect(
+        await inspectProcessDelegation({ ...input, ...patch })
+      ).toMatchObject({
+        state: 'refused',
+        qualified: false,
+        reason: 'delegation_invalid'
+      })
+  })
+  it('honors pre-abort and an abort between entry and observation without returning a candidate', async () => {
+    const a = new AbortController()
+    a.abort()
+    await expect(
+      inspectProcessDelegation({ ...input, signal: a.signal })
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    const b = new AbortController()
+    const pending = inspectProcessDelegation({ ...input, signal: b.signal })
+    b.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+  it('rejects a symlink component, vanished path or wrong filesystem', async () => {
+    fs.dirs.set('/sys/fs', { symlink: true })
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.dirs.set('/sys/fs', {})
+    fs.statErrors.add(root)
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.statErrors.clear()
+    fs.magic.set(root, 0x123)
+    expect((await inspectProcessDelegation(input)).reason).toBe(
+      'cgroup_unavailable'
+    )
+    fs.magic.delete(root)
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+  })
+  it('rejects wrong ownership, populated root or wrong owner position', async () => {
+    fs.dirs.set(root, { uid: process.geteuid!() + 1 })
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.dirs.set(root, {})
+    fs.files.set(root + '/cgroup.procs', '123\n')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.files.set(root + '/cgroup.procs', '')
+    fs.files.set('/proc/self/cgroup', '0::/other/supervisor\n')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.files.delete('/proc/self/cgroup')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+  })
+  it('requires each controller in both available and subtree sets through the mount', async () => {
+    for (const path of [
+      root + '/cgroup.controllers',
+      root + '/cgroup.subtree_control',
+      '/sys/fs/cgroup/cgroup.controllers',
+      '/sys/fs/cgroup/cgroup.subtree_control'
+    ]) {
+      fs.files.set(path, 'memory pids')
+      expect((await inspectProcessDelegation(input)).reason).toBe(
+        'controller_missing'
+      )
+      fs.files.set(path, 'cpu memory pids')
+    }
+  })
+  it('rejects missing, denied or oversized kernel files and closes a failed read', async () => {
+    fs.files.delete(root + '/cgroup.kill')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.files.set(root + '/cgroup.kill', '')
+    fs.denied.add(root + '/cgroup.kill')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.denied.clear()
+    fs.files.set(root + '/cgroup.type', 'threaded')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.files.set(root + '/cgroup.type', 'domain')
+    fs.files.set(root + '/memory.events', 'x'.repeat(8193))
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.files.set(root + '/memory.events', 'ok')
+    fs.readErrors.add(root + '/memory.swap.max')
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    expect(fs.fds.size).toBe(0)
+  })
+  it('CODE-R1-F02: close failures are refused diagnostics, never raw errors or candidates', async () => {
+    for (const failed of [root + '/cgroup.procs', root + '/memory.swap.max']) {
+      fs.closeErrors.add(failed)
+      const report = await inspectProcessDelegation(input)
+      expect(report).toMatchObject({ state: 'refused', qualified: false })
+      expect(JSON.stringify(report)).not.toContain(root)
+      expect(fs.fds.size).toBe(0)
+      fs.closeErrors.clear()
+    }
+  })
+  it('requires a private owned tmpfs runtime directory without symlinks', async () => {
+    fs.dirs.set(runtime, { mode: 0o40755 })
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.dirs.set(runtime, {})
+    fs.magic.set(runtime, 0x123)
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+    fs.magic.set(runtime, 0x01021994)
+    fs.dirs.set('/run/user', { symlink: true })
+    expect((await inspectProcessDelegation(input)).state).toBe('refused')
+  })
+})

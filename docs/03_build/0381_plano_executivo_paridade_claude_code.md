@@ -95,7 +95,7 @@ Contratos públicos e eventos são compartilhados pelo integrador; adapters poss
 
 O [0380](0380_backlog_paridade_100_deepseek.md) continua proprietário do estado e do trabalho PAR. O [0383](0383_backlog_paridade_claude_code.md) é a extensão de deltas C100 e da qualificação Claude, ligada por uma ponte no 0380. O mesmo componente não ganha duas tasks de construção ou dois estados concorrentes.
 
-Há **37 cartões C100 novos**, **53 PAR referenciados diretamente** e **58 PAR no fecho transitivo**, sem contar carriers opcionais como SSH/ACP como obrigatórios para cloud/IDE. Reuso opcional só vira dependência após decisão arquitetural, com recalculo do grafo e do esforço. Não se exige concluir todos os 111 PAR ou obter 266/266 DeepSeek para iniciar ou aceitar o Claude100.
+Há **37 cartões C100 novos**, **53 PAR referenciados diretamente** e **58 PAR no fecho transitivo**, sem contar carriers opcionais como SSH/ACP como obrigatórios para cloud/IDE. Reuso opcional só vira dependência após decisão arquitetural, com recalculo do grafo e do esforço. Não se exige concluir todos os 111 PAR ou obter 272/272 DeepSeek para iniciar ou aceitar o Claude100.
 
 Um PAR pode produzir evidência aproveitável pelos dois alvos, mas cada catálogo qualifica seus próprios requisitos. `PAR-Q02` compara DeepSeek; não é automaticamente um comparador Claude. C100-Q01 adiciona o driver/oráculo específico. Infraestrutura Q03/Q04/Q06/Q08 é reutilizada, sem alterar o denominador aprovado do PAR-CAP.
 

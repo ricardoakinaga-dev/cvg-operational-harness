@@ -1,0 +1,23 @@
+# SPEC0294 slice1: diagnostic artifact only, no installation/activation by the harness.
+# Operator must pin Node22, entry and compiled modules before any activation.
+[Unit]
+Description=CVG read-only process delegation diagnostic %i
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/libexec/cvg/node22 %h/.local/libexec/cvg/qualification-entry.mjs --instance %i
+Delegate=cpu memory pids
+DelegateSubgroup=supervisor
+RuntimeDirectory=cvg-process-qualification/%i
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
+NoNewPrivileges=yes
+UMask=0077
+Restart=no
+RemainAfterExit=no
+KillMode=control-group
+TimeoutStartSec=15s
+TimeoutStopSec=10s
+
+# Deliberately no [Install]. This command exits after observation and cannot host workloads.
+# Manager stop is a fallback for the whole unit, not guardian cleanup evidence.

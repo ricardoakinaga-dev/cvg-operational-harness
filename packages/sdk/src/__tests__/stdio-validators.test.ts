@@ -106,12 +106,32 @@ describe('SPEC0211 correlated result validators, unmodified good and tampered ba
       }
     ],
     [
-      'unknown method',
+      'malformed method name',
       {
         ...helloResult,
         capabilities: {
           ...helloResult.capabilities,
-          methods: [...SDK_METHODS, 'toString']
+          methods: [...SDK_METHODS, '__proto__']
+        }
+      }
+    ],
+    [
+      'method name with a space',
+      {
+        ...helloResult,
+        capabilities: {
+          ...helloResult.capabilities,
+          methods: [...SDK_METHODS, 'session.li st']
+        }
+      }
+    ],
+    [
+      'non-string method name (an array that prints like a name)',
+      {
+        ...helloResult,
+        capabilities: {
+          ...helloResult.capabilities,
+          methods: [...SDK_METHODS, ['session']]
         }
       }
     ],
@@ -147,6 +167,21 @@ describe('SPEC0211 correlated result validators, unmodified good and tampered ba
     expect(() =>
       validateCorrelatedResponse(hello, success(hello, result), 't')
     ).toThrow()
+  })
+
+  it('tolerates a well-formed method name it does not know (additive v1), keeping the shape strict', () => {
+    for (const extra of ['session.fork', 'toString', 'a.b.c1']) {
+      const result = {
+        ...helloResult,
+        capabilities: {
+          ...helloResult.capabilities,
+          methods: [...SDK_METHODS, extra]
+        }
+      }
+      expect(() =>
+        validateCorrelatedResponse(hello, success(hello, result), 't')
+      ).not.toThrow()
+    }
   })
 
   it.each([

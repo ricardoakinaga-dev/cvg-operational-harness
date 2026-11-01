@@ -1,0 +1,72 @@
+[
+ {
+  "id": "R1",
+  "what": "the approval query ignores the tenant",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "WHERE tenant_id = $1 AND approval_id = $2",
+  "new": "WHERE $1::text IS NOT NULL AND approval_id = $2"
+ },
+ {
+  "id": "R2",
+  "what": "the key listing is not ordered by request time",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "ORDER BY requested_at, approval_id",
+  "new": "ORDER BY approval_id"
+ },
+ {
+  "id": "R3",
+  "what": "the key listing ignores the limit",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "          LIMIT $3`,\n        [tenantId, operationKey, limit]",
+  "new": "          LIMIT 100000 + $3 * 0`,\n        [tenantId, operationKey, limit]"
+ },
+ {
+  "id": "R4",
+  "what": "the origin column is never read",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "      this.#hasOrigin = found.rows.length === 1",
+  "new": "      this.#hasOrigin = false"
+ },
+ {
+  "id": "R5",
+  "what": "an aborted call is not refused",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "  if (signal?.aborted) throw new TraceReadError('cancelled')\n  const parsed",
+  "new": "  const parsed"
+ },
+ {
+  "id": "R6",
+  "what": "a bad tenant is not refused",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "  if (!parsed.success) throw new TraceReadError('invalid_input')\n",
+  "new": ""
+ },
+ {
+  "id": "R7",
+  "what": "a driver error escapes raw",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "    throw error instanceof TraceReadError\n      ? error\n      : new TraceReadError('unavailable')",
+  "new": "    throw error"
+ },
+ {
+  "id": "R8",
+  "what": "the effect state is not read",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "`SELECT operation_key, state, execution_ref FROM effect_journal",
+  "new": "`SELECT operation_key, 'X' AS state, execution_ref FROM effect_journal"
+ },
+ {
+  "id": "R9",
+  "what": "the limit is not validated",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)\n      throw new TraceReadError('invalid_input')\n",
+  "new": ""
+ },
+ {
+  "id": "R10",
+  "what": "an abort during the read becomes a failure",
+  "file": "packages/persistence/src/trace-read-ports.ts",
+  "old": "    if (signal?.aborted) throw new TraceReadError('cancelled')\n    throw error",
+  "new": "    throw error"
+ }
+]

@@ -1,0 +1,66 @@
+--- tenant=old before=null
+Limit (actual rows=1000 loops=1)
+  Buffers: shared hit=1443
+  ->  Result (actual rows=1000 loops=1)
+        One-Time Filter: (NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text) = 'old'::text)
+        Buffers: shared hit=1443
+        ->  Index Scan Backward using session_streams_writer_lock_id_key on session_streams (actual rows=1000 loops=1)
+              Filter: (tenant_id = 'old'::text)
+              Rows Removed by Filter: 60000
+              Buffers: shared hit=1443
+Planning:
+  Buffers: shared hit=107
+Planning Time: 0.308 ms
+Execution Time: 5.693 ms
+--- tenant=old before=30000
+Limit (actual rows=1000 loops=1)
+  Buffers: shared hit=28
+  ->  Result (actual rows=1000 loops=1)
+        One-Time Filter: (NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text) = 'old'::text)
+        Buffers: shared hit=28
+        ->  Index Scan Backward using session_streams_writer_lock_id_key on session_streams (actual rows=1000 loops=1)
+              Index Cond: (writer_lock_id < '30000'::bigint)
+              Filter: (tenant_id = 'old'::text)
+              Buffers: shared hit=28
+Planning:
+  Buffers: shared hit=7
+Planning Time: 0.120 ms
+Execution Time: 0.233 ms
+--- tenant=other-7 before=null
+Limit (actual rows=600 loops=1)
+  Buffers: shared hit=609
+  ->  Sort (actual rows=600 loops=1)
+        Sort Key: writer_lock_id DESC
+        Sort Method: quicksort  Memory: 104kB
+        Buffers: shared hit=609
+        ->  Result (actual rows=600 loops=1)
+              One-Time Filter: (NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text) = 'other-7'::text)
+              Buffers: shared hit=606
+              ->  Index Scan using session_streams_pkey on session_streams (actual rows=600 loops=1)
+                    Index Cond: (tenant_id = 'other-7'::text)
+                    Buffers: shared hit=606
+Planning Time: 0.053 ms
+Execution Time: 0.920 ms
+--- tenant=other-7 before=30000
+Limit (actual rows=0 loops=1)
+  Buffers: shared hit=89
+  ->  Sort (actual rows=0 loops=1)
+        Sort Key: writer_lock_id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=89
+        ->  Result (actual rows=0 loops=1)
+              One-Time Filter: (NULLIF(current_setting('cvg.tenant_id'::text, true), ''::text) = 'other-7'::text)
+              Buffers: shared hit=89
+              ->  Bitmap Heap Scan on session_streams (actual rows=0 loops=1)
+                    Recheck Cond: ((tenant_id = 'other-7'::text) AND (writer_lock_id < '30000'::bigint))
+                    Buffers: shared hit=89
+                    ->  BitmapAnd (actual rows=0 loops=1)
+                          Buffers: shared hit=89
+                          ->  Bitmap Index Scan on session_streams_pkey (actual rows=600 loops=1)
+                                Index Cond: (tenant_id = 'other-7'::text)
+                                Buffers: shared hit=6
+                          ->  Bitmap Index Scan on session_streams_writer_lock_id_key (actual rows=29999 loops=1)
+                                Index Cond: (writer_lock_id < '30000'::bigint)
+                                Buffers: shared hit=83
+Planning Time: 0.087 ms
+Execution Time: 1.647 ms

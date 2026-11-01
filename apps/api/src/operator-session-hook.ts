@@ -9,10 +9,8 @@ import {
 } from './operator-session.ts'
 import { healthRoute, liveRoute, readyRoute } from './routes/health.ts'
 import type { CaseAuthorityPort } from '@cvg/persistence'
-import {
-  assertSessionBinding,
-  SessionBindingError
-} from './operator-session-binding.ts'
+import { revalidateOperatorSession } from './operator-session-revalidation.ts'
+import { SESSION_STREAM_ROUTE } from './session-event-frames.ts'
 import type { CasePrincipalPolicy } from './case-authorization/case-routes.ts'
 
 const sessionIndependentProbePaths = new Set([
@@ -68,51 +66,34 @@ export function installOperatorSessionHook(
     )
     if (!sessionId) return
 
-    let record: OperatorSessionRecord | null = null
-    try {
-      record = await operatorSessionStore.get(sessionId)
-    } catch {
+    // SPEC 0296 A10: the decision itself lives in `revalidateOperatorSession`, shared with the stream.
+    const revalidation = await revalidateOperatorSession(
+      { operatorSessionStore, caseAuthority, principalPolicy },
+      sessionId
+    )
+    if (revalidation.status === 'unavailable') {
       sessionStoreFailureByHeaders.add(request.headers)
       if (rawPath === '/v1/session' || rawPath === '/v1/session/logout') return
+      // SPEC 0296 (07 P3): the event stream answers an outage in band, so an EventSource retries
+      if (request.routeOptions.url === SESSION_STREAM_ROUTE) return
       reply.code(503).header('cache-control', 'no-store')
       return reply.send(
         fail(
           'configuration_error',
-          'Operator session store is unavailable',
+          revalidation.source === 'store'
+            ? 'Operator session store is unavailable'
+            : 'Operator principal is unavailable',
           createCorrelationId()
         )
       )
     }
 
-    if (record && record.expiresAt > Date.now()) {
-      // SPEC 0262 §3: the cookie binds the principal revision it was issued
-      // under. A stale binding is a 401 that retires the cookie; an outage is
-      // a 503 that keeps it. Neither ever falls back to the session alone.
-      try {
-        await assertSessionBinding(caseAuthority, principalPolicy, record)
-      } catch (error) {
-        const status = error instanceof SessionBindingError ? error.status : 503
-        if (status === 503) {
-          sessionStoreFailureByHeaders.add(request.headers)
-          if (rawPath === '/v1/session' || rawPath === '/v1/session/logout') {
-            return
-          }
-          reply.code(503).header('cache-control', 'no-store')
-          return reply.send(
-            fail(
-              'configuration_error',
-              'Operator principal is unavailable',
-              createCorrelationId()
-            )
-          )
-        }
-        record = null
-      }
-    }
-
-    if (record && record.expiresAt > Date.now()) {
-      sessionIdentityByHeaders.set(request.headers, record.identity)
-      sessionRecordByHeaders.set(request.headers, record)
+    if (revalidation.status === 'valid') {
+      sessionIdentityByHeaders.set(
+        request.headers,
+        revalidation.record.identity
+      )
+      sessionRecordByHeaders.set(request.headers, revalidation.record)
       return
     }
 

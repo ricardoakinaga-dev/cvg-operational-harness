@@ -1,5 +1,6 @@
 import type { SandboxHandle } from '@cvg/harness-contracts'
 import type { ProcessContainmentProfile } from '../process-profile.ts'
+import type { ProcessContainmentV1 } from './containment.ts'
 
 /** SPEC 0286 §4. Consumers that may ask for a subprocess; each has its own env allowlist. */
 export type ProcessConsumer =
@@ -24,6 +25,8 @@ export interface ProcessLimits {
 }
 
 export interface ProcessLaunchRequest {
+  /** Explicit host requirement. B is refused until its native qualification exists. */
+  readonly requiredContainment?: 'namespace-observed' | 'cgroup-guardian'
   readonly consumer: ProcessConsumer
   /** Reviewed host profile (F02); the service never builds one. */
   readonly profile: ProcessContainmentProfile
@@ -57,7 +60,7 @@ export type ProcessCause =
 
 export interface ProcessCleanup {
   readonly state: 'clean' | 'cleanup_failed'
-  readonly observed: 'proc-pidns'
+  readonly observed: 'proc-pidns' | 'cgroup'
   /** Members still in the launch's PID namespace at the last scan. */
   readonly leftover: number
   /** Same-uid entries that could not be read; they prevent `clean`. */
@@ -86,8 +89,12 @@ export interface ProcessOutcome {
   readonly stderr?: string
   readonly truncated: boolean
   readonly cleanup: ProcessCleanup
-  readonly profile: 'namespace-observed'
-  readonly ownerIndependent: false
+  readonly containment: ProcessContainmentV1
+  /** @deprecated Exact mirror of containment.profile. */
+  readonly profile: ProcessContainmentV1['profile']
+  /** @deprecated Exact mirror of containment.ownerIndependent. */
+  readonly ownerIndependent: ProcessContainmentV1['ownerIndependent']
+  /** @deprecated Exact mirror of containment.landlock. */
   readonly landlock: ProcessLandlockReport
   /** Cleanup and channel faults; they never replace `cause` (I3). */
   readonly secondaryErrors: readonly string[]
