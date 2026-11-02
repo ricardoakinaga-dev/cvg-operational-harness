@@ -1,0 +1,90 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import assert from 'node:assert/strict';
+import {
+  CertificationManifestSchema, Phase10ResultSchema, collectCandidateFiles,
+  computeCandidateId, diffCandidateFiles, verifyQualification, computeDecision,
+  PHASE10_REQUIRED_LOCAL_GATES, PHASE10_ENVIRONMENT_GATES
+} from '/mnt/dados/cvg-work/codex-incorporation-20261101/request-snapshot-certification-candidate/scripts/lib/certification-rules.mjs';
+import { validateE2eReportPair, parseE2eEvidenceLog } from '/mnt/dados/cvg-work/codex-incorporation-20261101/request-snapshot-certification-candidate/scripts/lib/e2e-report-binding.mjs';
+
+const W = '/mnt/dados/cvg-work/codex-incorporation-20261101/request-snapshot-certification-candidate';
+const E = '/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX-INCORPORATION-20261101/source5be-terminal-audit';
+const read = name => {
+  assert.equal(path.isAbsolute(name), false);
+  const p = path.resolve(W, name);
+  assert.ok(p.startsWith(W + path.sep));
+  if (!fs.existsSync(p)) return undefined;
+  assert.ok(fs.lstatSync(p).isFile());
+  assert.equal(fs.lstatSync(p).isSymbolicLink(), false);
+  return fs.readFileSync(p);
+};
+const json = name => JSON.parse(read(name));
+const result = json('certification/phase10-result.json');
+const manifest = json('certification/manifest.json');
+Phase10ResultSchema.parse(result);
+CertificationManifestSchema.parse(manifest);
+assert.equal(result.commit, '5be0ca7078ceda425a7335eca3c36243dd146ee1');
+assert.equal(result.candidate.git.head, result.commit);
+assert.equal(result.candidate.git.dirty, false);
+const files = collectCandidateFiles(W);
+const candidateId = computeCandidateId(files);
+const drift = diffCandidateFiles(result.candidate.files, files);
+assert.deepEqual(drift, []);
+assert.equal(candidateId, result.candidate.candidateId);
+const failures = verifyQualification({result, manifest, artifactReader:read,
+  requiredGates:[...PHASE10_REQUIRED_LOCAL_GATES, ...PHASE10_ENVIRONMENT_GATES], currentCandidateId:candidateId, enforceEvidence:true});
+assert.deepEqual(failures, []);
+const decision = computeDecision(result);
+assert.equal(decision.decision, result.decision);
+assert.equal(decision.certification, result.certification);
+assert.equal(result.gates.length, 16);
+assert.ok(result.gates.every(g => g.status === 'PASS' && g.exitCode === 0));
+function recount(file) {
+  const r = json(file);
+  const counts = {};
+  for (const suite of r.testResults) for (const a of suite.assertionResults) counts[a.status] = (counts[a.status] ?? 0) + 1;
+  assert.equal(r.success, true);
+  assert.equal(counts.passed, r.numPassedTests);
+  assert.equal(r.numTotalTests, r.numPassedTests);
+  assert.equal(r.numFailedTests, 0);
+  assert.equal(r.numPendingTests, 0);
+  assert.ok(Object.keys(counts).every(k => k === 'passed'));
+  return {files:r.testResults.length, passed:counts.passed, failed:0, pending:0, paths:r.testResults.map(f => path.relative(W,f.name)).sort()};
+}
+const unit = recount('certification/unit-test-report.json');
+const postgres = recount('certification/postgres-test-report.json');
+const canonicalPG = json('package.json').scripts['test:postgres'].split(/\s+/).filter(s => s.endsWith('.test.ts')).sort();
+assert.equal(canonicalPG.length, 47);
+assert.deepEqual(postgres.paths, canonicalPG);
+const e2e = validateE2eReportPair({jsonContent:read('certification/e2e-test-report.json'),xmlContent:read('playwright-results.xml'),
+  expectedRunId:result.runId, expectedCandidateId:candidateId});
+const logBinding = parseE2eEvidenceLog({logContent:read('certification/logs/e2e.log').toString(),expectedRunId:result.runId,
+  expectedCandidateId:candidateId, expectedTestCount:e2e.testCount});
+assert.equal(e2e.executionId, logBinding.executionId);
+const coverage = json('coverage/coverage-summary.json');
+const neutral = [];
+for (const [p, metrics] of Object.entries(coverage)) {
+  if (p === 'total') continue;
+  if (!['contracts','harness','orchestrator','agent-runtime'].some(pkg => p.includes(`/packages/${pkg}/src/`))) continue;
+  for (const metric of ['statements','branches','functions','lines']) assert.equal(metrics[metric].pct,100,p+':'+metric);
+  neutral.push(path.relative(W,p));
+}
+assert.ok(neutral.length > 0);
+const mutation = json('certification/mutation-guard.json');
+assert.equal(mutation.verdict,'PASS'); assert.equal(mutation.candidateId,candidateId); assert.equal(mutation.runId,result.runId);
+assert.equal(mutation.selected,mutation.killed); assert.equal(mutation.survived+mutation.errors+mutation.timedOut,0);
+assert.equal(json('certification/critical-coverage.json').verdict,'PASS');
+const proof = {at:new Date().toISOString(),kind:'READ_ONLY_CERTIFICATE_AUDIT_NOT_NEW_APPLICATION_EXECUTION',source:result.commit,
+  candidateId,runId:result.runId,all16gates:result.gates.map(g=>({id:g.id,exit:g.exitCode,status:g.status,durationMs:g.durationMs})),
+  fullCandidateFiles:files.length,sourceDrift:drift,rawEvidenceFailures:failures,manifestArtifactCount:manifest.artifacts.length,
+  nativeDecision:decision,externalGates:result.externalGates,unit,postgres,e2e,
+  coverage:{aggregate:result.metrics.coverage,neutralFileCount:neutral.length,neutralFiles:neutral,neutralPerFileAllFourMetrics:100,critical:'PASS'},
+  mutation:{selected:mutation.selected,killed:mutation.killed,survived:mutation.survived,errors:mutation.errors,timedOut:mutation.timedOut},
+  otherMetrics:result.metrics,artifact_sha256:crypto.createHash('sha256').update(read('certification/phase10-result.json')).digest('hex'),
+  publishedCommitCertified:false,productionReleaseGranted:false};
+fs.writeFileSync(path.join(E,'certificate-audit.json'),JSON.stringify(proof,null,2)+'\n');
+console.log(JSON.stringify({source:proof.source,candidateId,files:files.length,artifactCount:manifest.artifacts.length,
+  qualificationFailures:failures.length,unit:unit.passed,postgres:postgres.passed,e2e:e2e.testCount,neutralFiles:neutral.length,
+  decision:decision.decision,certification:decision.certification,productionRelease:false}));
