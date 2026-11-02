@@ -1,0 +1,127 @@
+# 0394 — Roadmap de incorporação das melhorias do Claude Code
+
+Task `REA-CLAUDE-PLAN-20261022`,22/10/2026. Planejamento do recorte das nove oportunidadesCC22 do [relatório0623](../04_audit/0623_claude_code_improvements_2026-10-22.md). [Backlog de execução0395](0395_backlog_melhorias_claude_rea.md). Estado desta entrega: planejamento documental concluído; implementação depende dos cartões e gates existentes.
+
+## Incorporação Open-ClaudeCode — 01/11/2026
+
+Task documental `OPENCLAUDE-DOCS-20261101`, por pedido do usuário de incorporar a investigação à documentação e acelerar a construção do harness para produção. O [relatório Open-ClaudeCode](../04_audit/evidence/OPENCLAUDE-REA-20261101/REPORT.md) e seu mapa de15 elementos passam a complementar este roadmap. Os critérios positivos/negativos estão incorporados ao [0395](0395_backlog_melhorias_claude_rea.md#contraprovas-open-claudecode-incorporadas). As origens CC22 e os16 cartões existentes permanecem; esta atualização não cria outro backlog de status.
+
+Fonte adicional: Open-ClaudeCode `1f0fab6b70c9cb7ca921d088eaec0c92073318ba`, CLI empacotado2.1.88. MCP REA analisou46 arquivos selecionados, sem falhas de parsing e com cobertura parcial. Em33 fontes comparadas com `sourcesContent`,20 eram idênticas,3 diferentes e10 ausentes. Esses resultados são estáticos: não demonstram execução do bundle, paridade funcional ou segurança do CVG. O pin comparativoClaude2.1.302 e seu denominador permanecem próprios do programa; a nova origem não os substitui. [Identidades](../04_audit/evidence/OPENCLAUDE-REA-20261101/provenance.json) e [Evidence IDs/cobertura](../04_audit/evidence/OPENCLAUDE-REA-20261101/rea-summary.json) permitem reproduzir o recorte.
+
+### Caminho crítico até produção
+
+A produção do núcleo continua regida pela [barra0373](0373_barra_producao_harness.md), pelo [plano0374](0374_plano_producao_harness.md) e pelas decisões específicas já registradas. Pela separação vigente entre produção e paridade, concluir todas as capacidades C100/PAR não é pré-requisito geral do release do núcleo. Uma capacidade incluída na candidata deve, porém, demonstrar seus controles e contratos; uma capacidade adiada não pode aparecer ativada ou anunciada como pronta.
+
+| Ordem | Trabalho existente a consumir                                                                    | Resultado que permite avançar                                                                                                      | Responsável e limite                                                                                                             |
+| ----- | ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | AUD0627 F01 e [continuidade0410](0410_aud0627_followup_execution.md)                             | Diagnóstico nativo de falha/exit/signal preservado; causa de coverage tratada e barra aplicável concluída na candidata final       | Lead0410/claimsCI002–CI003. Revisão ou teste focal não fecha F01; não aumentar caps, excluir suítes ou repetir até verde         |
+| 2     | AUD0626 RT01/RT02 e Q01/K03 dos pais existentes                                                  | Consumo único, término limitado, WRITE retida e recovery sem repetição de efeito, demonstrados pelo boundary público da composição | Kernel/journal/QA holders. RT01/RT02 já têm prova local na onda8; conferir integração e qualificação, sem construir outro reparo |
+| 3     | AchadosF02/F05/F06/F07 da [auditoria0627](../04_audit/0627_repository_score_audit_2026-11-01.md) | Disposição individual de segurança, isolamento positivo aplicável, navegação por revisão e provas atuais com denominador explícito | Segurança/HISO/documentação/medição. O status da auditoria é datado; obter estado e recibos atuais com os owners                 |
+| 4     | Gates e operação0373/0374, runbooks e decisões de destino existentes                             | Mesmo SHA/imagem, testes completos aplicáveis, identidade, backup/restore, rollback, alertas e parecer de release registrados      | Integrador e operação; T4 e decisão humana específica. Prontidão documental não libera produção                                  |
+
+As linhas são ordem de integração e verificação, sem criar novas dependências entre cartões ou alterar a barra aprovada. Contraprovas Open-ClaudeCode entram no cartão e na fatia que exercitam o comportamento correspondente. Persistência de árvore, streaming, MCP e filhos podem avançar em paralelo quando suas dependências e claims permitirem; não entram automaticamente no caminho crítico de um release que não as inclua. O Assistente de Plantão conserva sua barra e dados separados, conforme ADR-010.
+
+### Considerações incorporadas à construção
+
+1. **Compor e qualificar o que existe.** Usar kernel, execution spine, effect journal, gateway, stores e supervisor atuais. Uma função encontrada em fonte upstream é referência de cenário, não motivo para criar segundo mecanismo no CVG.
+2. **Contabilizar e encerrar pelo resultado observável.** Budget precisa receber uso real, reservar antes do dispatch e liquidar uma vez; prazo/cancelamento precisam tratar portas pendentes e impedir autoridade tardia. Iterações, custo, tokens e tempo são limites distintos.
+3. **Preservar a verdade de efeitos e persistência.** Falha de append, sessão corrompida, perda de conexão e crash não se tornam sucesso, caixa vazia ou crédito devolvido por conveniência. Efeito incerto mantém essa classificação até reconciliação.
+4. **Revalidar autoridade na fronteira final.** Input alterado por hook, hint MCP, configuração e filho async continuam sujeitos a grant, policy, sandbox/egress, budget e approval vigentes. Reasoner, timeout humano e resultado de tool não concedem permissão.
+5. **Separar produtor, transporte e recuperação.** Sequência local, JSONL ou SSE não provam geração incremental, backpressure, cursor persistido ou cancelamento físico do produtor. Cada fronteira tem prova própria na mesma revisão.
+6. **Adotar princípios e contraprovas, com origem explícita.** Os arquivos de licença upstream não fornecem concessão permissiva geral para copiar implementação recuperada; o plano usa descrições, hashes e cenários, sem incorporar código. Runtime não executado e relações desconhecidas permanecem explícitos.
+
+## Objetivo e relação com os programas vigentes
+
+Incorporar os resultados úteis observados no Claude: skills mais baratas de descobrir, plugins inspecionáveis, sessão recuperável, configuração reproduzível, streaming, orçamento compartilhado, hooks/MCP governados e promoção por avaliação comparativa. Reusar os mecanismos do harness; nenhum executor, sistema de policy ou avaliador paralelo será criado.
+
+Este é um **recorte de execução**, não um substituto do [roadmap integral0382](0382_roadmap_paridade_claude_code.md). Os estados dos cartõesC100 continuam no [0383](0383_backlog_paridade_claude_code.md); os PAR, no [0380](0380_backlog_paridade_100_deepseek.md). O0395 detalha as mesmas identidades e acrescenta o trabalho específico da incorporação. Não mantém uma segunda fila de status nem fecha um cartão inteiro por entregar sua fatia.
+
+Referência observada: Claude2.1.308. Baseline comparativa do programa:2.1.302, preservada. Código inspecionado: main420b97b3373389f30ac82c4d4078a21b2363fdf9. [Snapshot imutável dos16 cartões](../04_audit/evidence/REA-CLAUDE-PLAN-20261022/canonical-card-snapshot.json). Na observação, Q01 estáIN_PROGRESS e os demais cartões selecionados TODO; conferir novamente antes de execução. O checkout local3704 e os ledgers antigos não representam automaticamente a fonte publicada.
+
+## Sequência por entregas demonstráveis
+
+| Marco                                          | Entrega para o operador                                                                                               | Cartões existentes                         | Entrada e saída                                                                                                                 |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| M0 — Contratos preparados                      | Escopo das nove melhorias, relação302/308, oráculos e SPECs concretas                                                 | PreparaçãoT1 dos cartões abaixo            | Entrar com0623/matriz; sair com WHAT/HOW/aceites e donos, sem mudar pin ou declarar BUILD aprovado                              |
+| M1 — Fundação comprovada                       | Abrir sessão, READ permitido, WRITE retido, aprovação autenticada e restart sem efeito duplicado                      | C100-Q01 + reusosPAR do0383                | Exigir prova atual da composição e comparador contra controle incorreto; unidades antigas ou ajudaCLI não fecham M1             |
+| M2 — Skills e plugins inspecionáveis           | Ver origem/hash, requisitos, risco e custo permanente/invocação; carregar corpo apenas na seleção autorizada          | C100-T01 → C100-T02                        | Depois deM1 e dos reusos/gates; SI01–SI12 e negativos passam no boundary público, sem ativação pela inspeção                    |
+| M3 — Continuidade e operação reproduzíveis     | Retomar/forkar com contexto correto, explicar configuração e controlar custo agregado após restart                    | C100-S01 → C100-C02/B01; C100-H01/H02      | Depois deM1; logs/snapshots/usage persistidos e isolamento por tenant demonstrados; fork não reutiliza approval                 |
+| M4 — Resposta incremental confiável            | Receber parciais, lifecycle e resultado terminal; reconectar ou cancelar com buffers limitados                        | C100-S02                                   | Depois deM1 e do contrato de eventos; um terminal por execução, sem parcial tratada como resposta final                         |
+| M5 — Ferramentas e hooks governados            | MCP sintético, hooks com origem/prazo e perfis de filhos sob o mesmo kernel                                           | C100-P01/P02/K01/O01/K02                   | P02 esperaS02; O01 esperaS01/B01/T01/K01; K02 esperaK01/O01/P01. Discovery e hooks não concedem autoridade                      |
+| M6 — Benefício medido e integração qualificada | Relatório com/sem extensão, custo/qualidade/latência e recibos vinculados à versão; demonstração integrada do recorte | C100-E01 → C100-E02 + gates de cada cartão | E01 pode começar assim queT02/Q01 estiverem qualificados; sair com provas atuais do recorte, sem anunciar134 aceites ou release |
+
+M2,M3 eM4 podem avançar em paralelo **depois deM1**, com fronteiras/claims disjuntos. M6 não precisa aguardar todaM5 para iniciar a avaliação de um plugin pronto. Pesquisa e preparação documentalM0 podem ocorrer agora; implementação de um cartão espera suas dependências exatas, SPEC e autoridade. As fases são uma leitura do fluxo, não novas barreiras artificiais.
+
+```mermaid
+flowchart TD
+  PREP["M0: preparar contratos e oráculos"] --> Q["M1: C100-Q01 + fundação PAR"]
+  Q --> T1["C100-T01: skill progressiva"]
+  T1 --> T2["C100-T02: inspeção e custo"]
+  Q --> S1["C100-S01: continuar e fork"]
+  S1 --> C2["C100-C02: snapshot efetivo"]
+  S1 --> B1["C100-B01: saldo por árvore"]
+  Q --> H1["C100-H01: permissões e restricted"]
+  Q --> H2["C100-H02: configuração e diagnóstico"]
+  C2 --> H2
+  Q --> S2["C100-S02: stream e terminal"]
+  Q --> P1["C100-P01: transporte MCP"]
+  P1 --> P2["C100-P02: recursos e entrada humana"]
+  S2 --> P2
+  Q --> K1["C100-K01: lifecycle de hooks"]
+  S1 --> O1["C100-O01: perfis de filhos"]
+  B1 --> O1
+  T1 --> O1
+  K1 --> O1
+  K1 --> K2["C100-K02: handlers contidos"]
+  O1 --> K2
+  P1 --> K2
+  Q --> E1["C100-E01: com e sem extensão"]
+  T2 --> E1
+  E1 --> E2["C100-E02: promoção por evidência"]
+```
+
+O desenho inclui as dependênciasC100 diretas do recorte; os reusosPAR completos estão nas fichas0395/0383. Por exemplo, a setaQ01→T01 não elimina PAR-T07/C06/K05. Q01 tem dependênciaG04 e reusos próprios. O grafo completoC100 consultado, incluindo pré-requisitos, é acíclico; isso não significa que as dependências já estejam concluídas.
+
+## Primeira entrega recomendada
+
+**Agora, documental:** consumir a inspeção0255 já decidida e reconciliar seus recibos/resultados com C100-T01/T02, Q01/M1 e PAR-K05. O [contrato de inspeção offline](../04_audit/evidence/REA-CLAUDE-20261022/skill-preflight-proposal.md) continua origem de SI01–SI12; compatibilidade SKILL.md, discovery, aquisição seletiva e admissão têm escopos próprios. Preparar somente o HOW remanescente de inventário/admissão, campos, limites, redigido e estimador versionado. Não reabrir o mesmo gate humano nem mover o pin302 para308 ou2.1.88 por associação.
+
+**Primeiro BUILD de valor visível, quando os pré-requisitos forem atendidos:** inventário de skill/plugin com custo de contexto e aquisição seletiva do corpo. Deve preservar o manifestoJSON strict e o grant existentes. A constatação do Claude — custo permanente estimado17 tokens, invocação até1,5 mil no corpo maior — fundamenta a separação das métricas, não uma meta universal de tokens para o CVG.
+
+**Fundação anterior obrigatória:** revalidar o fechamento real deQ01/M1 e reusos integrados. O trabalho já qualificado no programa é reaproveitado com seus receipts e identidade; não relançar todo o programa nem assumir que unidades locais antigas fecharam os pais.
+
+## Responsabilidades e paralelismo
+
+| Dono de função do programa | Frente                                                     | Fronteiras e coordenação                                                                             |
+| -------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| IntegradorClaude100        | Composição, versões, gates e recibos                       | Um writer dos contratos e do estado canônico; conciliar implementações em candidata própria          |
+| L1                         | Sessões, snapshots e budget durável                        | Reserva e identidade de sessão/árvore definidas antes de clientes/subagentes dependentes             |
+| L2                         | API/SDK/CLI, configuração, diagnóstico e stream            | Não confundir transporteJSON com streaming de geração; versionar interfaces                          |
+| L3                         | Skills/plugins, MCP e hooks                                | Registry, grant e egress canônicos; paths compartilhados sequenciados                                |
+| L4                         | Perfis de subagentes para os handlers que precisarem deles | Interseção de grants, linhagem e cancelamento; sem supervisor concorrente                            |
+| L5                         | Comparador, evals, medição e revisão                       | Fixtures independentes e controle conhecido como incorreto; não aceitar plugin por sua própria suíte |
+
+São funções existentes do0383, não novas pessoas designadas. Confirmar o agente responsável e o claim antes de editar. L1/L2/L3 podem preparar contratos em paralelo; arquivos/DB/ports/gerados comuns precisam de owner único ou execução sequencial.
+
+## Gates e definição de pronto
+
+- T1: planejamento, recon e SPEC proposta podem ser preparados com fontes/links/formatação/evidência. Esta rodada entrega somente isso.
+- T3: contratos públicos, parsing, configuração, persistência, identidade ou autoridade exigem SPEC revisada pelo usuário antes do BUILD, além das verificaçõesT2. Aprovação anterior de outra SPEC não é reaproveitada por associação.
+- T4: provider/canal/dado real, efeito externo sensível ou release candidate requerem pacote/candidato hash-bound e decisão específica. Nada neste recorte autoriza produção, publicação externa ou uso clínico por modelo.
+- Implementação: prova positiva e negativa no boundary público, revisão independente, typecheck/lint/unitários e PG/E2E aplicáveis emNode22; certificação ao final da rodada com código/candidato conforme constituição e claim próprio. `NOT_RUN`, `INCOMPLETE`, ajudaCLI ou fonte estática não contam como comportamento aprovado.
+
+Uma fatia fecha quando sua demonstração e seus aceites têm evidência atual da mesma composição, sem falhas obrigatórias. Isso não fecha o cartão pai se houver aceites fora do recorte. A conclusão das nove oportunidades tampouco representa100%Claude100,17controlesCVG, aceiteB6 ou produção do Assistente de Plantão; esses programas preservam suas barras.
+
+## Horizonte e medição
+
+Ordem operacional: M0 agora; M1 antes de novas capacidades; M2/M3/M4 em frentes disjuntas; M5 conforme dependências; M6 avalia assim que houver uma extensão pronta e termina com a integração demonstrada. Não há datas fixas sem conferir o saldo já integrado dos PAR e a capacidade dos donos.
+
+As ROM do0383 são dos **cartões completos**, incluindo trabalho fora deste recorte. Não somá-las como orçamento novo nem transportar a estimativa de8–15 dias da auditoria0622: aquela se referia a um candidato ao piloto de produção, não a estas melhorias. Após o recon deM0, cada SPEC estima seu delta remanescente; evitar contar reuso duas vezes.
+
+Medir por resultado: nove oportunidades com todos os aceites do recorte comprovados, erros conhecidos rejeitados, quantidade/qualidade do contexto no resume, proporção de streams com terminal correto, teto agregado sob concorrência e delta de qualidade/custo/latência das extensões. Mostrar sempre o denominador e as limitações, sem converter marcos em porcentagem arbitrária.
+
+## Continuidade
+
+[Evidências do planejamento](../04_audit/evidence/REA-CLAUDE-PLAN-20261022/verification.json) registram rastreabilidade/grafo/links/formato, não testes de implementação. [Handoff](../08_runtime/handoffs/rea_claude_plan_20261022.md) contém entradas prontas para os ledgers premodificados, preservando os writers concorrentes.
+
+Próxima ação para este recorte: o integrador reconcilia a composição atual e os recibos com a ordem de produção acima, enquanto o ownerC100-T01/T02 consome0255 e prepara apenas o delta de contrato que restar. O0395 contém as contraprovas incorporadas e os aceites dos cartões; o0410 conserva a execução CI/QA e seus claims. [Handoff desta incorporação](../08_runtime/handoffs/openclaude_docs_20261101.md) distingue edições aplicadas de navegação/ledgers aguardando integração coordenada.

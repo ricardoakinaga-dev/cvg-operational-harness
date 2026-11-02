@@ -1,5 +1,13 @@
 # Operational index — derived navigation
 
+## Construção e estabilização — Open-ClaudeCode, 01/11/2026
+
+Os achados da extração REA foram incorporados ao [roadmap0394](03_build/0394_roadmap_melhorias_claude_rea.md) e ao [backlog0395](03_build/0395_backlog_melhorias_claude_rea.md). O roadmap define a ordem de integração até produção; o backlog associa dez contraprovas de budget, cancelamento, aprovação, persistência, ferramentas, MCP, filhos, stream e sandbox aos cartões e responsáveis existentes.
+
+Prioridade de execução: concluir diagnóstico/qualificação CI e consumir os reparos já existentes de runtime; comprovar segurança, isolamento, recuperação e operação na candidata final; então seguir a [barra0373](03_build/0373_barra_producao_harness.md) e o [plano0374](03_build/0374_plano_producao_harness.md). A [continuidade0410](04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/source-snapshots/0410-context.source.txt) mantém seus claims CI/QA. A produção do núcleo e a paridade completa têm critérios próprios; capacidades adiadas continuam sem ativação implícita.
+
+O [relatório de origem](04_audit/evidence/OPENCLAUDE-REA-20261101/REPORT.md) identifica Open-ClaudeCode1f0fab6/CLI2.1.88 e46 fontes analisadas estaticamente com cobertura parcial. Fonte recuperada, source map e bundle executável têm evidências distintas. A incorporação documental não demonstra execução funcional, não substitui o pinClaude302 e não concede release. [Handoff da incorporação](08_runtime/handoffs/openclaude_docs_20261101.md) registra alterações aplicadas e pendências coordenadas; produção `NO_GO` até os aceites da barra vigente.
+
 This file is a manually reconciled navigation aid derived from the append-only
 records; it is not generated automatically yet. The linked ledgers and canonical
 backlogs remain the sources of operational status. This index must not be used to
