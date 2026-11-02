@@ -1,0 +1,202 @@
+diff --git a/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts b/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts
+index ef4e8773a..069a7e0b1 100644
+--- a/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts
++++ b/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts
+@@ -474,3 +474,171 @@ describe('internal native cleanup/report seam (fixture coordinator, not real own
+     })
+   }
+ })
++
++describe('cleanup failure data never changes settlement or skips owned dependencies', () => {
++  async function failureReport(
++    cause: unknown,
++    coordinator: NativeCleanupCoordinator = plainCoordinator
++  ) {
++    const trace: string[] = []
++    const boot = await bootKernelHostWithReport(
++      [
++        {
++          name: 'synthetic.cleanup.presentation.boundary',
++          kind: 'capability',
++          apply(ctx) {
++            ctx.effect(async () => {
++              trace.push('D1')
++            })
++            ctx.effect(async () => {
++              trace.push('D2')
++              throw cause
++            })
++          }
++        }
++      ],
++      [],
++      coordinator
++    )
++    if (!boot.ok) throw boot.primary
++    const report = await disposeKernelHostWithReport(boot.host)
++    await boot.host.dispose()
++    expect(trace).toEqual(['D2', 'D1'])
++    expect(Object.isFrozen(report.failures)).toBe(true)
++    return report
++  }
++
++  for (const [name, cause] of [
++    ['null', null],
++    ['undefined', undefined],
++    ['string', 'synthetic primitive failure'],
++    ['number', 17],
++    ['boolean', false],
++    ['bigint', 19n]
++  ] as const) {
++    it(`preserves settled primitive ${name} without losing the failure`, async () => {
++      await expect(failureReport(cause)).resolves.toEqual({
++        status: 'FAILED',
++        failures: [{ item: 1, cause }]
++      })
++    })
++  }
++
++  it('never invokes a thrown callable or exposes it as a cleanup resource', async () => {
++    let invocations = 0
++    const cause = () => {
++      invocations += 1
++    }
++    await expect(failureReport(cause)).resolves.toEqual({
++      status: 'FAILED',
++      failures: [{ item: 1, cause: { kind: 'opaque_failure' } }]
++    })
++    expect(invocations).toBe(0)
++  })
++
++  for (const [name, cause] of [
++    ['symbol', Symbol('synthetic failure')],
++    ['object', { syntheticResource: true }]
++  ] as const) {
++    it(`detaches opaque ${name} after the original rejection has settled`, async () => {
++      await expect(failureReport(cause)).resolves.toEqual({
++        status: 'FAILED',
++        failures: [{ item: 1, cause: { kind: 'opaque_failure' } }]
++      })
++    })
++  }
++
++  for (const mode of ['missing', 'accessor', 'non_string'] as const) {
++    it(`does not read an Error message with ${mode} presentation`, async () => {
++      let reads = 0
++      const cause = new Error('synthetic original message')
++      if (mode === 'missing') delete (cause as Partial<Error>).message
++      if (mode === 'non_string')
++        Object.defineProperty(cause, 'message', { value: 23 })
++      if (mode === 'accessor')
++        Object.defineProperty(cause, 'message', {
++          get() {
++            reads += 1
++            throw new Error('synthetic presentation accessor')
++          }
++        })
++      await expect(failureReport(cause)).resolves.toEqual({
++        status: 'FAILED',
++        failures: [{ item: 1, cause: { kind: 'error' } }]
++      })
++      expect(reads).toBe(0)
++    })
++  }
++
++  it('retains the original settled rejection if a coordinator omits it', async () => {
++    const cause = new Error('synthetic omitted rejection')
++    const coordinator: NativeCleanupCoordinator = {
++      async runItem(disposer) {
++        await disposer().catch(() => {})
++        return { status: 'SETTLED', failures: [] }
++      }
++    }
++    await expect(failureReport(cause, coordinator)).resolves.toEqual({
++      status: 'FAILED',
++      failures: [{ item: 1, cause: { kind: 'error', message: cause.message } }]
++    })
++  })
++
++  for (const mode of [
++    'primitive',
++    'missing_message',
++    'non_string_message',
++    'accessor_message',
++    'descriptor_trap'
++  ] as const) {
++    it(`keeps boot rollback and a fixed primary when presentation is ${mode}`, async () => {
++      const trace: string[] = []
++      let reads = 0
++      const error = new Error('synthetic boot presentation')
++      let cause: unknown = error
++      if (mode === 'primitive') cause = 29
++      if (mode === 'missing_message') delete (error as Partial<Error>).message
++      if (mode === 'non_string_message')
++        Object.defineProperty(error, 'message', { value: 31 })
++      if (mode === 'accessor_message')
++        Object.defineProperty(error, 'message', {
++          get() {
++            reads += 1
++            throw new Error('synthetic unsafe primary accessor')
++          }
++        })
++      if (mode === 'descriptor_trap')
++        cause = new Proxy(error, {
++          getOwnPropertyDescriptor() {
++            reads += 1
++            throw new Error('synthetic primary inspection failure')
++          }
++        })
++      const result = await bootKernelHostWithReport(
++        [
++          {
++            name: 'synthetic.boot.presentation.boundary',
++            kind: 'capability',
++            apply(ctx) {
++              ctx.effect(async () => {
++                trace.push('rollback')
++              })
++              throw cause
++            }
++          }
++        ],
++        [],
++        plainCoordinator
++      )
++      expect(result.ok).toBe(false)
++      if (result.ok)
++        throw new Error('synthetic failing boot unexpectedly passed')
++      expect(result.primary).toBeInstanceOf(KernelBootError)
++      expect(result.primary.code).toBe('plugin_apply_failed')
++      expect(result.primary.message).toBe('plugin apply failed')
++      expect(result.cleanup).toEqual({ status: 'DISPOSED', failures: [] })
++      expect(trace).toEqual(['rollback'])
++      expect(reads).toBe(mode === 'descriptor_trap' ? 1 : 0)
++    })
++  }
++})
+diff --git a/packages/harness/src/kernel/host.ts b/packages/harness/src/kernel/host.ts
+index 6e32a64dc..19e251889 100644
+--- a/packages/harness/src/kernel/host.ts
++++ b/packages/harness/src/kernel/host.ts
+@@ -297,9 +297,11 @@ export class KernelHost {
+           // The stack still owns the exact item. No retry, pop, or terminal
+           // report is justified by unknown coordinator/descendant settlement.
+           await new Promise<never>(() => {})
+-          continue
+         }
+-        const causes = [...result.failures]
++        // The uncertain branch cannot resume; this assertion is erased in JS.
++        const causes = [
++          ...(result as { readonly failures: readonly unknown[] }).failures
++        ]
+         if (rejected && !causes.includes(originalFailure))
+           causes.push(originalFailure)
+         for (const cause of causes)
+@@ -307,7 +309,6 @@ export class KernelHost {
+       } catch {
+         // A coordinator rejection is not proof that its subtree settled.
+         await new Promise<never>(() => {})
+-        continue
+       }
+       // A pending acquire may register a late resource while this item's
+       // subtree is joining. Remove only this settled frame; unwind the late

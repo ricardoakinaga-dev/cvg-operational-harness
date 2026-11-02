@@ -1,0 +1,1490 @@
+diff --git a/packages/harness/src/kernel/host.ts b/packages/harness/src/kernel/host.ts
+index f1b11f4dc..19e251889 100644
+--- a/packages/harness/src/kernel/host.ts
++++ b/packages/harness/src/kernel/host.ts
+@@ -41,6 +41,87 @@ type ListenerTable = { [P in HookPoint]: Listener<P>[] }
+ const isControlService = (key: ServiceKey): boolean =>
+   (CONTROL_SERVICES as readonly ServiceKey[]).includes(key)
+ 
++/** Internal wiring contracts. They are deliberately absent from public barrels. */
++export type NativeCleanupItemResult =
++  | { readonly status: 'SETTLED'; readonly failures: readonly unknown[] }
++  | { readonly status: 'UNCERTAIN'; readonly cause: unknown }
++
++export interface NativeCleanupCoordinator {
++  runItem(disposer: Disposer): Promise<NativeCleanupItemResult>
++}
++
++export interface NativeCleanupReport {
++  readonly status: 'DISPOSED' | 'FAILED'
++  readonly failures: readonly {
++    readonly item: number
++    readonly cause: unknown
++  }[]
++}
++
++export type NativeBootReport =
++  | { readonly ok: true; readonly host: KernelHost }
++  | {
++      readonly ok: false
++      readonly primary: KernelBootError
++      readonly cleanup: NativeCleanupReport
++    }
++
++const legacyCleanup: NativeCleanupCoordinator = {
++  async runItem(disposer) {
++    try {
++      await disposer()
++      return { status: 'SETTLED', failures: [] }
++    } catch (cause) {
++      return { status: 'SETTLED', failures: [cause] }
++    }
++  }
++}
++
++// Reports detach failure data; arbitrary thrown objects/functions never become
++// resource handles in a terminal report. The future owner emits fixed codes.
++function cleanupCause(cause: unknown): unknown {
++  try {
++    if (cause instanceof Error) {
++      const message = Object.getOwnPropertyDescriptor(cause, 'message')
++      return Object.freeze({
++        kind: 'error',
++        ...(message && 'value' in message && typeof message.value === 'string'
++          ? { message: message.value }
++          : {})
++      })
++    }
++    if (
++      cause === null ||
++      ['string', 'number', 'boolean', 'undefined', 'bigint'].includes(
++        typeof cause
++      )
++    )
++      return cause
++  } catch {
++    // Inspection failure is presentation loss, not uncertain liveness of the
++    // disposer/subtree that already settled. Never trap the cleanup join here.
++  }
++  return Object.freeze({ kind: 'opaque_failure' })
++}
++
++let internalBoot!: (
++  plugins: readonly KernelPlugin[],
++  required: readonly ServiceKey[],
++  coordinator: NativeCleanupCoordinator
++) => Promise<NativeBootReport>
++let internalCleanup!: (host: KernelHost) => Promise<NativeCleanupReport>
++
++/** Trusted module wiring only; package exports do not expose this entrypoint. */
++export const bootKernelHostWithReport = (
++  plugins: readonly KernelPlugin[],
++  required: readonly ServiceKey[],
++  coordinator: NativeCleanupCoordinator
++): Promise<NativeBootReport> => internalBoot(plugins, required, coordinator)
++
++export const disposeKernelHostWithReport = (
++  host: KernelHost
++): Promise<NativeCleanupReport> => internalCleanup(host)
++
+ /**
+  * Plugin host (SPEC 0181 §2). Plugins find each other by service key, load in
+  * dependency order and register reversible effects. After boot the host is
+@@ -59,10 +140,24 @@ export class KernelHost {
+     'turn/end': []
+   }
+   readonly #guards: { plugin: string; fn: ToolGuard }[] = []
+-  readonly #disposers: Disposer[] = []
++  readonly #disposers: {
++    readonly ordinal: number
++    readonly dispose: Disposer
++  }[] = []
++  #nextDisposer = 0
+   #sealed = false
++  #cleanup: Promise<NativeCleanupReport> | undefined
++  readonly #cleanupCoordinator: NativeCleanupCoordinator
+ 
+-  private constructor() {}
++  private constructor(coordinator: NativeCleanupCoordinator) {
++    this.#cleanupCoordinator = coordinator
++  }
++
++  static {
++    internalBoot = (plugins, required, coordinator) =>
++      KernelHost.#boot(plugins, required, coordinator)
++    internalCleanup = (host) => host.#joinCleanup()
++  }
+ 
+   /**
+    * Boots a profile. Fails closed: a missing required service, a cycle, a
+@@ -73,7 +168,17 @@ export class KernelHost {
+     plugins: readonly KernelPlugin[],
+     required: readonly ServiceKey[]
+   ): Promise<KernelHost> {
+-    const host = new KernelHost()
++    const result = await KernelHost.#boot(plugins, required, legacyCleanup)
++    if (result.ok) return result.host
++    throw result.primary
++  }
++
++  static async #boot(
++    plugins: readonly KernelPlugin[],
++    required: readonly ServiceKey[],
++    coordinator: NativeCleanupCoordinator
++  ): Promise<NativeBootReport> {
++    const host = new KernelHost(coordinator)
+     try {
+       for (const plugin of KernelHost.order(plugins)) {
+         await host.#apply(plugin)
+@@ -87,15 +192,31 @@ export class KernelHost {
+         }
+       }
+     } catch (error) {
+-      await host.dispose()
+-      if (error instanceof KernelBootError) throw error
+-      throw new KernelBootError(
++      let primary = new KernelBootError(
+         'plugin_apply_failed',
+-        error instanceof Error ? error.message : 'plugin apply failed'
++        'plugin apply failed'
+       )
++      // Error presentation must not skip rollback by throwing from a getter.
++      try {
++        if (error instanceof KernelBootError) primary = error
++        else if (error instanceof Error) {
++          const message = Object.getOwnPropertyDescriptor(error, 'message')
++          if (
++            message &&
++            'value' in message &&
++            typeof message.value === 'string'
++          ) {
++            primary = new KernelBootError('plugin_apply_failed', message.value)
++          }
++        }
++      } catch {
++        // Opaque thrown values retain the fixed primary; cleanup still runs.
++      }
++      const cleanup = await host.#joinCleanup()
++      return Object.freeze({ ok: false, primary, cleanup })
+     }
+     host.#sealed = true
+-    return host
++    return Object.freeze({ ok: true, host })
+   }
+ 
+   public get<K extends ServiceKey>(key: K): Services[K] {
+@@ -128,14 +249,80 @@ export class KernelHost {
+ 
+   /** Unwinds registrations in reverse order and waits for each to finish. */
+   public async dispose(): Promise<void> {
++    await this.#joinCleanup()
++  }
++
++  #joinCleanup(): Promise<NativeCleanupReport> {
++    // Store before any callback can run or reenter through another observer.
++    this.#cleanup ??= Promise.resolve().then(() => this.#unwind())
++    return this.#cleanup
++  }
++
++  async #unwind(): Promise<NativeCleanupReport> {
++    const failures: { readonly item: number; readonly cause: unknown }[] = []
+     while (this.#disposers.length > 0) {
+-      const dispose = this.#disposers.pop()
++      const position = this.#disposers.length - 1
++      const { ordinal: item, dispose } = this.#disposers[position]!
++      let original: Promise<void> | undefined
++      let settled = false
++      let rejected = false
++      let originalFailure: unknown
++      const invokeOnce = (): Promise<void> => {
++        original ??= Promise.resolve()
++          .then(() => dispose())
++          .then(
++            () => {
++              settled = true
++            },
++            (cause: unknown) => {
++              settled = true
++              rejected = true
++              originalFailure = cause
++              throw cause
++            }
++          )
++        // A broken coordinator may stop observing; the original stays owned.
++        void original.catch(() => {})
++        return original
++      }
+       try {
+-        await dispose?.()
++        const result = await this.#cleanupCoordinator.runItem(invokeOnce)
++        if (
++          !original ||
++          !settled ||
++          !result ||
++          result.status !== 'SETTLED' ||
++          !Array.isArray(result.failures)
++        ) {
++          // The stack still owns the exact item. No retry, pop, or terminal
++          // report is justified by unknown coordinator/descendant settlement.
++          await new Promise<never>(() => {})
++        }
++        // The uncertain branch cannot resume; this assertion is erased in JS.
++        const causes = [
++          ...(result as { readonly failures: readonly unknown[] }).failures
++        ]
++        if (rejected && !causes.includes(originalFailure))
++          causes.push(originalFailure)
++        for (const cause of causes)
++          failures.push(Object.freeze({ item, cause: cleanupCause(cause) }))
+       } catch {
+-        // One failing disposer must not leave the remaining ones running.
++        // A coordinator rejection is not proof that its subtree settled.
++        await new Promise<never>(() => {})
+       }
++      // A pending acquire may register a late resource while this item's
++      // subtree is joining. Remove only this settled frame; unwind the late
++      // frames before earlier dependencies, without repeating this callback.
++      this.#disposers.splice(position, 1)
+     }
++    return Object.freeze({
++      status: failures.length ? 'FAILED' : 'DISPOSED',
++      failures: Object.freeze(failures)
++    })
++  }
++
++  #registerDisposer(dispose: Disposer): void {
++    this.#disposers.push({ ordinal: this.#nextDisposer++, dispose })
+   }
+ 
+   static order(plugins: readonly KernelPlugin[]): KernelPlugin[] {
+@@ -209,7 +396,7 @@ export class KernelHost {
+         const dispose: Disposer = async () => {
+           this.#services.delete(key)
+         }
+-        this.#disposers.push(dispose)
++        this.#registerDisposer(dispose)
+         return dispose
+       },
+       get: (key) => this.get(key),
+@@ -226,7 +413,7 @@ export class KernelHost {
+           const index = table.indexOf(entry)
+           if (index >= 0) table.splice(index, 1)
+         }
+-        this.#disposers.push(dispose)
++        this.#registerDisposer(dispose)
+         return dispose
+       },
+       guard: (guard) => {
+@@ -243,12 +430,12 @@ export class KernelHost {
+           const index = this.#guards.indexOf(entry)
+           if (index >= 0) this.#guards.splice(index, 1)
+         }
+-        this.#disposers.push(dispose)
++        this.#registerDisposer(dispose)
+         return dispose
+       },
+       effect: (dispose) => {
+         this.#assertOpen()
+-        this.#disposers.push(dispose)
++        this.#registerDisposer(dispose)
+       }
+     }
+     await plugin.apply(context)
+diff --git a/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts b/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts
+index 71b665294..ff98fd5b1 100644
+--- a/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts
++++ b/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts
+@@ -456,3 +456,119 @@ describe('PAR-M02 BUILD: further properties of the frozen request', () => {
+     for (const r of w.seen) expect(Object.isFrozen(r)).toBe(true)
+   })
+ })
++
++describe('KR03 admitted candidate configuration snapshots', () => {
++  function barrier() {
++    let resolve!: () => void
++    const promise = new Promise<void>((yes) => {
++      resolve = yes
++    })
++    return { promise, resolve }
++  }
++
++  it('keeps dispatch, events, result and pricing on the admitted primary across a retry', async () => {
++    const entered = barrier(),
++      release = barrier(),
++      primary = profile()
++    const w = world(
++      async (req, call) => {
++        if (call === 1) {
++          entered.resolve()
++          await release.promise
++          throw unavailable()
++        }
++        return ok(req)
++      },
++      { profiles: { fast: primary } }
++    )
++    const pending = w.gateway.generate(request())
++    await entered.promise
++    primary.model = 'fake-v2'
++    primary.name = 'balanced'
++    primary.maxTokens = 32000
++    primary.temperature = 1
++    primary.streaming = true
++    primary.pricing.inputPer1kUsd = 99
++    primary.pricing.outputPer1kUsd = 99
++    release.resolve()
++    const result = await pending
++    expect(w.seen).toHaveLength(2)
++    expect(w.seen.every((req) => req.model === 'fake-v1')).toBe(true)
++    expect(w.seen.every((req) => req.maxTokens === 32)).toBe(true)
++    expect(w.seen.every((req) => req.temperature === 0)).toBe(true)
++    const attempts = w.events.filter((event) =>
++      [
++        'model.call.started',
++        'model.call.completed',
++        'model.call.failed'
++      ].includes(event.type)
++    )
++    expect(attempts.length).toBeGreaterThan(1)
++    expect(attempts.every((event) => event.model === 'fake-v1')).toBe(true)
++    expect(attempts.every((event) => event.profile === 'fast')).toBe(true)
++    expect(result.model).toBe('fake-v1')
++    expect(result.profile).toBe('fast')
++    expect(result.costUsd).toBe(0.002)
++    expect(Object.isFrozen(primary)).toBe(false)
++    expect(Object.isFrozen(primary.pricing)).toBe(false)
++  })
++
++  it('captures the fallback before waiting for the primary provider', async () => {
++    const entered = barrier(),
++      release = barrier(),
++      primary = profile({ fallbackProfile: 'balanced', maxRetries: 0 }),
++      fallback = profile({
++        name: 'balanced',
++        model: 'fake-v2',
++        pricing: { inputPer1kUsd: 2, outputPer1kUsd: 3 }
++      })
++    const w = world(
++      async (req, call) => {
++        if (call === 1) {
++          entered.resolve()
++          await release.promise
++          throw unavailable()
++        }
++        return ok(req)
++      },
++      { profiles: { fast: primary, balanced: fallback } }
++    )
++    const pending = w.gateway.generate(request())
++    await entered.promise
++    fallback.model = 'fake-v1'
++    fallback.name = 'reasoning'
++    fallback.maxTokens = 16
++    fallback.pricing.inputPer1kUsd = 99
++    fallback.pricing.outputPer1kUsd = 99
++    release.resolve()
++    const result = await pending
++    expect(w.seen).toHaveLength(2)
++    expect(w.seen[1]!.model).toBe('fake-v2')
++    expect(w.seen[1]!.maxTokens).toBe(32)
++    expect(result.model).toBe('fake-v2')
++    expect(result.profile).toBe('balanced')
++    expect(result.costUsd).toBe(0.005)
++    expect(result.fallbackUsed).toBe(true)
++  })
++
++  it('observes updated host configuration on a later generate call', async () => {
++    const primary = profile()
++    const w = world(async (req) => ok(req), { profiles: { fast: primary } })
++    const first = await w.gateway.generate(request())
++    primary.model = 'fake-v2'
++    primary.maxTokens = 17
++    primary.pricing.inputPer1kUsd = 2
++    primary.pricing.outputPer1kUsd = 3
++    const second = await w.gateway.generate({
++      ...request(),
++      requestId: 'req_par_m02_later'
++    })
++    expect(first.model).toBe('fake-v1')
++    expect(first.costUsd).toBe(0.002)
++    expect(second.model).toBe('fake-v2')
++    expect(second.costUsd).toBe(0.005)
++    expect(w.seen[1]!.maxTokens).toBe(17)
++    expect(Object.isFrozen(primary)).toBe(false)
++    expect(Object.isFrozen(primary.pricing)).toBe(false)
++  })
++})
+diff --git a/packages/model-gateway/src/gateway.ts b/packages/model-gateway/src/gateway.ts
+index 01a24aef0..194e583d1 100644
+--- a/packages/model-gateway/src/gateway.ts
++++ b/packages/model-gateway/src/gateway.ts
+@@ -102,6 +102,14 @@ interface Candidate {
+   fallbackUsed: boolean
+ }
+ 
++/** Detach admitted configuration while leaving future calls free to reload it. */
++function snapshotProfile(profile: ModelProfile): ModelProfile {
++  return Object.freeze({
++    ...profile,
++    pricing: Object.freeze({ ...profile.pricing })
++  })
++}
++
+ /**
+  * Provider-agnostic model gateway.
+  *
+@@ -230,11 +238,14 @@ export class ModelGateway {
+     }
+ 
+     const candidates: Candidate[] = [
+-      { profile: route.profile, fallbackUsed: false }
++      { profile: snapshotProfile(route.profile), fallbackUsed: false }
+     ]
+     const fallback = this.#router.fallbackFor(route.profile)
+     if (fallback) {
+-      candidates.push({ profile: fallback, fallbackUsed: true })
++      candidates.push({
++        profile: snapshotProfile(fallback),
++        fallbackUsed: true
++      })
+     }
+ 
+     let lastError: ModelGatewayError | undefined
+diff --git a/scripts/build-runtime.mjs b/scripts/build-runtime.mjs
+index 9577ad439..e142de3c2 100644
+--- a/scripts/build-runtime.mjs
++++ b/scripts/build-runtime.mjs
+@@ -5,6 +5,7 @@ import path from 'node:path'
+ import process from 'node:process'
+ import { spawnSync } from 'node:child_process'
+ import { fileURLToPath } from 'node:url'
++import { copyRuntimeNativeAssets } from './lib/runtime-native-assets.mjs'
+ 
+ export const RUNTIME_WORKSPACES = [
+   'packages/contracts',
+@@ -230,6 +231,7 @@ function main() {
+   for (const workspace of RUNTIME_WORKSPACES) {
+     copyDirectory(path.join(workspace, 'dist'))
+   }
++  copyRuntimeNativeAssets(root, contextDir, RUNTIME_WORKSPACES)
+   copyDirectory('packages/persistence/migrations')
+   copyFile('scripts/runtime-image-smoke.mjs')
+   copyFile('scripts/runtime-healthcheck.mjs')
+diff --git a/scripts/lib/runtime-native-assets.mjs b/scripts/lib/runtime-native-assets.mjs
+new file mode 100644
+index 000000000..a9784bab4
+--- /dev/null
++++ b/scripts/lib/runtime-native-assets.mjs
+@@ -0,0 +1,141 @@
++import fs from 'node:fs'
++import path from 'node:path'
++
++class NativeAssetError extends Error {
++  constructor(code, relative) {
++    super(`runtime_build_failed:native_asset_${code}:${relative}`)
++  }
++}
++
++function unchanged(actual, expected) {
++  return ['dev', 'ino', 'size', 'mode', 'mtimeNs', 'ctimeNs'].every(
++    (key) => actual[key] === expected[key]
++  )
++}
++
++function copyAsset(root, contextDir, asset) {
++  let input
++  let output
++  let failure
++  try {
++    input = fs.openSync(
++      path.join(root, asset.relative),
++      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)
++    )
++    const opened = fs.fstatSync(input, { bigint: true })
++    if (!opened.isFile() || !unchanged(opened, asset.stat))
++      throw new NativeAssetError('changed', asset.relative)
++    output = fs.openSync(
++      path.join(contextDir, asset.relative),
++      fs.constants.O_WRONLY |
++        fs.constants.O_CREAT |
++        fs.constants.O_EXCL |
++        (fs.constants.O_NOFOLLOW ?? 0),
++      Number(opened.mode & 0o777n)
++    )
++    const buffer = Buffer.alloc(64 * 1024)
++    let remaining = Number(opened.size)
++    while (remaining > 0) {
++      const read = fs.readSync(
++        input,
++        buffer,
++        0,
++        Math.min(buffer.length, remaining)
++      )
++      if (read === 0) throw new NativeAssetError('changed', asset.relative)
++      let written = 0
++      while (written < read) {
++        const count = fs.writeSync(output, buffer, written, read - written)
++        if (count === 0)
++          throw new NativeAssetError('write_failed', asset.relative)
++        written += count
++      }
++      remaining -= read
++    }
++    if (!unchanged(fs.fstatSync(input, { bigint: true }), asset.stat))
++      throw new NativeAssetError('changed', asset.relative)
++    fs.fchmodSync(output, Number(opened.mode & 0o777n))
++  } catch (error) {
++    failure =
++      error instanceof NativeAssetError
++        ? error
++        : new NativeAssetError('copy_failed', asset.relative)
++  } finally {
++    for (const fd of [output, input]) {
++      if (fd === undefined) continue
++      try {
++        fs.closeSync(fd)
++      } catch {
++        failure ??= new NativeAssetError('close_failed', asset.relative)
++      }
++    }
++  }
++  if (failure) throw failure
++}
++
++/** Internal transport for a fresh context and the builder's fixed workspaces. */
++export function copyRuntimeNativeAssets(root, contextDir, workspaces) {
++  const directories = []
++  const assets = []
++  function visit(relative, stat) {
++    if (stat.isSymbolicLink()) throw new NativeAssetError('symlink', relative)
++    if (stat.isDirectory()) {
++      directories.push({ relative, stat })
++      for (const entry of fs.readdirSync(path.join(root, relative)).sort()) {
++        const child = path.join(relative, entry)
++        visit(child, fs.lstatSync(path.join(root, child), { bigint: true }))
++      }
++      return
++    }
++    if (!stat.isFile()) throw new NativeAssetError('not_regular', relative)
++    if (!['.node', '.json'].includes(path.extname(relative)))
++      throw new NativeAssetError('unsupported_file', relative)
++    if (stat.size > BigInt(Number.MAX_SAFE_INTEGER))
++      throw new NativeAssetError('too_large', relative)
++    assets.push({ relative, stat })
++  }
++  // Inventory all trees before copying an asset, including dangling root links.
++  for (const workspace of workspaces) {
++    const nativeRoot = path.join(workspace, 'native')
++    let nativeStat
++    try {
++      nativeStat = fs.lstatSync(path.join(root, nativeRoot), { bigint: true })
++    } catch (error) {
++      if (error?.code === 'ENOENT') continue
++      throw new NativeAssetError('stat_failed', nativeRoot)
++    }
++    if (nativeStat.isSymbolicLink())
++      throw new NativeAssetError('symlink', nativeRoot)
++    if (!nativeStat.isDirectory())
++      throw new NativeAssetError('not_directory', nativeRoot)
++    // native/ may contain compiler sources, such as the Landlock helper.
++    // Only the explicit runtime/ subtree is a runtime artifact input.
++    const relative = path.join(nativeRoot, 'runtime')
++    let stat
++    try {
++      stat = fs.lstatSync(path.join(root, relative), { bigint: true })
++    } catch (error) {
++      if (error?.code === 'ENOENT') continue
++      throw new NativeAssetError('stat_failed', relative)
++    }
++    if (!stat.isDirectory() && !stat.isSymbolicLink())
++      throw new NativeAssetError('not_directory', relative)
++    directories.push({ relative: nativeRoot, stat: nativeStat })
++    try {
++      visit(relative, stat)
++    } catch (error) {
++      if (error instanceof NativeAssetError) throw error
++      throw new NativeAssetError('inventory_failed', relative)
++    }
++  }
++  for (const directory of directories)
++    fs.mkdirSync(path.join(contextDir, directory.relative), { recursive: true })
++  for (const asset of assets) copyAsset(root, contextDir, asset)
++  // Set restrictive directory modes only after writing their children.
++  for (const directory of directories.toReversed())
++    fs.chmodSync(
++      path.join(contextDir, directory.relative),
++      Number(directory.stat.mode & 0o777n)
++    )
++  return assets.map((asset) => asset.relative)
++}
+diff --git a/tests/runtime-native-assets.test.js b/tests/runtime-native-assets.test.js
+new file mode 100644
+index 000000000..aff1a62d0
+--- /dev/null
++++ b/tests/runtime-native-assets.test.js
+@@ -0,0 +1,215 @@
++// @vitest-environment node
++import fs from 'node:fs'
++import os from 'node:os'
++import path from 'node:path'
++import { spawnSync } from 'node:child_process'
++import { afterEach, describe, expect, it } from 'vitest'
++import { copyRuntimeNativeAssets } from '../scripts/lib/runtime-native-assets.mjs'
++
++const roots = []
++function fixture() {
++  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'native-assets-'))
++  roots.push(scratch)
++  const root = path.join(scratch, 'source')
++  const context = path.join(scratch, 'runtime')
++  fs.mkdirSync(root)
++  fs.mkdirSync(context)
++  return {
++    root,
++    context,
++    native: path.join(root, 'packages/harness/native/runtime')
++  }
++}
++afterEach(() => {
++  for (const root of roots.splice(0))
++    fs.rmSync(root, { recursive: true, force: true })
++})
++const workspaces = ['packages/harness', 'apps/worker']
++
++describe('runtime package native asset transport (no loading or ABI proof)', () => {
++  it('preserves native compiler sources outside runtime while delivering selected assets', () => {
++    const { root, context, native } = fixture()
++    fs.mkdirSync(native, { recursive: true })
++    const sandboxNative = path.join(root, 'packages/sandbox/native')
++    fs.mkdirSync(sandboxNative, { recursive: true })
++    const cSource =
++      '/* existing Landlock compiler input, not a runtime asset */\n'
++    fs.writeFileSync(path.join(sandboxNative, 'cvg-landlock-exec.c'), cSource)
++    fs.writeFileSync(path.join(native, 'reader.node'), 'opaque fixture')
++    expect(
++      copyRuntimeNativeAssets(root, context, [
++        'packages/harness',
++        'packages/sandbox'
++      ])
++    ).toEqual(['packages/harness/native/runtime/reader.node'])
++    expect(fs.existsSync(path.join(context, 'packages/sandbox/native'))).toBe(
++      false
++    )
++    expect(
++      fs.readFileSync(path.join(sandboxNative, 'cvg-landlock-exec.c'), 'utf8')
++    ).toBe(cSource)
++  })
++
++  it('keeps absent optional trees absent without changing existing runtime files', () => {
++    const { root, context } = fixture()
++    const existing = path.join(context, 'package.json')
++    fs.writeFileSync(existing, '{"unchanged":true}\n')
++    expect(copyRuntimeNativeAssets(root, context, workspaces)).toEqual([])
++    expect(fs.readdirSync(context)).toEqual(['package.json'])
++    expect(fs.readFileSync(existing, 'utf8')).toBe('{"unchanged":true}\n')
++  })
++
++  it('copies nested opaque binary/JSON bytes and normal modes across workspaces', () => {
++    const { root, context, native } = fixture()
++    fs.mkdirSync(path.join(native, 'nested'), { recursive: true })
++    fs.mkdirSync(path.join(root, 'apps/worker/native/runtime'), {
++      recursive: true
++    })
++    const binary = Buffer.concat([
++      Buffer.from([0, 255, 127]),
++      Buffer.alloc(150_000, 41)
++    ])
++    fs.writeFileSync(path.join(native, 'nested/reader.node'), binary, {
++      mode: 0o640
++    })
++    fs.writeFileSync(path.join(native, 'asset.json'), '{"opaque":true}\n', {
++      mode: 0o600
++    })
++    fs.chmodSync(path.join(native, 'nested'), 0o750)
++    fs.writeFileSync(
++      path.join(root, 'apps/worker/native/runtime/worker.node'),
++      'transport'
++    )
++    expect(copyRuntimeNativeAssets(root, context, workspaces)).toEqual([
++      'packages/harness/native/runtime/asset.json',
++      'packages/harness/native/runtime/nested/reader.node',
++      'apps/worker/native/runtime/worker.node'
++    ])
++    expect(
++      fs.readFileSync(
++        path.join(context, 'packages/harness/native/runtime/nested/reader.node')
++      )
++    ).toEqual(binary)
++    expect(
++      fs.statSync(path.join(context, 'packages/harness/native/runtime/nested'))
++        .mode & 0o777
++    ).toBe(0o750)
++    expect(
++      fs.statSync(
++        path.join(context, 'packages/harness/native/runtime/asset.json')
++      ).mode & 0o777
++    ).toBe(0o600)
++    expect(
++      fs.statSync(
++        path.join(context, 'packages/harness/native/runtime/nested/reader.node')
++      ).mode & 0o777
++    ).toBe(0o640)
++  })
++
++  for (const kind of ['relative', 'absolute', 'dangling']) {
++    it(`rejects a ${kind} native asset link before copying any selected tree`, () => {
++      const { root, context, native } = fixture()
++      fs.mkdirSync(native, { recursive: true })
++      fs.writeFileSync(path.join(native, 'a.node'), 'valid-but-not-copied')
++      const outside = path.join(root, 'outside.node')
++      fs.writeFileSync(outside, 'outside-not-copied')
++      fs.symlinkSync(
++        kind === 'relative'
++          ? '../../../../outside.node'
++          : kind === 'absolute'
++            ? outside
++            : path.join(root, 'missing.node'),
++        path.join(native, 'z.node')
++      )
++      expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++        /native_asset_symlink/
++      )
++      expect(fs.readdirSync(context)).toEqual([])
++    })
++  }
++
++  it('rejects a dangling native root link', () => {
++    const { root, context, native } = fixture()
++    fs.mkdirSync(path.dirname(native), { recursive: true })
++    fs.symlinkSync(path.join(root, 'not-present'), native)
++    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++      /native_asset_symlink/
++    )
++    expect(fs.readdirSync(context)).toEqual([])
++  })
++
++  it('rejects a linked native parent before traversing runtime', () => {
++    const { root, context, native } = fixture()
++    const parent = path.dirname(native)
++    fs.mkdirSync(path.dirname(parent), { recursive: true })
++    fs.symlinkSync(path.join(root, 'not-present'), parent)
++    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++      /native_asset_symlink/
++    )
++    expect(fs.readdirSync(context)).toEqual([])
++  })
++
++  it('rejects a file where the native directory belongs', () => {
++    const { root, context, native } = fixture()
++    fs.mkdirSync(path.dirname(native), { recursive: true })
++    fs.writeFileSync(native, 'not-a-directory')
++    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++      /native_asset_not_directory/
++    )
++    expect(fs.readdirSync(context)).toEqual([])
++  })
++
++  for (const extension of ['ts', 'js', 'c', 'cc', 'txt']) {
++    it(`rejects ${extension} source instead of contradicting sourceIncluded:false`, () => {
++      const { root, context, native } = fixture()
++      fs.mkdirSync(native, { recursive: true })
++      fs.writeFileSync(
++        path.join(native, `unwanted.${extension}`),
++        'never copied'
++      )
++      expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++        /native_asset_unsupported_file/
++      )
++      expect(fs.readdirSync(context)).toEqual([])
++    })
++  }
++
++  it('refuses a FIFO without opening it or copying earlier regular assets', () => {
++    const { root, context, native } = fixture()
++    fs.mkdirSync(native, { recursive: true })
++    fs.writeFileSync(path.join(native, 'a.node'), 'regular')
++    const result = spawnSync('mkfifo', [path.join(native, 'z.node')], {
++      timeout: 2000
++    })
++    expect(result.status).toBe(0)
++    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++      /native_asset_not_regular/
++    )
++    expect(fs.readdirSync(context)).toEqual([])
++  })
++
++  it('does not overwrite an existing output asset or touch its source', () => {
++    const { root, context, native } = fixture()
++    fs.mkdirSync(native, { recursive: true })
++    fs.mkdirSync(path.join(context, 'packages/harness/native/runtime'), {
++      recursive: true
++    })
++    fs.writeFileSync(path.join(native, 'reader.node'), 'source')
++    fs.writeFileSync(
++      path.join(context, 'packages/harness/native/runtime/reader.node'),
++      'existing'
++    )
++    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
++      /native_asset_copy_failed/
++    )
++    expect(
++      fs.readFileSync(
++        path.join(context, 'packages/harness/native/runtime/reader.node'),
++        'utf8'
++      )
++    ).toBe('existing')
++    expect(fs.readFileSync(path.join(native, 'reader.node'), 'utf8')).toBe(
++      'source'
++    )
++  })
++})
+diff --git a/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts b/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts
+new file mode 100644
+index 000000000..069a7e0b1
+--- /dev/null
++++ b/packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts
+@@ -0,0 +1,644 @@
++import { describe, expect, it } from 'vitest'
++import {
++  KernelBootError,
++  KernelHost,
++  bootKernelHostWithReport,
++  disposeKernelHostWithReport,
++  type NativeCleanupCoordinator
++} from '../kernel/host.ts'
++import type { KernelContext, KernelPlugin } from '../kernel/types.ts'
++
++const deferred = () => {
++  let resolve!: () => void
++  const promise = new Promise<void>((done) => {
++    resolve = done
++  })
++  return { promise, resolve }
++}
++
++describe('managed native prerequisites through existing KernelHost API', () => {
++  it('concurrent dispose observers cannot advance past a still-live disposer', async () => {
++    const started = deferred()
++    const finish = deferred()
++    const trace: string[] = []
++    const host = await KernelHost.boot(
++      [
++        {
++          name: 'synthetic.resources',
++          kind: 'capability',
++          apply(ctx) {
++            ctx.effect(async () => {
++              trace.push('D1')
++            })
++            ctx.effect(async () => {
++              trace.push('D2:start')
++              started.resolve()
++              await finish.promise
++              trace.push('D2:end')
++            })
++          }
++        }
++      ],
++      []
++    )
++    const first = host.dispose()
++    await started.promise
++    const second = host.dispose()
++    await Promise.resolve()
++    const beforeSettlement = [...trace]
++    // Always release the synthetic barrier, including on known-bad baseline.
++    finish.resolve()
++    await Promise.all([first, second])
++    expect(beforeSettlement).toEqual(['D2:start'])
++    expect(trace).toEqual(['D2:start', 'D2:end', 'D1'])
++  })
++
++  it('preserves legacy void disposal after a settled failure and never repeats callbacks', async () => {
++    const trace: string[] = []
++    const host = await KernelHost.boot(
++      [
++        {
++          name: 'synthetic.throwing.cleanup',
++          kind: 'capability',
++          apply(ctx) {
++            ctx.effect(async () => {
++              trace.push('D1')
++            })
++            ctx.effect(async () => {
++              trace.push('D2')
++              throw new Error('synthetic settled error')
++            })
++          }
++        }
++      ],
++      []
++    )
++    await expect(host.dispose()).resolves.toBeUndefined()
++    await expect(host.dispose()).resolves.toBeUndefined()
++    expect(trace).toEqual(['D2', 'D1'])
++  })
++})
++
++const settle = () => new Promise<void>((done) => setImmediate(done))
++const resources = (trace: string[]): KernelPlugin => ({
++  name: 'synthetic.native.resources',
++  kind: 'capability',
++  apply(ctx) {
++    ctx.effect(async () => {
++      trace.push('D1')
++    })
++    ctx.effect(async () => {
++      trace.push('D2')
++    })
++  }
++})
++const plainCoordinator: NativeCleanupCoordinator = {
++  async runItem(disposer) {
++    try {
++      await disposer()
++      return { status: 'SETTLED', failures: [] }
++    } catch (cause) {
++      return { status: 'SETTLED', failures: [cause] }
++    }
++  }
++}
++
++describe('internal native cleanup/report seam (fixture coordinator, not real owner proof)', () => {
++  for (const causeKind of ['revokedProxy', 'descriptorTrap'] as const) {
++    for (const profile of ['legacy', 'managed'] as const) {
++      it(`R1-F01 settles opaque ${causeKind} rejection under ${profile} cleanup`, async () => {
++        const revoked = Proxy.revocable({}, {})
++        revoked.revoke()
++        const cause =
++          causeKind === 'revokedProxy'
++            ? revoked.proxy
++            : new Proxy(new Error('synthetic opaque error'), {
++                getOwnPropertyDescriptor() {
++                  throw new Error('synthetic presentation failure')
++                }
++              })
++        const trace: string[] = []
++        const plugins: KernelPlugin[] = [
++          {
++            name: 'synthetic.opaque.cleanup',
++            kind: 'capability',
++            apply(ctx) {
++              ctx.effect(async () => {
++                trace.push('D1')
++              })
++              ctx.effect(async () => {
++                trace.push('D2')
++                throw cause
++              })
++            }
++          }
++        ]
++        const boot =
++          profile === 'legacy'
++            ? { ok: true as const, host: await KernelHost.boot(plugins, []) }
++            : await bootKernelHostWithReport(plugins, [], plainCoordinator)
++        if (!boot.ok) throw boot.primary
++        const report = disposeKernelHostWithReport(boot.host)
++        const legacyJoin = boot.host.dispose()
++        const observed = await Promise.race([
++          report.then((value) => ({ status: 'DONE' as const, value })),
++          settle().then(() => ({ status: 'PENDING' as const }))
++        ])
++        expect(observed.status).toBe('DONE')
++        if (observed.status !== 'DONE') return
++        await legacyJoin
++        expect(trace).toEqual(['D2', 'D1'])
++        expect(observed.value).toEqual({
++          status: 'FAILED',
++          failures: [{ item: 1, cause: { kind: 'opaque_failure' } }]
++        })
++        expect(Object.isFrozen(observed.value.failures[0]?.cause)).toBe(true)
++      })
++    }
++  }
++
++  it('R1-F01 returns the original primary after rollback of an opaque settled rejection', async () => {
++    const revoked = Proxy.revocable({}, {})
++    revoked.revoke()
++    const trace: string[] = []
++    const primary = new KernelBootError(
++      'plugin_apply_failed',
++      'synthetic primary'
++    )
++    const job = bootKernelHostWithReport(
++      [
++        {
++          name: 'synthetic.opaque.rollback',
++          kind: 'capability',
++          apply(ctx) {
++            ctx.effect(async () => {
++              trace.push('D1')
++            })
++            ctx.effect(async () => {
++              trace.push('D2')
++              throw revoked.proxy
++            })
++            throw primary
++          }
++        }
++      ],
++      [],
++      plainCoordinator
++    )
++    const observed = await Promise.race([
++      job.then((value) => ({ status: 'DONE' as const, value })),
++      settle().then(() => ({ status: 'PENDING' as const }))
++    ])
++    expect(observed.status).toBe('DONE')
++    if (observed.status !== 'DONE') return
++    expect(observed.value.ok).toBe(false)
++    if (observed.value.ok) return
++    expect(observed.value.primary).toBe(primary)
++    expect(observed.value.cleanup.status).toBe('FAILED')
++    expect(trace).toEqual(['D2', 'D1'])
++  })
++
++  it('does not lose a late resource registered during boot rollback', async () => {
++    const trace: string[] = []
++    let context!: KernelContext
++    let lateRegistered = false
++    const primary = new KernelBootError(
++      'plugin_apply_failed',
++      'synthetic late resource'
++    )
++    const result = await bootKernelHostWithReport(
++      [
++        {
++          name: 'synthetic.late.rollback',
++          kind: 'capability',
++          apply(ctx) {
++            context = ctx
++            ctx.effect(async () => {
++              trace.push('D1')
++            })
++            ctx.effect(async () => {
++              trace.push('D2')
++            })
++            throw primary
++          }
++        }
++      ],
++      [],
++      {
++        async runItem(disposer) {
++          await disposer()
++          if (!lateRegistered) {
++            lateRegistered = true
++            context.effect(async () => {
++              trace.push('D3:late')
++            })
++          }
++          return { status: 'SETTLED', failures: [] }
++        }
++      }
++    )
++    if (result.ok) throw new Error('expected boot failure')
++    expect(result.primary).toBe(primary)
++    expect(result.cleanup.status).toBe('DISPOSED')
++    expect(trace).toEqual(['D2', 'D3:late', 'D1'])
++  })
++
++  it('cannot skip rollback through an error message accessor', async () => {
++    let disposed = 0
++    let getterCalls = 0
++    const error = new Error('synthetic')
++    Object.defineProperty(error, 'message', {
++      get() {
++        getterCalls++
++        throw new Error('synthetic accessor trap')
++      }
++    })
++    const result = await bootKernelHostWithReport(
++      [
++        {
++          name: 'synthetic.error.presentation',
++          kind: 'capability',
++          apply(ctx) {
++            ctx.effect(async () => {
++              disposed++
++            })
++            throw error
++          }
++        }
++      ],
++      [],
++      plainCoordinator
++    )
++    if (result.ok) throw new Error('expected boot failure')
++    expect(result.primary.code).toBe('plugin_apply_failed')
++    expect(result.cleanup.status).toBe('DISPOSED')
++    expect(disposed).toBe(1)
++    expect(getterCalls).toBe(0)
++  })
++
++  it('shares one report and gates D1 on the completed D2 child subtree', async () => {
++    const trace: string[] = []
++    const childStarted = deferred()
++    const childDone = deferred()
++    let items = 0
++    const result = await bootKernelHostWithReport([resources(trace)], [], {
++      async runItem(disposer) {
++        await disposer()
++        if (items++ === 0) {
++          trace.push('Q:start')
++          childStarted.resolve()
++          await childDone.promise
++          trace.push('Q:end')
++        }
++        return { status: 'SETTLED', failures: [] }
++      }
++    })
++    if (!result.ok) throw result.primary
++    const first = disposeKernelHostWithReport(result.host)
++    expect(disposeKernelHostWithReport(result.host)).toBe(first)
++    await childStarted.promise
++    const legacyObserver = result.host.dispose()
++    await settle()
++    const beforeChild = [...trace]
++    childDone.resolve()
++    const report = await first
++    await legacyObserver
++    expect(beforeChild).toEqual(['D2', 'Q:start'])
++    expect(trace).toEqual(['D2', 'Q:start', 'Q:end', 'D1'])
++    expect(report).toEqual({ status: 'DISPOSED', failures: [] })
++    expect(Object.isFrozen(report)).toBe(true)
++    expect(Object.isFrozen(report.failures)).toBe(true)
++    expect(items).toBe(2)
++  })
++
++  it('reports settled child failure even when the disposer itself succeeded', async () => {
++    const trace: string[] = []
++    const childFailure = new Error('synthetic child failure')
++    let items = 0
++    const result = await bootKernelHostWithReport([resources(trace)], [], {
++      async runItem(disposer) {
++        await disposer()
++        return {
++          status: 'SETTLED',
++          failures: items++ === 0 ? [childFailure] : []
++        }
++      }
++    })
++    if (!result.ok) throw result.primary
++    const report = await disposeKernelHostWithReport(result.host)
++    childFailure.message = 'mutated after report'
++    expect(report).toEqual({
++      status: 'FAILED',
++      failures: [
++        {
++          item: 1,
++          cause: { kind: 'error', message: 'synthetic child failure' }
++        }
++      ]
++    })
++    expect(Object.isFrozen(report.failures[0])).toBe(true)
++    expect(Object.isFrozen(report.failures[0]?.cause)).toBe(true)
++    expect(trace).toEqual(['D2', 'D1'])
++  })
++
++  it('keeps primary identity and separate rollback reports across reused boot errors', async () => {
++    const primary = new KernelBootError(
++      'plugin_apply_failed',
++      'synthetic primary'
++    )
++    const boot = (id: string) =>
++      bootKernelHostWithReport(
++        [
++          {
++            name: 'synthetic.failed.boot',
++            kind: 'capability',
++            apply(ctx) {
++              ctx.effect(async () => {
++                throw new Error(id)
++              })
++              throw primary
++            }
++          }
++        ],
++        [],
++        plainCoordinator
++      )
++    const [a, b] = await Promise.all([boot('cleanup A'), boot('cleanup B')])
++    if (a.ok || b.ok) throw new Error('expected failed boots')
++    expect(a.primary).toBe(primary)
++    expect(b.primary).toBe(primary)
++    expect(a.cleanup).not.toBe(b.cleanup)
++    expect(a.cleanup).toEqual({
++      status: 'FAILED',
++      failures: [{ item: 0, cause: { kind: 'error', message: 'cleanup A' } }]
++    })
++    expect(b.cleanup.failures[0]?.cause).toEqual({
++      kind: 'error',
++      message: 'cleanup B'
++    })
++    await expect(
++      KernelHost.boot(
++        [
++          {
++            name: 'synthetic.legacy.failed.boot',
++            kind: 'capability',
++            apply() {
++              throw primary
++            }
++          }
++        ],
++        []
++      )
++    ).rejects.toBe(primary)
++  })
++
++  it('owns the original disposer once even if its coordinator requests it twice', async () => {
++    const trace: string[] = []
++    const result = await bootKernelHostWithReport([resources(trace)], [], {
++      async runItem(disposer) {
++        const a = disposer()
++        const b = disposer()
++        expect(a).toBe(b)
++        await Promise.all([a, b])
++        return { status: 'SETTLED', failures: [] }
++      }
++    })
++    if (!result.ok) throw result.primary
++    await expect(
++      disposeKernelHostWithReport(result.host)
++    ).resolves.toMatchObject({ status: 'DISPOSED' })
++    expect(trace).toEqual(['D2', 'D1'])
++  })
++
++  for (const mode of [
++    'uncertain',
++    'throw',
++    'invalid',
++    'not_invoked',
++    'original_pending',
++    'hang'
++  ] as const) {
++    it(`retains the item and dependent resource without terminal success: ${mode}`, async () => {
++      const trace: string[] = []
++      const pending = deferred()
++      let originalStarted = false
++      const result = await bootKernelHostWithReport(
++        [
++          {
++            name: 'synthetic.uncertain.cleanup',
++            kind: 'capability',
++            apply(ctx) {
++              ctx.effect(async () => {
++                trace.push('D1')
++              })
++              ctx.effect(async () => {
++                originalStarted = true
++                trace.push('D2')
++                if (mode === 'original_pending') await pending.promise
++              })
++            }
++          }
++        ],
++        [],
++        {
++          async runItem(disposer) {
++            if (mode === 'not_invoked')
++              return { status: 'SETTLED', failures: [] }
++            if (mode === 'original_pending') {
++              void disposer()
++              return { status: 'SETTLED', failures: [] }
++            }
++            await disposer()
++            if (mode === 'throw') throw new Error('synthetic coordinator error')
++            if (mode === 'invalid')
++              return { status: 'SETTLED', failures: null } as never
++            if (mode === 'hang') await pending.promise
++            return { status: 'UNCERTAIN', cause: 'synthetic unknown subtree' }
++          }
++        }
++      )
++      if (!result.ok) throw result.primary
++      const report = disposeKernelHostWithReport(result.host)
++      const observed = await Promise.race([
++        report.then(() => 'TERMINAL'),
++        settle().then(() => 'PENDING')
++      ])
++      const beforeRelease = [...trace]
++      pending.resolve()
++      await settle()
++      expect(observed).toBe('PENDING')
++      expect(beforeRelease).toEqual(mode === 'not_invoked' ? [] : ['D2'])
++      expect(trace).not.toContain('D1')
++      expect(originalStarted).toBe(mode !== 'not_invoked')
++      expect(disposeKernelHostWithReport(result.host)).toBe(report)
++    })
++  }
++})
++
++describe('cleanup failure data never changes settlement or skips owned dependencies', () => {
++  async function failureReport(
++    cause: unknown,
++    coordinator: NativeCleanupCoordinator = plainCoordinator
++  ) {
++    const trace: string[] = []
++    const boot = await bootKernelHostWithReport(
++      [
++        {
++          name: 'synthetic.cleanup.presentation.boundary',
++          kind: 'capability',
++          apply(ctx) {
++            ctx.effect(async () => {
++              trace.push('D1')
++            })
++            ctx.effect(async () => {
++              trace.push('D2')
++              throw cause
++            })
++          }
++        }
++      ],
++      [],
++      coordinator
++    )
++    if (!boot.ok) throw boot.primary
++    const report = await disposeKernelHostWithReport(boot.host)
++    await boot.host.dispose()
++    expect(trace).toEqual(['D2', 'D1'])
++    expect(Object.isFrozen(report.failures)).toBe(true)
++    return report
++  }
++
++  for (const [name, cause] of [
++    ['null', null],
++    ['undefined', undefined],
++    ['string', 'synthetic primitive failure'],
++    ['number', 17],
++    ['boolean', false],
++    ['bigint', 19n]
++  ] as const) {
++    it(`preserves settled primitive ${name} without losing the failure`, async () => {
++      await expect(failureReport(cause)).resolves.toEqual({
++        status: 'FAILED',
++        failures: [{ item: 1, cause }]
++      })
++    })
++  }
++
++  it('never invokes a thrown callable or exposes it as a cleanup resource', async () => {
++    let invocations = 0
++    const cause = () => {
++      invocations += 1
++    }
++    await expect(failureReport(cause)).resolves.toEqual({
++      status: 'FAILED',
++      failures: [{ item: 1, cause: { kind: 'opaque_failure' } }]
++    })
++    expect(invocations).toBe(0)
++  })
++
++  for (const [name, cause] of [
++    ['symbol', Symbol('synthetic failure')],
++    ['object', { syntheticResource: true }]
++  ] as const) {
++    it(`detaches opaque ${name} after the original rejection has settled`, async () => {
++      await expect(failureReport(cause)).resolves.toEqual({
++        status: 'FAILED',
++        failures: [{ item: 1, cause: { kind: 'opaque_failure' } }]
++      })
++    })
++  }
++
++  for (const mode of ['missing', 'accessor', 'non_string'] as const) {
++    it(`does not read an Error message with ${mode} presentation`, async () => {
++      let reads = 0
++      const cause = new Error('synthetic original message')
++      if (mode === 'missing') delete (cause as Partial<Error>).message
++      if (mode === 'non_string')
++        Object.defineProperty(cause, 'message', { value: 23 })
++      if (mode === 'accessor')
++        Object.defineProperty(cause, 'message', {
++          get() {
++            reads += 1
++            throw new Error('synthetic presentation accessor')
++          }
++        })
++      await expect(failureReport(cause)).resolves.toEqual({
++        status: 'FAILED',
++        failures: [{ item: 1, cause: { kind: 'error' } }]
++      })
++      expect(reads).toBe(0)
++    })
++  }
++
++  it('retains the original settled rejection if a coordinator omits it', async () => {
++    const cause = new Error('synthetic omitted rejection')
++    const coordinator: NativeCleanupCoordinator = {
++      async runItem(disposer) {
++        await disposer().catch(() => {})
++        return { status: 'SETTLED', failures: [] }
++      }
++    }
++    await expect(failureReport(cause, coordinator)).resolves.toEqual({
++      status: 'FAILED',
++      failures: [{ item: 1, cause: { kind: 'error', message: cause.message } }]
++    })
++  })
++
++  for (const mode of [
++    'primitive',
++    'missing_message',
++    'non_string_message',
++    'accessor_message',
++    'descriptor_trap'
++  ] as const) {
++    it(`keeps boot rollback and a fixed primary when presentation is ${mode}`, async () => {
++      const trace: string[] = []
++      let reads = 0
++      const error = new Error('synthetic boot presentation')
++      let cause: unknown = error
++      if (mode === 'primitive') cause = 29
++      if (mode === 'missing_message') delete (error as Partial<Error>).message
++      if (mode === 'non_string_message')
++        Object.defineProperty(error, 'message', { value: 31 })
++      if (mode === 'accessor_message')
++        Object.defineProperty(error, 'message', {
++          get() {
++            reads += 1
++            throw new Error('synthetic unsafe primary accessor')
++          }
++        })
++      if (mode === 'descriptor_trap')
++        cause = new Proxy(error, {
++          getOwnPropertyDescriptor() {
++            reads += 1
++            throw new Error('synthetic primary inspection failure')
++          }
++        })
++      const result = await bootKernelHostWithReport(
++        [
++          {
++            name: 'synthetic.boot.presentation.boundary',
++            kind: 'capability',
++            apply(ctx) {
++              ctx.effect(async () => {
++                trace.push('rollback')
++              })
++              throw cause
++            }
++          }
++        ],
++        [],
++        plainCoordinator
++      )
++      expect(result.ok).toBe(false)
++      if (result.ok)
++        throw new Error('synthetic failing boot unexpectedly passed')
++      expect(result.primary).toBeInstanceOf(KernelBootError)
++      expect(result.primary.code).toBe('plugin_apply_failed')
++      expect(result.primary.message).toBe('plugin apply failed')
++      expect(result.cleanup).toEqual({ status: 'DISPOSED', failures: [] })
++      expect(trace).toEqual(['rollback'])
++      expect(reads).toBe(mode === 'descriptor_trap' ? 1 : 0)
++    })
++  }
++})

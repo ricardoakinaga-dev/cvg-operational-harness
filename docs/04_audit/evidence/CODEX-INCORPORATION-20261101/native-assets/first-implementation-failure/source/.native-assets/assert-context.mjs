@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+
+const root = path.resolve(import.meta.dirname, '..')
+const context = path.join(
+  root,
+  '.native-assets/tmp/cvg-runtime-native-assets-20261102'
+)
+const files = [
+  'packages/harness/native/transport-test-only/opaque.node',
+  'packages/harness/native/transport-test-only/nested/asset.json'
+]
+for (const relative of files) {
+  const source = path.join(root, relative)
+  const target = path.join(context, relative)
+  assert.ok(fs.existsSync(target), `missing_runtime_native_asset:${relative}`)
+  assert.deepEqual(fs.readFileSync(target), fs.readFileSync(source))
+  assert.equal(
+    fs.statSync(target).mode & 0o777,
+    fs.statSync(source).mode & 0o777
+  )
+}
+const manifest = JSON.parse(
+  fs.readFileSync(path.join(context, 'runtime-context.json'), 'utf8')
+)
+assert.equal(manifest.sourceIncluded, false)
+assert.equal(manifest.testIncluded, false)
+assert.equal(manifest.compiledWorkspaces.length, 20)
+assert.ok(manifest.compiledWorkspaces.includes('apps/worker'))
+for (const workspace of manifest.compiledWorkspaces) {
+  assert.deepEqual(
+    fs.readFileSync(path.join(context, workspace, 'package.json')),
+    fs.readFileSync(path.join(root, workspace, 'package.json'))
+  )
+}
+console.log(
+  JSON.stringify({
+    status: 'PASS_TRANSPORT_ONLY',
+    assets: files.length,
+    compiledWorkspaces: 20,
+    backendLoaded: false
+  })
+)

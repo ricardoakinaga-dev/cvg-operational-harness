@@ -1,0 +1,122 @@
+
+ RUN  v4.1.12 /mnt/dados/cvg-work/codex-incorporation-20261101/composed-candidate
+
+ ✓ packages/persistence/src/__tests__/par-s01-session-adapter-postgres.test.ts (47 tests) 5631ms
+       ✓ validates the whole prefix in pages of 256 even outside the slice  827ms
+       ✓ reads in a repeatable-read snapshot and in pages of 256  709ms
+       ✓ a lease reports a loss that happened before the listener was added, and releases once  411ms
+       ✓ validates every page of a long prefix, also beyond a short slice  696ms
+ ✓ apps/api/src/__tests__/runtime-approval-unit-postgres.test.ts (22 tests) 17642ms
+     ✓ positive: approve decides, resolves the execution and writes one event; a replay by another approver converges with no new CAS or event (R15)  818ms
+     ✓ opposite verdict after a decision is a 409 conflict and changes nothing (R15)  792ms
+     ✓ approval advanced to RESERVED converges for APPROVED and conflicts for REJECTED, without a new event or CAS (R15)  784ms
+     ✓ approval advanced to EXECUTING converges for APPROVED and conflicts for REJECTED, without a new event or CAS (R15)  757ms
+     ✓ approval advanced to EXECUTED converges for APPROVED and conflicts for REJECTED, without a new event or CAS (R15)  753ms
+     ✓ REJECTED converges for REJECTED and conflicts for APPROVED (R15)  788ms
+     ✓ incompatible pairs conflict without repair: execution not waiting + open approval; waiting + RESERVED (R15)  1523ms
+     ✓ persisted decision without approver_id is a 409 and nothing is filled in from the retry (R15)  753ms
+     ✓ persisted decision without decision_actor_type is a 409 and nothing is filled in from the retry (R15)  756ms
+     ✓ persisted decision without decision_correlation_id is a 409 and nothing is filled in from the retry (R15)  762ms
+     ✓ persisted decision without decision_command_key is a 409 and nothing is filled in from the retry (R15)  756ms
+     ✓ legacy gap: decision persisted but execution still waiting and no event completes only what is missing with the original decision (R15)  769ms
+     ✓ gap with a failing audit rolls the completion back and keeps the previous state (R15)  750ms
+     ✓ expired PENDING: only EXPIRED commits and the original expired error is rethrown after; no resolution, no event (R13)  742ms
+     ✓ D9 PA: after the expiry commit a retry is a 409 and nothing changes (0279: terminal is never re-expired)  760ms
+     ✓ D9 PB: a decided approval whose expiry passed converges and is not expired  745ms
+     ✓ D9 PC: the F08 reconciler leaves a committed expiry alone  752ms
+     ✓ D9 PD: concurrent mixed decisions, reservations and resolutions neither deadlock nor split  781ms
+     ✓ expired REQUESTED: the intermediate submit is discarded, only EXPIRED commits (R13)  797ms
+     ✓ self-approval (not expired) rolls everything back, including the intermediate submit (R13)  765ms
+     ✓ a failing authorization hook leaves approval, execution and audit untouched  745ms
+     ✓ execution/approval binding mismatches are 404 not_found without effects  790ms
+ ✓ tests/par-s01-session-processes-postgres.test.ts (10 tests) 11170ms
+       ✓ lets exactly one process own a session while the other reads freely and progresses elsewhere  454ms
+       ✓ admits exactly one of two processes racing to own the same existing session  702ms
+       ✓ rejects an append from another process connection while the owner lives, writing nothing  385ms
+       ✓ does not deadlock when a legacy transaction holds the stream row before the owner appends  385ms
+       ✓ keeps both logs apart across processes and refuses DDL and metadata updates  424ms
+       ✓ keeps every acknowledged event after the owner process dies without close  693ms
+       ✓ survives the death of a process that created an empty session  658ms
+       ✓ replays a real SDK turn from another process after the first one is killed (SP20)  756ms
+       ✓ never exposes a partial batch: a batch killed mid-transaction, after earlier events of it were inserted, leaves nothing, and the next one enters whole  5924ms
+       ✓ leaves the old handle LOST forever, even after another process owned and released the log  682ms
+ ✓ packages/persistence/src/__tests__/par-s01-session-adoption-postgres.test.ts (32 tests) 10520ms
+       ✓ adopts 260 streams in batches of at most 100, without touching a single event  492ms
+       ✓ waits at most the lock budget on a row held elsewhere, then rolls back  5067ms
+       ✓ restores the preimage into its own synthetic resource and replays adoption with identical results  1605ms
+ ✓ packages/persistence/src/__tests__/aud0625-par-s02-red-postgres.test.ts (42 tests) 8771ms
+     ✓ control: reading ONE event today fetches and validates the whole log (cost is linear in its size)  345ms
+     ✓ after the writer closes, the next projection comes from the checkpoint and reads at most the tail row  310ms
+     ✓ events appended after the checkpoint are folded incrementally, reading only the tail  321ms
+       ✓ the original witnesses, with the real writer: close leaves a checkpoint, the next projection is the cache, a short tail is incremental  316ms
+       ✓ a long session of an open writer is checkpointed every K events and never read back to fold  358ms
+       ✓ flush and close write the checkpoint when it is due even though no append of this handle crossed K  358ms
+       ✓ the default interval is 256 events  359ms
+       ✓ a state over the ceiling is not checkpointed and the failure is counted with its reason  1724ms
+       ✓ a reopened writer finds the checkpoint, folds from it and writes the next one without reading the whole log twice  345ms
+       ✓ slice 4: a resumed writer already holds the projection of the log it analysed, so its first checkpoint reads nothing  520ms
+ ✓ tests/par-s04-session-fork-processes-postgres.test.ts (3 tests) 7582ms
+     ✓ a fork killed inside its transaction, after earlier events were inserted, leaves no child and the same id forks whole afterwards  6044ms
+     ✓ a completed fork survives the death of its process: the lock frees and a new owner opens exactly it  987ms
+     ✓ FP08: a live owner in another process is AlreadyOwned; after its kill a new handle reads the exact prefix, writes nothing and finds the open turn  463ms
+ ✓ packages/persistence/src/__tests__/aud0625-par-s05-directory-postgres.test.ts (11 tests) 6464ms
+     ✓ the plan is bounded whatever the other tenants hold: a backward scan of the index, no rows thrown away  6111ms
+ ✓ apps/api/src/__tests__/operator-session-postgres.test.ts (20 tests) 5541ms
+     ✓ enforces the two-second database operation bound  2075ms
+     ✓ denies consumption after expiry while waiting on a row lock  1478ms
+ ✓ packages/persistence/src/__tests__/aud0625-f15-migration-0021-precheck.test.ts (11 tests) 5157ms
+     ✓ applies 0021 over mixed history: harness decisions plus two attendance events per tenant  342ms
+     ✓ control: the same migration applies when the history has only harness decisions  335ms
+     ✓ control: a single attendance event per tenant does not form a group  327ms
+     ✓ events with only ONE null key part are not groups either (each filter of the pre-check matters)  331ms
+     ✓ control: the index itself accepts two NULL/NULL events (the pre-check is stricter than the index)  307ms
+     ✓ control: a real duplicate decision still blocks 0021, even with attendance events present  347ms
+     ✓ a database that applied the OLD 0021 keeps running: no error, old checksum untouched, later migrations apply  462ms
+     ✓ a database stuck at the 0021 by the defect now passes and applies 0021 to 0031 in one run  430ms
+     ✓ an unknown checksum of the 0021 is still an error (and so is a missing one)  321ms
+ ✓ packages/persistence/src/__tests__/par-s04-session-fork-postgres.test.ts (12 tests) 3106ms
+     ✓ keeps depth and root through a chain and refuses the 17th level  694ms
+     ✓ refuses a prefix above the 8 MiB batch ceiling  898ms
+ ✓ apps/worker/src/__tests__/continuous-worker-entrypoint.integration.test.ts (2 tests) 3151ms
+     ✓ consumes events around a restart and drains on a real SIGTERM without loss or duplication  1925ms
+     ✓ runs the role preflight before the first claim and leaves the queue untouched on rejection  1224ms
+ ✓ packages/persistence/src/__tests__/case-mutation-unit-postgres.test.ts (12 tests) 2927ms
+     ✓ R02 (write first): a revocation issued while the unit holds the grant waits for the commit  318ms
+     ✓ R02 (revocation first): a revocation that commits before the lock denies the unit, which waited for it  325ms
+     ✓ R02 (principal, write first): a principal change issued while the unit holds the principal waits for the commit  328ms
+     ✓ the policy reads after both FOR SHARE locks: a revocation issued while the policy is deciding waits for the unit  323ms
+     ✓ task.status: a revocation issued while the transition holds the grant waits for the commit  319ms
+     ✓ SPEC 0262 §6.1/R14: the global invalidation bumps only the revision, audits it, waits for a unit holding the principal and is seen by the next unit  323ms
+ ✓ packages/persistence/src/__tests__/par-s02-repair-writer.test.ts (4 tests) 1881ms
+     ✓ a locked cache row costs the append well under the 5 s statement timeout, and keeps the writer  323ms
+     ✓ a canonical write still waits for a row held longer than the derived limit  1057ms
+     ✓ a cache-row lock timeout after the event commit must not poison the canonical writer after rollback  319ms
+ ✓ packages/persistence/src/__tests__/par-s02-repair-writer-faults.test.ts (12 tests) 1398ms
+     ✓ after a contention failure of the derived write the next canonical append runs on a clean connection (the short lock_timeout does not outlive the transaction)  667ms
+ ✓ packages/persistence/src/__tests__/par-s01-session-writer-postgres.test.ts (23 tests) 1361ms
+ ✓ packages/persistence/src/__tests__/aud0625-par-s05-trace-postgres.test.ts (11 tests) 1304ms
+ ✓ apps/api/src/__tests__/journey-task-unit-postgres.test.ts (2 tests) 1148ms
+     ✓ journey task: a revocation issued while the policy is deciding waits for the unit  319ms
+ ✓ packages/persistence/src/__tests__/aud0625-par-a01-tail-postgres.test.ts (8 tests) 1148ms
+     ✓ A2: the S01 writer and the 0028 store are mutually exclusive on a session (0034), and each one alone, under concurrency, leaves a dense log that a reader never sees with a hole  419ms
+ ✓ tests/par-s01-session-bridge-postgres.test.ts (17 tests) 1034ms
+ ✓ packages/persistence/src/__tests__/par-s02-repair-abort.test.ts (11 tests) 904ms
+ ✓ apps/api/src/__tests__/api-creation-postgres-http.test.ts (2 tests) 980ms
+ ✓ packages/persistence/src/__tests__/api-creation-postgres.test.ts (16 tests) 955ms
+ ✓ packages/persistence/src/__tests__/par-s04-session-resume-postgres.test.ts (5 tests) 787ms
+ ✓ packages/persistence/src/__tests__/par-s01-session-ownership-postgres.test.ts (29 tests) 802ms
+       ✓ row-lock-before-advisory interleaving ends in a clean refusal, never a deadlock  317ms
+ ✓ packages/persistence/src/__tests__/pdsh-021-session-events-postgres.test.ts (9 tests) 631ms
+     ✓ accepts bounded canonical payloads even when JSONB text adds formatting bytes  357ms
+ ✓ packages/persistence/src/__tests__/par-s02-repair-invalid-cache.test.ts (9 tests) 591ms
+ ✓ packages/persistence/src/__tests__/aud0625-par-s05-repair-postgres.test.ts (7 tests) 602ms
+ ✓ packages/persistence/src/__tests__/par-s02-repair-malformed.test.ts (2 tests) 274ms
+ ✓ packages/conversation/src/__tests__/postgres-conversation.integration.test.ts (1 test) 1948ms
+     ✓ replays durable turns, coalesces claims, and isolates tenants on a disposable database  1947ms
+
+ Test Files  29 passed (29)
+      Tests  392 passed (392)
+   Start at  04:34:03
+   Duration  120.32s (transform 2.42s, setup 0ms, import 7.37s, tests 105.41s, environment 4.73s)
+
+JSON report written to /mnt/dados/cvg-work/codex-incorporation-20261101/composed-candidate/.global-qa/postgres-remaining-r2-results.json

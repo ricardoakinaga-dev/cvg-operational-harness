@@ -1,0 +1,532 @@
+import { validateSessionEvent } from '@cvg/harness'
+import type { SessionEvent } from '@cvg/harness-contracts'
+import {
+  SDK_NOTIFICATION_VERSION,
+  type SessionStatus,
+  type SessionSubscribeParams,
+  type SessionSubscribeResult,
+  type SessionUnsubscribeResult
+} from './protocol.ts'
+import { record, validIdentifier, validStatus } from './validators.ts'
+
+/**
+ * SPEC 0297, slice 2: the client side of a subscription. The transport hands the client every
+ * frame without an id; the client validates it against the subscription (N3, N15) and delivers
+ * it through an iterator with a bounded queue (N16). A violation is a failed connection.
+ */
+
+/** What a transport offers a client that wants notifications. */
+export interface SdkNotificationSource {
+  /**
+   * Registers the reader of the frames that carry no id. The reader throws on a violation and
+   * the transport then closes the connection; `onClose` hears about every close. Returns the
+   * function that unregisters both.
+   */
+  onNotification(
+    reader: (frame: unknown) => void,
+    onClose: (reason: Error) => void
+  ): () => void
+  /** Closes the connection after a violation found outside the reader (frames kept for a moment). */
+  violation?(reason: Error): void
+  /** The tenant of the composition; every event must belong to it. */
+  readonly expectedTenantId?: string
+}
+
+export interface SdkSubscribeOptions {
+  readonly after?: number
+  readonly maxEvents?: number
+  readonly status?: boolean
+  /** Items kept for an application that does not consume (default 64, N16). */
+  readonly queueLimit?: number
+}
+
+export type SdkSubscriptionItem =
+  | {
+      readonly kind: 'event'
+      readonly sequence: number
+      readonly event: SessionEvent
+      readonly status?: SessionStatus
+    }
+  | {
+      readonly kind: 'event_omitted'
+      readonly sequence: number
+      readonly eventId: string
+      readonly type: string
+      readonly reason: 'frame_limit'
+      readonly status?: SessionStatus
+    }
+  | {
+      readonly kind: 'end'
+      readonly reason: SdkEndReason
+      readonly lastSequence: number
+      readonly permanent: boolean
+      readonly retryAfterMs: number
+    }
+
+export type SdkEndReason =
+  | 'max_events'
+  | 'lifetime'
+  | 'server_closing'
+  | 'slow_consumer'
+  | 'source_unavailable'
+  | 'session_revoked'
+  | 'sequence_gap'
+  | 'corrupt_event'
+  | 'consumer_overflow'
+
+const END_REASONS = new Set<string>([
+  'max_events',
+  'lifetime',
+  'server_closing',
+  'slow_consumer',
+  'source_unavailable',
+  'session_revoked',
+  'sequence_gap',
+  'corrupt_event'
+])
+const TYPE_NAME = /^[a-z][a-z0-9/_-]{0,63}$/
+const EVENT_KEYS = [
+  'subscriptionId',
+  'sessionId',
+  'sequence',
+  'event',
+  'status'
+]
+const OMITTED_KEYS = [
+  'subscriptionId',
+  'sessionId',
+  'sequence',
+  'eventId',
+  'type',
+  'omitted',
+  'status'
+]
+const END_KEYS = [
+  'subscriptionId',
+  'sessionId',
+  'reason',
+  'lastSequence',
+  'permanent',
+  'retryAfterMs'
+]
+/** Notifications that arrive before their subscribe answer is processed, at most. */
+const EARLY_LIMIT = 1024
+
+export class SdkViolation extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SdkViolation'
+  }
+}
+
+const natural = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+
+const onlyKeys = (value: Record<string, unknown>, allowed: string[]) =>
+  Object.keys(value).every((key) => allowed.includes(key))
+
+/** The status a turn boundary must carry, or undefined for any other event (N15). */
+function expectedStatus(
+  type: string,
+  stopReason: unknown
+): SessionStatus | undefined {
+  if (type === 'turn/start') return { state: 'running' }
+  if (type === 'turn/end' && typeof stopReason === 'string' && stopReason)
+    return { state: 'idle', stopReason }
+  return undefined
+}
+
+/** The same state and stop reason, whatever the order of the keys on the wire. */
+function sameStatus(a: SessionStatus, b: SessionStatus): boolean {
+  if (a.state !== b.state) return false
+  return a.state === 'running' || a.stopReason === (b as typeof a).stopReason
+}
+
+interface Waiter {
+  readonly resolve: (result: IteratorResult<SdkSubscriptionItem>) => void
+  readonly reject: (error: Error) => void
+}
+
+export interface SdkSubscription extends AsyncIterable<SdkSubscriptionItem> {
+  readonly subscriptionId: string
+  readonly sessionId: string
+  /** The position the stream starts after, as the server resolved it. */
+  readonly after: number
+  /** The status of the event at `after`, when it was a turn boundary. */
+  readonly status?: SessionStatus
+  /** Cancels the subscription; completes the iterator whatever the application consumed. */
+  unsubscribe(): Promise<void>
+  /** Same as `unsubscribe`, for `for await ... break`. */
+  return(): Promise<IteratorResult<SdkSubscriptionItem>>
+}
+
+interface State {
+  readonly id: string
+  readonly sessionId: string
+  readonly statusEnabled: boolean
+  readonly queueLimit: number
+  last: number
+  readonly queue: SdkSubscriptionItem[]
+  waiters: Waiter[]
+  /** 'live' | 'ended' (end queued/delivered) | 'abandoned' (queue overflow) | 'closed' */
+  phase: 'live' | 'ended' | 'abandoned' | 'closed'
+  discarded: number
+  failure?: Error
+  finalized: boolean
+}
+
+export interface SubscriptionHost {
+  request(
+    method: 'session.subscribe',
+    params: SessionSubscribeParams
+  ): Promise<SessionSubscribeResult>
+  request(
+    method: 'session.unsubscribe',
+    params: { subscriptionId: string }
+  ): Promise<SessionUnsubscribeResult>
+}
+
+/**
+ * The client side of the subscriptions of one connection. `host.request` is the client's own
+ * typed call; `source` is the transport's notification feed.
+ */
+export function createSubscriptionClient(
+  host: SubscriptionHost,
+  source: SdkNotificationSource
+) {
+  const states = new Map<string, State>()
+  // frames ahead of their subscribe answer: the envelope's method and the params stay apart, so
+  // nothing a peer puts in the params can replace the method of the frame
+  const early: Array<{ method: string; params: Record<string, unknown> }> = []
+  // subscriptions this side has stopped and whose unsubscribe answer has not come: what the server
+  // had already sent before that answer is dropped, not a violation (N2 forbids what follows it)
+  const lingering = new Set<string>()
+  let pendingSubscribes = 0
+  let unregister: (() => void) | undefined
+  let dead: Error | undefined
+
+  function ensureReader() {
+    if (unregister) return
+    unregister = source.onNotification(read, (reason) => closeAll(reason))
+  }
+
+  function closeAll(reason: Error) {
+    dead = reason
+    // a subscription that already has its end is not turned into an error by a later close
+    for (const state of states.values())
+      if (!state.finalized) fail(state, reason)
+    states.clear()
+    early.length = 0
+    lingering.clear()
+    unregister?.()
+    unregister = undefined
+  }
+
+  function violation(message: string): never {
+    const error = new SdkViolation(message)
+    closeAll(error)
+    throw error
+  }
+
+  function settle(state: State) {
+    while (state.waiters.length > 0) {
+      if (state.failure && state.queue.length === 0) {
+        state.waiters.shift()!.reject(state.failure)
+      } else if (state.queue.length > 0) {
+        const item = state.queue.shift()!
+        state.waiters.shift()!.resolve({ done: false, value: item })
+      } else if (state.finalized) {
+        state.waiters.shift()!.resolve({ done: true, value: undefined })
+      } else break
+    }
+  }
+
+  function fail(state: State, error: Error) {
+    state.failure = error
+    state.phase = 'closed'
+    state.finalized = true
+    settle(state)
+  }
+
+  function enqueue(state: State, item: SdkSubscriptionItem) {
+    state.queue.push(item)
+    if (item.kind === 'end') {
+      state.phase = 'ended'
+      state.finalized = true
+      states.delete(state.id)
+    }
+    settle(state)
+  }
+
+  /** The application does not consume: stop the subscription, never the descriptor (N16). */
+  function abandon(state: State) {
+    state.phase = 'abandoned'
+    state.discarded += 1
+    state.queue.push({
+      kind: 'end',
+      reason: 'consumer_overflow',
+      lastSequence: state.last,
+      permanent: false,
+      retryAfterMs: 0
+    } as SdkSubscriptionItem)
+    state.finalized = true
+    settle(state)
+    // the control request goes ahead of everything; what still arrives is dropped and counted
+    void host
+      .request('session.unsubscribe', { subscriptionId: state.id })
+      .catch(() => undefined)
+      .finally(() => states.delete(state.id))
+  }
+
+  function read(frame: unknown) {
+    const f = record(frame)
+    if (
+      !f ||
+      f.jsonrpc !== '2.0' ||
+      typeof f.method !== 'string' ||
+      Object.hasOwn(f, 'id')
+    )
+      return violation('malformed notification')
+    const params = record(f.params)
+    if (!params) return violation('malformed notification params')
+    if (f.method !== 'session.event' && f.method !== 'session.end') {
+      // a well formed name the client does not know, for a subscription it has: ignored
+      if (!/^[a-z][a-z0-9._-]{0,63}$/.test(f.method))
+        return violation('malformed notification name')
+      if (typeof params.subscriptionId === 'string') {
+        if (states.has(params.subscriptionId)) return
+        if (lingering.has(params.subscriptionId)) return
+        if (pendingSubscribes > 0 && early.length < EARLY_LIMIT) {
+          early.push({ method: f.method, params })
+          return
+        }
+      }
+      return violation('unknown notification for an unknown subscription')
+    }
+    const id = params.subscriptionId
+    if (typeof id !== 'string')
+      return violation('notification without subscription')
+    const state = states.get(id)
+    if (!state) {
+      if (lingering.has(id)) return
+      if (pendingSubscribes > 0 && early.length < EARLY_LIMIT) {
+        // the answer to the subscribe is behind in the same read: keep it for a moment
+        early.push({ method: f.method, params })
+        return
+      }
+      return violation('notification for an unknown subscription')
+    }
+    deliver(state, f.method, params)
+  }
+
+  function deliver(state: State, method: string, p: Record<string, unknown>) {
+    // a well formed name this client does not know is ignored (it was kept only for its order)
+    if (method !== 'session.event' && method !== 'session.end') return
+    if (state.phase === 'abandoned') {
+      state.discarded += 1
+      return
+    }
+    if (p.sessionId !== state.sessionId) return violation('wrong session')
+    if (method === 'session.end') {
+      if (
+        !onlyKeys(p, END_KEYS) ||
+        typeof p.reason !== 'string' ||
+        !END_REASONS.has(p.reason) ||
+        p.lastSequence !== state.last ||
+        typeof p.permanent !== 'boolean' ||
+        !natural(p.retryAfterMs)
+      )
+        return violation('invalid end')
+      enqueue(state, {
+        kind: 'end',
+        reason: p.reason as SdkEndReason,
+        lastSequence: p.lastSequence,
+        permanent: p.permanent,
+        retryAfterMs: p.retryAfterMs
+      })
+      return
+    }
+    if (p.sequence !== state.last + 1) return violation('sequence out of order')
+    const status = p.status
+    if (status !== undefined && !validStatus(status))
+      return violation('invalid status')
+    let item: SdkSubscriptionItem
+    let type: string
+    let stopReason: unknown
+    if (p.event !== undefined) {
+      if (!onlyKeys(p, EVENT_KEYS)) return violation('invalid event frame')
+      let event: SessionEvent
+      try {
+        event = validateSessionEvent(p.event)
+      } catch {
+        return violation('invalid event')
+      }
+      if (
+        event.sequence !== p.sequence ||
+        event.sessionId !== state.sessionId ||
+        event.formatVersion !== 1 ||
+        (source.expectedTenantId !== undefined &&
+          event.tenantId !== source.expectedTenantId)
+      )
+        return violation('event of another session, tenant or position')
+      type = event.type
+      stopReason = (event.payload as { stopReason?: unknown } | undefined)
+        ?.stopReason
+      item = {
+        kind: 'event',
+        sequence: event.sequence,
+        event,
+        ...(status !== undefined ? { status: status as SessionStatus } : {})
+      }
+    } else {
+      if (
+        !onlyKeys(p, OMITTED_KEYS) ||
+        p.omitted !== 'frame_limit' ||
+        !validIdentifier(p.eventId) ||
+        typeof p.type !== 'string' ||
+        !TYPE_NAME.test(p.type)
+      )
+        return violation('invalid omitted frame')
+      type = p.type
+      stopReason = (status as { stopReason?: unknown } | undefined)?.stopReason
+      item = {
+        kind: 'event_omitted',
+        sequence: p.sequence as number,
+        eventId: p.eventId,
+        type: p.type,
+        reason: 'frame_limit',
+        ...(status !== undefined ? { status: status as SessionStatus } : {})
+      }
+    }
+    // the status belongs to a turn boundary and to nothing else (N15)
+    const wanted = state.statusEnabled
+      ? expectedStatus(type, stopReason)
+      : undefined
+    if (
+      (wanted === undefined) !== (status === undefined) ||
+      (wanted !== undefined &&
+        p.event !== undefined &&
+        !sameStatus(wanted, status as SessionStatus))
+    )
+      return violation('status does not match the event')
+    // the application does not consume: the position stays at what was queued (N16)
+    if (state.queue.length >= state.queueLimit) return abandon(state)
+    state.last = p.sequence as number
+    enqueue(state, item)
+  }
+
+  async function subscribe(
+    sessionId: string,
+    options: SdkSubscribeOptions = {}
+  ): Promise<SdkSubscription> {
+    if (dead) throw dead
+    const queueLimit = options.queueLimit ?? 64
+    if (
+      !Number.isSafeInteger(queueLimit) ||
+      queueLimit < 1 ||
+      queueLimit > 4096
+    )
+      throw new RangeError('queueLimit is out of range')
+    ensureReader()
+    pendingSubscribes += 1
+    let result: SessionSubscribeResult
+    try {
+      result = await host.request('session.subscribe', {
+        sessionId,
+        notificationVersion: SDK_NOTIFICATION_VERSION,
+        ...(options.after !== undefined ? { after: options.after } : {}),
+        ...(options.maxEvents !== undefined
+          ? { maxEvents: options.maxEvents }
+          : {}),
+        ...(options.status !== undefined ? { status: options.status } : {})
+      })
+    } finally {
+      pendingSubscribes -= 1
+    }
+    const state: State = {
+      id: result.subscriptionId,
+      sessionId,
+      statusEnabled: options.status !== false,
+      queueLimit,
+      last: result.after,
+      queue: [],
+      waiters: [],
+      phase: 'live',
+      discarded: 0,
+      finalized: false
+    }
+    if (dead) throw dead
+    // an identity belongs to one subscription of the connection: a repeated one fails them all
+    if (states.has(state.id) || lingering.has(state.id)) {
+      const error = new SdkViolation('duplicate subscription id')
+      closeAll(error)
+      source.violation?.(error)
+      throw error
+    }
+    states.set(state.id, state)
+    // what arrived behind the answer, in order; whatever is not for a known subscription is a
+    // violation once no subscribe is waiting any more
+    const held = early.splice(0)
+    try {
+      for (const frame of held) {
+        const { method, params } = frame
+        const target = states.get(params.subscriptionId as string)
+        if (target) deliver(target, method, params)
+        else if (pendingSubscribes > 0) early.push(frame)
+        else violation('notification for an unknown subscription')
+      }
+    } catch (error) {
+      // the iterator carries the failure; the transport is told to close the connection
+      source.violation?.(error as Error)
+    }
+    const iterator: SdkSubscription = {
+      subscriptionId: state.id,
+      sessionId,
+      after: result.after,
+      ...(result.status ? { status: result.status } : {}),
+      async unsubscribe() {
+        if (state.phase === 'live') {
+          state.phase = 'closed'
+          state.finalized = true
+          state.queue.length = 0
+          states.delete(state.id)
+          lingering.add(state.id)
+          settle(state)
+          try {
+            await host.request('session.unsubscribe', {
+              subscriptionId: state.id
+            })
+          } finally {
+            lingering.delete(state.id)
+          }
+          return
+        }
+        if (state.phase === 'abandoned') states.delete(state.id)
+        state.queue.length = 0
+        state.finalized = true
+        settle(state)
+      },
+      async return() {
+        // completes at once, whatever the application consumed; the control request is sent and
+        // its answer is not waited for (N8)
+        void iterator.unsubscribe().catch(() => undefined)
+        return { done: true, value: undefined }
+      },
+      [Symbol.asyncIterator]() {
+        return {
+          next: () =>
+            new Promise<IteratorResult<SdkSubscriptionItem>>(
+              (resolve, reject) => {
+                state.waiters.push({ resolve, reject })
+                settle(state)
+              }
+            ),
+          return: () => iterator.return()
+        }
+      }
+    }
+    return iterator
+  }
+
+  return { subscribe }
+}

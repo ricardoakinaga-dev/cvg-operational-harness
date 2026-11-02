@@ -1,0 +1,194 @@
+import {
+  STEERING_MAX_TEXT,
+  type SteeringMessage,
+  type SteeringSource
+} from '@cvg/harness-contracts'
+
+/** Stable codes of SPEC 0302 section 5. */
+export type SteeringErrorCode =
+  | 'invalid_steer_key'
+  | 'steer_text_too_large'
+  | 'steer_limit'
+  | 'conflict'
+
+export class SteeringError extends Error {
+  public constructor(
+    public readonly code: SteeringErrorCode,
+    message: string
+  ) {
+    super(message)
+    this.name = 'SteeringError'
+  }
+}
+
+export interface SteeringInboxOptions {
+  readonly clock?: () => Date
+  /** Pending messages per execution (SPEC 0302 section 9). */
+  readonly maxPending?: number
+  readonly maxPendingBytes?: number
+  /** Messages accepted over the whole life of an execution. */
+  readonly maxTotal?: number
+  readonly maxTotalBytes?: number
+  /** A pending message older than this is not delivered on a resume. */
+  readonly staleMs?: number
+}
+
+export interface SteerInput {
+  readonly tenantId: string
+  readonly executionId: string
+  readonly steerKey: string
+  readonly text: string
+}
+
+export interface SteerReceipt {
+  readonly steerKey: string
+  readonly seq: number
+  readonly status: 'ACCEPTED' | 'DUPLICATE'
+}
+
+type EntryStatus = 'PENDING' | 'CONSUMED' | 'EXPIRED'
+
+interface Entry {
+  readonly id: string
+  readonly seq: number
+  readonly steerKey: string
+  readonly text: string
+  readonly bytes: number
+  readonly acceptedAt: number
+  status: EntryStatus
+}
+
+const MAX_KEY = 200
+
+function boxKey(tenantId: string, executionId: string): string {
+  return `${tenantId}\u0000${executionId}`
+}
+
+/**
+ * SPEC 0302 slice 0: the in-process inbox. Messages are ordered by `seq`,
+ * idempotent by `(tenant, execution, steerKey)` and isolated per tenant. Nothing
+ * here knows about effects, approvals or the loop: it only holds text.
+ */
+export class InMemorySteeringInbox implements SteeringSource {
+  readonly #boxes = new Map<string, Entry[]>()
+  readonly #clock: () => Date
+  readonly #maxPending: number
+  readonly #maxPendingBytes: number
+  readonly #maxTotal: number
+  readonly #maxTotalBytes: number
+  readonly #staleMs: number
+
+  public constructor(options: SteeringInboxOptions = {}) {
+    this.#clock = options.clock ?? (() => new Date())
+    this.#maxPending = options.maxPending ?? 8
+    this.#maxPendingBytes = options.maxPendingBytes ?? 16 * 1024
+    this.#maxTotal = options.maxTotal ?? 64
+    this.#maxTotalBytes = options.maxTotalBytes ?? 128 * 1024
+    this.#staleMs = options.staleMs ?? 3_600_000
+  }
+
+  public async accept(input: SteerInput): Promise<SteerReceipt> {
+    if (
+      typeof input.steerKey !== 'string' ||
+      input.steerKey.length < 1 ||
+      input.steerKey.length > MAX_KEY
+    ) {
+      throw new SteeringError('invalid_steer_key', 'steerKey is invalid')
+    }
+    const points = [...String(input.text ?? '')].length
+    if (points < 1 || points > STEERING_MAX_TEXT) {
+      throw new SteeringError(
+        'steer_text_too_large',
+        `steering text must have 1 to ${STEERING_MAX_TEXT} characters`
+      )
+    }
+    const box = this.#boxes.get(boxKey(input.tenantId, input.executionId)) ?? []
+    const existing = box.find((entry) => entry.steerKey === input.steerKey)
+    if (existing) {
+      if (existing.text !== input.text) {
+        throw new SteeringError(
+          'conflict',
+          'steerKey was used with another text'
+        )
+      }
+      return {
+        steerKey: input.steerKey,
+        seq: existing.seq,
+        status: 'DUPLICATE'
+      }
+    }
+    const bytes = Buffer.byteLength(input.text, 'utf8')
+    const pending = box.filter((entry) => entry.status === 'PENDING')
+    if (
+      pending.length + 1 > this.#maxPending ||
+      pending.reduce((sum, entry) => sum + entry.bytes, 0) + bytes >
+        this.#maxPendingBytes ||
+      box.length + 1 > this.#maxTotal ||
+      box.reduce((sum, entry) => sum + entry.bytes, 0) + bytes >
+        this.#maxTotalBytes
+    ) {
+      throw new SteeringError('steer_limit', 'the steering inbox is full')
+    }
+    const seq = box.length + 1
+    box.push({
+      id: `steer_${seq}_${input.steerKey}`,
+      seq,
+      steerKey: input.steerKey,
+      text: input.text,
+      bytes,
+      acceptedAt: this.#clock().getTime(),
+      status: 'PENDING'
+    })
+    this.#boxes.set(boxKey(input.tenantId, input.executionId), box)
+    return { steerKey: input.steerKey, seq, status: 'ACCEPTED' }
+  }
+
+  public async drain(
+    tenantId: string,
+    executionId: string,
+    options: { readonly resumed?: boolean } = {}
+  ): Promise<readonly SteeringMessage[]> {
+    const box = this.#boxes.get(boxKey(tenantId, executionId)) ?? []
+    const now = this.#clock().getTime()
+    if (options.resumed === true) {
+      for (const entry of box) {
+        if (
+          entry.status === 'PENDING' &&
+          now - entry.acceptedAt > this.#staleMs
+        ) {
+          entry.status = 'EXPIRED'
+        }
+      }
+    }
+    return box
+      .filter((entry) => entry.status === 'PENDING')
+      .map((entry) => ({ id: entry.id, seq: entry.seq, text: entry.text }))
+  }
+
+  public async consumed(
+    tenantId: string,
+    executionId: string,
+    upToSeq: number
+  ): Promise<void> {
+    for (const entry of this.#boxes.get(boxKey(tenantId, executionId)) ?? []) {
+      if (entry.status === 'PENDING' && entry.seq <= upToSeq) {
+        entry.status = 'CONSUMED'
+      }
+    }
+  }
+
+  /** Counters for the execution view; never the text. */
+  public counts(
+    tenantId: string,
+    executionId: string
+  ): { pending: number; consumed: number; expired: number } {
+    const box = this.#boxes.get(boxKey(tenantId, executionId)) ?? []
+    const count = (status: EntryStatus) =>
+      box.filter((entry) => entry.status === status).length
+    return {
+      pending: count('PENDING'),
+      consumed: count('CONSUMED'),
+      expired: count('EXPIRED')
+    }
+  }
+}

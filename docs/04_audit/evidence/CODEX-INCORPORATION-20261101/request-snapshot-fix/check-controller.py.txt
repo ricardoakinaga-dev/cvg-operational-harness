@@ -1,0 +1,50 @@
+from pathlib import Path
+import datetime, hashlib, json, os, signal, subprocess, sys, time
+
+ROOT = Path('/home/ricardo/Área de trabalho/cvg-operational-harness')
+E = ROOT / 'docs/04_audit/evidence/CODEX-INCORPORATION-20261101/request-snapshot-fix'
+setup = json.loads((E / 'setup.json').read_text())
+W = Path(setup['candidate'])
+name, limit, *argv = sys.argv[1:]
+assert name.replace('-', '').isalnum()
+limit = float(limit)
+assert 10 <= limit <= 180
+out = E / 'checks'
+out.mkdir(exist_ok=True)
+assert not (out / (name + '.json')).exists()
+assert not (out / (name + '.log')).exists()
+env = {k: os.environ[k] for k in ['HOME', 'USER', 'LOGNAME', 'LANG', 'TZ'] if k in os.environ}
+env.update(PATH='/home/ricardo/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin',
+           TMPDIR=setup['TMPDIR'], CI='true', NO_COLOR='1', npm_config_offline='true',
+           npm_config_ignore_scripts='true', npm_config_update_notifier='false',
+           npm_config_cache=str(W / '.snapshot/npm-cache'))
+def pins():
+    return {n: hashlib.sha256((W / n).read_bytes()).hexdigest() for n in setup['source_pins']}
+before = pins()
+start = time.monotonic()
+with (out / (name + '.log')).open('x') as stream:
+    child = subprocess.Popen(argv, cwd=W, env=env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+    stat = Path(f'/proc/{child.pid}/stat').read_text().rsplit(')', 1)[1].split()
+    live = {'at': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'name': name,
+            'argv': argv, 'pid': child.pid, 'pgid': child.pid, 'start_ticks': stat[19],
+            'runner_pid': os.getpid(), 'limit_seconds': limit}
+    (out / (name + '-live.json')).write_text(json.dumps(live, indent=2) + '\n')
+    timed_out = False
+    try:
+        child.wait(timeout=limit - 8)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        os.killpg(child.pid, signal.SIGTERM)
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait(timeout=3)
+result = {**live, 'exit': child.returncode, 'timed_out': timed_out,
+          'elapsed_seconds': round(time.monotonic() - start, 3),
+          'source_pre': before, 'source_post': pins(),
+          'log_sha256': hashlib.sha256((out / (name + '.log')).read_bytes()).hexdigest()}
+result['source_unchanged'] = result['source_pre'] == result['source_post']
+(out / (name + '.json')).write_text(json.dumps(result, indent=2) + '\n')
+print(json.dumps({k: result[k] for k in ['name', 'exit', 'elapsed_seconds', 'timed_out', 'source_unchanged']}))
+print((out / (name + '.log')).read_text()[-3800:])

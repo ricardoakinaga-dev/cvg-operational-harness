@@ -1,0 +1,31 @@
+# Independent CODE review — current main port, R1
+
+**APPROVE_SCOPED_CODE_FOR_GLOBAL_QUALIFICATION**. Mandatory findings: **0** (P0: 0, P1: 0, P2: 0).
+
+Reviewed the actual seven-path candidate at `/mnt/dados/cvg-work/codex-incorporation-20261101/current-main-candidate`, whose HEAD is `a2f345a3b7fac79f8a1506d369b9371f92e187c8`, against the [frozen manifest](../code-freeze-r1/input-manifest.json), [task](../code-review-task.json), [SPEC0312](../../../../../02_spec/0312_codex_component_main_intake.md), [builder report](../REPORT.md) and actual source. This is an independent nonbuilder leaf review; no descendants or source edits.
+
+## Port fidelity and correctness
+
+Independently parsed every hunk in [candidate.diff.txt](../code-freeze-r1/candidate.diff.txt), checked its old/context lines against `git show BASE:path`, reconstructed complete resulting files in memory and compared their bytes to the actual candidate. All seven agree. Read-only Git inspection finds four modified tracked paths and precisely the three new scoped files. Target bytes outside the hunks remain intact. The gateway therefore retains its target baseline, including the absence of unrelated donor budget-placement changes/eight tests.
+
+The native helper inventories all selected trees before copying assets, restricts delivery to `native/runtime` binary/JSON files, refuses links and special files, preserves ordinary modes and uses exclusive/no-follow file descriptors plus pre/post file metadata checks. Short writes and descriptor closure are handled. Build integration retains the twenty fixed workspaces. Scope assumes trusted fixed workspace roots and a fresh context; it proves transport, not an ABI or protection against arbitrary concurrent directory replacement.
+
+The host stores its cleanup join before any callback can run, owns each original disposer promise once, and removes only the settled stack frame. Later registrations encountered during rollback remain above dependencies. Settled failures preserve dependency unwinding and immutable detached failure data; the original boot error remains separate. Coordinator rejection, invalid reports, missing invocation or uncertain subtree settlement keep the join pending. This deliberately does not declare quiescence or implement the future resource owner. Read actual host and all 37 cleanup cases, including concurrent observers, uncertain settlement, late registration and opaque errors.
+
+The gateway snapshots both admitted profiles before its first await. The profile contract has scalar fields plus numeric nested pricing; both levels are detached/frozen. Retry dispatch, event identity, result metadata and cost computation use that snapshot, while later calls can observe updated host configuration. The three new regressions exercise primary mutation/retry, fallback mutation and subsequent calls; the original test prefix is byte preserved.
+
+Target root manifests, lock, harness root/kernel barrels and gateway root barrel match immutable base bytes. Internal host declaration additions explain the retained declaration comparison exit1; public class methods/shape and exports remain unchanged. [Declaration evidence](../declaration-compare.json) is explicitly isolated static comparison, with [public/internal disposition](../declaration-disposition.json), not two complete main builds. Target lock SHA256 remains `e1ff410e164e6ee39eeb98b93029d116e386d3008e9e822fa705584ef566549e`, including its sandbox development edge.
+
+## Evidence verified
+
+- Recounted individual assertion records in [focused raw JSON](../code-freeze-r1/focused.json): 374 PASS across 20 files (321 gateway, 37 cleanup, 16 assets). All 18 target gateway test files occur. [Complementary raw JSON](../code-freeze-r1/integration-regression.json): 11 PASS across two files. Total 385, zero failures/pending. [Baseline raw JSON](../code-freeze-r1/gateway-baseline-red.json): 17 PASS/2 FAIL with the primary/fallback regression names, native exit1 retained.
+- Read exact argv/exits and matched source PRE/POST pins and log hashes for [typecheck](../checks/typecheck-source-complete.json), [lint](../checks/lint.json), [format](../checks/format.json), [build](../checks/build-runtime.json) and both green test executions. The initial [typecheck exit2](../checks/typecheck.json) is preserved. All fifteen materialized original example files independently equal their base Git objects; the exact repeated `npm run typecheck` passed. Build raw output lists twenty compiled workspaces.
+- Independently verified all five archive SHA256 values in [consumer setup](../consumer-setup.json), compared 329 tar regular-file payloads with their physical consumer files and found zero consumer symlinks. Hashed and read the original `consumer/probe.mjs`: `45c7c4500bb7df36f61fbf7e8b484d9c0c42a8daf0cc588f4f04d73034594a23`. It imports actual package roots, uses independent request canonicalization and real returned values. [Nine observations](../consumer-observations.json), [native exit0](../consumer-execution.json) and [raw log](../consumer.log) agree; PA03 records matching actual adapter payload/event models across retry. Resource lists remain the inherited PipeWrap.
+
+Exact procedures, source anchors, criteria and port reconstruction results are in [review.json](review.json). [integrity.json](integrity.json) contains exact task/manifest hashes and all PRE/POST hash rows/counts.
+
+## Limits and next action
+
+I ran static reads, JSON/hash inspection, read-only Git object/diff queries and archive byte comparisons only. Existing native application/test/build/consumer evidence was inspected, not rerun. The recorded 17,605 dependency-file inventory was not independently repeated. No app, imports of application modules, heavy tests, PG, browser, network, install, source mutation, index/ref changes, GBrain or shared-ledger writes occurred. An initial broad repository instruction/coordination read exposed historical review labels; independence here is from implementation, not blindness to repository history or the explicitly requested builder report.
+
+No whole T2, donor parity, complete owner, originalReturns, release or production acceptance is granted. Parent retains disposition and must qualify this exact integrated source with the full clean tree and its own resource claims; the donor certificate cannot be transferred.

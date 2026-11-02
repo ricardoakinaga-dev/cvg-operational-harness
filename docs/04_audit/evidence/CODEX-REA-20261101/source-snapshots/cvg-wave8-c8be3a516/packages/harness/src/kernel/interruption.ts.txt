@@ -1,0 +1,52 @@
+import {
+  isExecutionInterrupted,
+  type ExecutionInterrupted,
+  type ExecutionWaits,
+  type InterruptionReason
+} from '../execution-waits.ts'
+
+const deadlineResponses = new WeakMap<ExecutionInterrupted, string>()
+
+/** Preserve the original typed cause while the admission owner supplies context. */
+export function assertAdmission(
+  waits: ExecutionWaits,
+  deadlineResponse: string
+): void {
+  try {
+    waits.assertActive()
+  } catch (error) {
+    if (isExecutionInterrupted(error) && error.reason === 'deadline')
+      deadlineResponses.set(error, deadlineResponse)
+    throw error
+  }
+}
+
+/** Only a real deadline from a shared admission can carry a trusted diagnostic. */
+export function interruptionResponse(error: unknown, fallback: string): string {
+  return isExecutionInterrupted(error)
+    ? (deadlineResponses.get(error) ?? fallback)
+    : fallback
+}
+
+/** Shared typed interruption policy; callers retain their own text and facts. */
+export function interruptionDisposition(
+  reason: InterruptionReason,
+  hasDebt: boolean,
+  closedStopReason: 'MAX_DURATION' | 'INSUFFICIENT_EVIDENCE'
+): {
+  readonly stopReason: 'INSUFFICIENT_EVIDENCE' | 'CANCELLED' | 'MAX_DURATION'
+  readonly durableSuffix: string
+} {
+  return {
+    stopReason: hasDebt
+      ? 'INSUFFICIENT_EVIDENCE'
+      : reason === 'cancelled'
+        ? 'CANCELLED'
+        : reason === 'closed'
+          ? closedStopReason
+          : 'MAX_DURATION',
+    durableSuffix: hasDebt
+      ? '; a durable operation has no confirmed outcome'
+      : ''
+  }
+}
