@@ -41,3 +41,9 @@ A CI da PR39 (Verify41440968407) concluiu unit em 3.556.358ms e matou cobertura 
 ## Triagem nativa de segredo
 
 Gitleaks8.28.0 encontrou quatro ocorrências na história importada: três identidades de operação sintéticas e um marcador sintético de teste de redação de erros em patch arquivado. Os quatro arquivos permanecem byte a byte idênticos. Cada exceção usa somente o detector generic-api-key, um path exato e um literal exato, com digest da fonte e linha vinculados no manifesto existente; o teste nativo exige que substituição do valor, mudança de path e regras específicas continuem detectáveis. Nenhuma regex ampla, diretório ou regra foi desativado.
+
+## Primeira CI e reparo do prazo do scanner
+
+A candidata606c5d35b passou supply-chain, image-scan e os dois jobs do produto. Verify41709659904 passou instalação/readiness/formato/tipos/lint/build e chegou ao unit, sem resultado final. Security41709659860/secret-scan foi cancelado no limite do job600s: checkout588s e GitleaksPASS/zeroachados, depois cancelamento no setupNode; prova de fronteira hospedada não executada. O prazo do jobsecret-scan passou de10 para20min, sem mudar fetch-depth0, comandos ou a prova nativa limitada a300s. A rodada antiga não é certificação da nova fonte.
+
+Localmente, formatação completa/links/higiene43839JSON PASS; GitleakscommitsPASS. Primeira prova nativa local atingiu300807ms sobconcorrência (32pares passaram, os4últimos semconclusão). Após os demais processos locais terminarem, a mesma prova/limite passou38/38 semskips em174953ms. Sem mudança de critério ou repetição concorrente.
