@@ -1,3 +1,12 @@
+### MAIN-CONSOLIDATION-20261103 — integração e limpeza autorizadas (Codex)
+
+- Autoridade: usuário solicitou analisar PRs, fazer merge das branches e deixar somente a main.
+- Checkout exclusivo: /home/ricardo/cvg-operational-harness; nenhuma worktree ou processo de outro projeto será alterado.
+- Claim: integração das quatro branches Codex publicadas; resolução de sobreposição somente em host.ts e pipeline.ts preservando controles atuais; testes das unidades; scripts/ci-bar.mjs e .github/workflows/verify.yml apenas para orçamento finito comprovadamente insuficiente; entradas próprias nos ledgers 99/20/30 e novo docs/08_runtime/main-consolidation-20261103.md.
+- Todos os onze HEADs preservados em tags archive/consolidation-20261103 antes de remoção. Sete branches já integradas conferidas por árvore Git idêntica ao respectivo squash e ancestralidade da main.
+- Gates: Node22, regressões focadas, tipos/lint/build/docs e CI completa no candidato composto; não reduzir testes, pisos, checks ou proteção. Merge por PR, sem bypass ou produção. Certify/E2E/SBOM/licenças somente no runner isolado de CI desta candidata.
+- Pronto: melhorias integradas, apenas main em refs/heads, PRs antigas conciliadas, proteção preservada e recuperação por tags verificada.
+
 ### MAIN-CONSOLIDATION-20261018 — main única e melhorias preservadas (Codex) (ATIVO)
 
 - Autoridade: usuário pediu “quero na real somente a main ativa, faz o merge das branchs, mantem só as melhorias”. Autoriza consolidar melhorias validadas, publicar por PR e remover branches locais/remotas redundantes após preservação verificável. Não autoriza produção, supressão de testes ou perda de trabalho.
