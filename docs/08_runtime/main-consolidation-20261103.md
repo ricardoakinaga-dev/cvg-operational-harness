@@ -47,3 +47,9 @@ Gitleaks8.28.0 encontrou quatro ocorrências na história importada: três ident
 A candidata606c5d35b passou supply-chain, image-scan e os dois jobs do produto. Verify41709659904 passou instalação/readiness/formato/tipos/lint/build e chegou ao unit, sem resultado final. Security41709659860/secret-scan foi cancelado no limite do job600s: checkout588s e GitleaksPASS/zeroachados, depois cancelamento no setupNode; prova de fronteira hospedada não executada. O prazo do jobsecret-scan passou de10 para20min, sem mudar fetch-depth0, comandos ou a prova nativa limitada a300s. A rodada antiga não é certificação da nova fonte.
 
 Localmente, formatação completa/links/higiene43839JSON PASS; GitleakscommitsPASS. Primeira prova nativa local atingiu300807ms sobconcorrência (32pares passaram, os4últimos semconclusão). Após os demais processos locais terminarem, a mesma prova/limite passou38/38 semskips em174953ms. Sem mudança de critério ou repetição concorrente.
+
+## Resultado unitário R2 e atualização do inventário de transportes
+
+Verify41711514333 na fontefb66ff0e8 concluiu unit com10035PASS/1FAIL em658arquivos (657PASS). A única falha foi a lista fechada de donos em doc-source-moves.test.js, ainda sem MAIN-CONSOLIDATION-20261103. Os20transportesHISO continuaram iguais. O reparo registra o novo dono e um teste separado dos15transportes, com fixture de hashes conferida novamente por Git nos commits originais a2f345a3/f2c10eba, ausência dos caminhos antigos e identidade dos bytes novos. Não se elimina o teste antigo nem se reduz o inventário histórico.
+
+Todos os checks de segurança e os dois jobs do produto passaram emfb66. Cobertura e gates seguintes não executaram devido à falha unitária; nova CI integral exigida na fonte reparada. A finalização automática encerrou semmerge/semexclusão das branchespendentes.
