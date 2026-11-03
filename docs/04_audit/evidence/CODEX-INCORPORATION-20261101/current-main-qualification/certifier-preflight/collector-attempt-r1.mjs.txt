@@ -1,0 +1,75 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import ts from '/mnt/dados/cvg-work/codex-incorporation-20261101/current-main-certification-candidate/node_modules/typescript/lib/typescript.js';
+
+const W = '/mnt/dados/cvg-work/codex-incorporation-20261101/current-main-certification-candidate';
+const D = '/mnt/dados/cvg-work/codex-incorporation-20261101/request-snapshot-certification-candidate';
+const E = '/home/ricardo/Área de trabalho/cvg-operational-harness/docs/04_audit/evidence/CODEX-INCORPORATION-20261101/current-main-qualification/certifier-preflight';
+const sha = b => crypto.createHash('sha256').update(b).digest('hex');
+function literal(n) {
+  if (ts.isStringLiteral(n) || ts.isNumericLiteral(n)) return ts.isStringLiteral(n) ? n.text : Number(n.text);
+  if (n.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (n.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (ts.isArrayLiteralExpression(n)) return n.elements.map(literal);
+  if (ts.isObjectLiteralExpression(n)) return Object.fromEntries(n.properties.map(p => {
+    if (!ts.isPropertyAssignment(p)) throw Error('Nonliteral property');
+    return [p.name.text, literal(p.initializer)];
+  }));
+  throw Error('Nonliteral node ' + n.kind);
+}
+function declarations(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  if (source.parseDiagnostics.length) throw Error('Parse diagnostics ' + file);
+  const result = new Map();
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const d of statement.declarationList.declarations) {
+      if (ts.isIdentifier(d.name)) result.set(d.name.text, d.initializer);
+    }
+  }
+  return {source, text, result};
+}
+const target = declarations(path.join(W, 'scripts/phase10-certify.mjs'));
+const donor = declarations(path.join(D, 'scripts/phase10-certify.mjs'));
+const commands = literal(target.result.get('commands'));
+const donorCommands = literal(donor.result.get('commands'));
+if (commands.length !== 16 || JSON.stringify(commands) !== JSON.stringify(donorCommands)) throw Error('Unexpected command catalog');
+const config = declarations(path.join(W, 'vitest.config.mts'));
+const aggregates = literal(config.result.get('aggregateThresholds'));
+const perFile = literal(config.result.get('perFileThresholds'));
+const configJson = JSON.parse(fs.readFileSync(path.join(W, 'package.json')));
+const inputs = [
+  'package.json', 'package-lock.json', 'vitest.config.mts', 'playwright.config.ts', '.github/workflows/verify.yml',
+  'scripts/phase10-certify.mjs', 'scripts/lib/certification-rules.mjs', 'scripts/lib/phase10-generated-results.mjs',
+  'scripts/lib/skip-governance.mjs', 'scripts/lib/finding-governance.mjs', 'scripts/lib/e2e-report-binding.mjs',
+  'scripts/critical-coverage.mjs', 'scripts/critical-coverage-manifest.json', 'scripts/lib/coverage-gate.mjs',
+  'scripts/mutation-guard.mjs', 'scripts/run-e2e-evidence.mjs', 'scripts/node-version-preflight.mjs',
+  'scripts/ci-bar.mjs', 'scripts/lib/ci-bar-contract.mjs', 'scripts/build-runtime.mjs',
+  'scripts/generate-sbom.mjs', 'scripts/check-licenses.mjs'
+];
+const rows = [];
+for (const p of inputs) {
+  const data = fs.readFileSync(path.join(W, p));
+  const old = fs.readFileSync(path.join(D, p));
+  const dest = path.join(E, 'source-snapshots', p + '.txt');
+  fs.mkdirSync(path.dirname(dest), {recursive: true});
+  fs.writeFileSync(dest, data);
+  rows.push({path:p, target_sha256:sha(data), donor_sha256:sha(old), byte_equal:data.equals(old), snapshot:dest, bytes:data.length});
+}
+const report = {
+  at: new Date().toISOString(), method:'STATIC_TYPESCRIPT_AST_AND_BYTE_INSPECTION_NO_APPLICATION_IMPORT', typescript:ts.version,
+  target_commit:'9ccb933fa7887f8775ea33f4aa61cab0b2c26037', donor_commit:'5be0ca7078ceda425a7335eca3c36243dd146ee1',
+  commands, command_catalog_equal:true, command_count:commands.length,
+  npm_scripts:Object.fromEntries(['certify','test','test:coverage','coverage:critical','mutation:guard','test:postgres','test:e2e','audit:security'].map(k=>[k,configJson.scripts[k]])),
+  coverage:{aggregate:aggregates, perFile, required_env:{CVG_COVERAGE_PER_FILE:'1',CVG_TEST_SCOPE:'core'}, critical_manifest:JSON.parse(fs.readFileSync(path.join(W,'scripts/critical-coverage-manifest.json')))},
+  native_child_timeout_ms:3600000, native_stdout_max_bytes:128*1024*1024,
+  fixtures:{TEST_DATABASE_URL:'OWN_DISPOSABLE_POSTGRES_REQUIRED',DATABASE_URL:'SAME_OWN_DATABASE',PHASE4A_PG_REQUIRED:'1',PHASE4A_DISPOSABLE_PG:'1',CI:'true',CVG_API_PORT:'FUTURE_OWN_CLAIM',CVG_WEB_PORT:'FUTURE_OWN_CLAIM'},
+  security:{producer_difference:'Target classifies process exit0 then final verifier requires exit0 AND literal found 0 vulnerabilities; donor also applies same predicate immediately in producer. Final predicate identical. Diagnostics differ; no advisory exception imported.', external_read:'npm audit queries registry; no credentials in argv/log/env projection'},
+  e2e:{native_retries_when_CI:2,acceptance:'Actual zero retries/flaky/skips; JSON/JUnit/current UUID/run/candidate binding; config not overridden', chromium_only:true, reuseExistingServer_when_CI:false, port_assignment:'NOT_RESERVED'},
+  freshness:{generated_results_invalidated_before_gate:true,coverage_chain_outputs_removed:true,logs_written_only_after_native_gate_terminal:true,old_tracked_log_not_current:true},
+  qualification:'NOT_EXECUTED_STATIC_PREFLIGHT_ONLY', snapshots:rows
+};
+fs.writeFileSync(path.join(E,'contract.json'),JSON.stringify(report,null,2)+'\n');
+console.log(JSON.stringify({commands:commands.length,inputs:rows.length,differences:rows.filter(r=>!r.byte_equal).map(r=>r.path),application_executions:0}));

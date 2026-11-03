@@ -1,0 +1,160 @@
+diff --git a/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts b/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts
+index 71b665294..ff98fd5b1 100644
+--- a/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts
++++ b/packages/model-gateway/src/__tests__/aud0625-par-m02-frozen-request.test.ts
+@@ -456,3 +456,119 @@ describe('PAR-M02 BUILD: further properties of the frozen request', () => {
+     for (const r of w.seen) expect(Object.isFrozen(r)).toBe(true)
+   })
+ })
++
++describe('KR03 admitted candidate configuration snapshots', () => {
++  function barrier() {
++    let resolve!: () => void
++    const promise = new Promise<void>((yes) => {
++      resolve = yes
++    })
++    return { promise, resolve }
++  }
++
++  it('keeps dispatch, events, result and pricing on the admitted primary across a retry', async () => {
++    const entered = barrier(),
++      release = barrier(),
++      primary = profile()
++    const w = world(
++      async (req, call) => {
++        if (call === 1) {
++          entered.resolve()
++          await release.promise
++          throw unavailable()
++        }
++        return ok(req)
++      },
++      { profiles: { fast: primary } }
++    )
++    const pending = w.gateway.generate(request())
++    await entered.promise
++    primary.model = 'fake-v2'
++    primary.name = 'balanced'
++    primary.maxTokens = 32000
++    primary.temperature = 1
++    primary.streaming = true
++    primary.pricing.inputPer1kUsd = 99
++    primary.pricing.outputPer1kUsd = 99
++    release.resolve()
++    const result = await pending
++    expect(w.seen).toHaveLength(2)
++    expect(w.seen.every((req) => req.model === 'fake-v1')).toBe(true)
++    expect(w.seen.every((req) => req.maxTokens === 32)).toBe(true)
++    expect(w.seen.every((req) => req.temperature === 0)).toBe(true)
++    const attempts = w.events.filter((event) =>
++      [
++        'model.call.started',
++        'model.call.completed',
++        'model.call.failed'
++      ].includes(event.type)
++    )
++    expect(attempts.length).toBeGreaterThan(1)
++    expect(attempts.every((event) => event.model === 'fake-v1')).toBe(true)
++    expect(attempts.every((event) => event.profile === 'fast')).toBe(true)
++    expect(result.model).toBe('fake-v1')
++    expect(result.profile).toBe('fast')
++    expect(result.costUsd).toBe(0.002)
++    expect(Object.isFrozen(primary)).toBe(false)
++    expect(Object.isFrozen(primary.pricing)).toBe(false)
++  })
++
++  it('captures the fallback before waiting for the primary provider', async () => {
++    const entered = barrier(),
++      release = barrier(),
++      primary = profile({ fallbackProfile: 'balanced', maxRetries: 0 }),
++      fallback = profile({
++        name: 'balanced',
++        model: 'fake-v2',
++        pricing: { inputPer1kUsd: 2, outputPer1kUsd: 3 }
++      })
++    const w = world(
++      async (req, call) => {
++        if (call === 1) {
++          entered.resolve()
++          await release.promise
++          throw unavailable()
++        }
++        return ok(req)
++      },
++      { profiles: { fast: primary, balanced: fallback } }
++    )
++    const pending = w.gateway.generate(request())
++    await entered.promise
++    fallback.model = 'fake-v1'
++    fallback.name = 'reasoning'
++    fallback.maxTokens = 16
++    fallback.pricing.inputPer1kUsd = 99
++    fallback.pricing.outputPer1kUsd = 99
++    release.resolve()
++    const result = await pending
++    expect(w.seen).toHaveLength(2)
++    expect(w.seen[1]!.model).toBe('fake-v2')
++    expect(w.seen[1]!.maxTokens).toBe(32)
++    expect(result.model).toBe('fake-v2')
++    expect(result.profile).toBe('balanced')
++    expect(result.costUsd).toBe(0.005)
++    expect(result.fallbackUsed).toBe(true)
++  })
++
++  it('observes updated host configuration on a later generate call', async () => {
++    const primary = profile()
++    const w = world(async (req) => ok(req), { profiles: { fast: primary } })
++    const first = await w.gateway.generate(request())
++    primary.model = 'fake-v2'
++    primary.maxTokens = 17
++    primary.pricing.inputPer1kUsd = 2
++    primary.pricing.outputPer1kUsd = 3
++    const second = await w.gateway.generate({
++      ...request(),
++      requestId: 'req_par_m02_later'
++    })
++    expect(first.model).toBe('fake-v1')
++    expect(first.costUsd).toBe(0.002)
++    expect(second.model).toBe('fake-v2')
++    expect(second.costUsd).toBe(0.005)
++    expect(w.seen[1]!.maxTokens).toBe(17)
++    expect(Object.isFrozen(primary)).toBe(false)
++    expect(Object.isFrozen(primary.pricing)).toBe(false)
++  })
++})
+diff --git a/packages/model-gateway/src/gateway.ts b/packages/model-gateway/src/gateway.ts
+index 023b2508a..b7fc4bf8b 100644
+--- a/packages/model-gateway/src/gateway.ts
++++ b/packages/model-gateway/src/gateway.ts
+@@ -106,6 +106,14 @@ interface Candidate {
+   fallbackUsed: boolean
+ }
+ 
++/** Detach admitted configuration while leaving future calls free to reload it. */
++function snapshotProfile(profile: ModelProfile): ModelProfile {
++  return Object.freeze({
++    ...profile,
++    pricing: Object.freeze({ ...profile.pricing })
++  })
++}
++
+ /**
+  * Provider-agnostic model gateway.
+  *
+@@ -234,11 +242,14 @@ export class ModelGateway {
+     }
+ 
+     const candidates: Candidate[] = [
+-      { profile: route.profile, fallbackUsed: false }
++      { profile: snapshotProfile(route.profile), fallbackUsed: false }
+     ]
+     const fallback = this.#router.fallbackFor(route.profile)
+     if (fallback) {
+-      candidates.push({ profile: fallback, fallbackUsed: true })
++      candidates.push({
++        profile: snapshotProfile(fallback),
++        fallbackUsed: true
++      })
+     }
+ 
+     let lastError: ModelGatewayError | undefined

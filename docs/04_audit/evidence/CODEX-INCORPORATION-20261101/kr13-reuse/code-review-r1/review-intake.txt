@@ -1,0 +1,34 @@
+**Verdict: APPROVE_SCOPED_CODE_R1 — 0 mandatory findings.**
+
+Independent, nonbuilder, fresh-context, leaf review of `CODEX-INCORPORATION:KR13-NATIVE-REPORT-INTAKE`, limited to the frozen internal cleanup primitive C01–C10. No application/test execution, builds, services, network, writes, or subagents.
+
+**Integrity:** PRE/POST checks matched both frozen source snapshots and both actual candidate files:
+
+| Source | SHA-256 |
+|---|---|
+| `packages/harness/src/kernel/host.ts` | `c9157344a0c6dcf50ecba925dac6f92cfc69b23318f4cc3c4f2ce33ce13d0d34` |
+| `packages/harness/src/__tests__/managed-native-cleanup-intake.test.ts` | `e48ee318eb8d4f7489df4840466ab9607e2cdf48375375badd6a09a03cf9cf47` |
+
+All 14 manifest inputs, six reuse pins, available input snapshots, patch hash, and eight raw-check log hashes matched. Final POST check: `2026-11-02T03:29:09Z`. Actual host diff and new test content match `implementation.patch`. No source drift observed.
+
+Comparison against actual Git baseline `c8be3a5168b1304ba4e3dc3d79a91c66ce494637` confirms the two-path application change. The reused primitive is identical apart from the intended baseline adaptations: retaining `CONTROL_SERVICES` without importing `OPTIONAL_SERVICES`, and preserving `model/overflow`. Tests retain the cleanup oracles; only the two unrelated optional-sandbox cases were removed.
+
+**Acceptance coverage:** line references below are candidate/frozen-source lines; `T` denotes `managed-native-cleanup-intake.test.ts`.
+
+| Criteria | Assessment and anchors |
+|---|---|
+| C01–C02 | Shared promise stored before callbacks; sequential unwind and at-most-once invocation. `host.ts:250–287`; T:20–79, 279–312, 395–411. |
+| C03 | Settled disposer and subtree failures accumulate separately; legacy disposal remains `Promise<void>` without introducing throws. `host.ts:69–77,250–253,302–320`; T:56–79, 314–341, 344–393. |
+| C04 | Original `KernelBootError` identity survives rollback; cleanup has its own report. `host.ts:194–216`; T:160–199, 344–393. |
+| C05 | Protected cause presentation handles revoked proxies and descriptor traps; boot message accessors are not executed. `host.ts:82–104,199–214`; T:107–199, 246–277. |
+| C06 | Missing invocation, pending original, malformed/uncertain result, rejection, or hanging coordinator cannot pop ownership or advance dependencies. `host.ts:288–310`; T:413–474. |
+| C07 | Position-based removal preserves late frames and unwinds them before earlier dependencies. `host.ts:263–265,312–324`; T:201–244. |
+| C08 | Fixture limitation is explicit at T:106. Synthetic child barriers establish coordinator ordering, not real producer/subtree quiescence. |
+| C09 | Baseline policy checks, hook ordering, service methods and public signatures are preserved. Barrels, package exports, types, lockfile and Vitest config are byte-identical to baseline. |
+| C10 | Cleanup reports, arrays, entries and projected object causes are frozen; arbitrary thrown resource objects/functions are not returned as cleanup handles. `host.ts:82–104,302–320`; T:309–310, 329–340. |
+
+**Evidence limits:** frozen raw outputs record 19/19 focal tests and 100/100 regressions passing, plus successful scoped typecheck, lint, format and build. I inspected these records; I did not rerun them. Initial configuration failure and subsequent baseline RED remain preserved.
+
+Unknown settlement intentionally leaves the shared cleanup pending without retry; this is conservative ownership retention, not recovery or eventual-progress proof. Real owner/tracker, admission closure, generations, cancellation and process/provider shutdown remain unproven. Global certification, PostgreSQL and E2E remain `NOT_RUN`; full T2 qualification is not granted.
+
+No mandatory remediation identified. This verdict grants no KR13/W8/overall-goal closure, canonical promotion, or production release. GBrain consultation/synchronization was not performed under the explicit no-network/no-write constraint; persistence remains with Parent.

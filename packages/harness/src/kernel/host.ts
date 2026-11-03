@@ -41,6 +41,87 @@ type ListenerTable = { [P in HookPoint]: Listener<P>[] }
 const isControlService = (key: ServiceKey): boolean =>
   (CONTROL_SERVICES as readonly ServiceKey[]).includes(key)
 
+/** Internal wiring contracts. They are deliberately absent from public barrels. */
+export type NativeCleanupItemResult =
+  | { readonly status: 'SETTLED'; readonly failures: readonly unknown[] }
+  | { readonly status: 'UNCERTAIN'; readonly cause: unknown }
+
+export interface NativeCleanupCoordinator {
+  runItem(disposer: Disposer): Promise<NativeCleanupItemResult>
+}
+
+export interface NativeCleanupReport {
+  readonly status: 'DISPOSED' | 'FAILED'
+  readonly failures: readonly {
+    readonly item: number
+    readonly cause: unknown
+  }[]
+}
+
+export type NativeBootReport =
+  | { readonly ok: true; readonly host: KernelHost }
+  | {
+      readonly ok: false
+      readonly primary: KernelBootError
+      readonly cleanup: NativeCleanupReport
+    }
+
+const legacyCleanup: NativeCleanupCoordinator = {
+  async runItem(disposer) {
+    try {
+      await disposer()
+      return { status: 'SETTLED', failures: [] }
+    } catch (cause) {
+      return { status: 'SETTLED', failures: [cause] }
+    }
+  }
+}
+
+// Reports detach failure data; arbitrary thrown objects/functions never become
+// resource handles in a terminal report. The future owner emits fixed codes.
+function cleanupCause(cause: unknown): unknown {
+  try {
+    if (cause instanceof Error) {
+      const message = Object.getOwnPropertyDescriptor(cause, 'message')
+      return Object.freeze({
+        kind: 'error',
+        ...(message && 'value' in message && typeof message.value === 'string'
+          ? { message: message.value }
+          : {})
+      })
+    }
+    if (
+      cause === null ||
+      ['string', 'number', 'boolean', 'undefined', 'bigint'].includes(
+        typeof cause
+      )
+    )
+      return cause
+  } catch {
+    // Inspection failure is presentation loss, not uncertain liveness of the
+    // disposer/subtree that already settled. Never trap the cleanup join here.
+  }
+  return Object.freeze({ kind: 'opaque_failure' })
+}
+
+let internalBoot!: (
+  plugins: readonly KernelPlugin[],
+  required: readonly ServiceKey[],
+  coordinator: NativeCleanupCoordinator
+) => Promise<NativeBootReport>
+let internalCleanup!: (host: KernelHost) => Promise<NativeCleanupReport>
+
+/** Trusted module wiring only; package exports do not expose this entrypoint. */
+export const bootKernelHostWithReport = (
+  plugins: readonly KernelPlugin[],
+  required: readonly ServiceKey[],
+  coordinator: NativeCleanupCoordinator
+): Promise<NativeBootReport> => internalBoot(plugins, required, coordinator)
+
+export const disposeKernelHostWithReport = (
+  host: KernelHost
+): Promise<NativeCleanupReport> => internalCleanup(host)
+
 /**
  * Plugin host (SPEC 0181 §2). Plugins find each other by service key, load in
  * dependency order and register reversible effects. After boot the host is
@@ -59,10 +140,24 @@ export class KernelHost {
     'turn/end': []
   }
   readonly #guards: { plugin: string; fn: ToolGuard }[] = []
-  readonly #disposers: Disposer[] = []
+  readonly #disposers: {
+    readonly ordinal: number
+    readonly dispose: Disposer
+  }[] = []
+  #nextDisposer = 0
   #sealed = false
+  #cleanup: Promise<NativeCleanupReport> | undefined
+  readonly #cleanupCoordinator: NativeCleanupCoordinator
 
-  private constructor() {}
+  private constructor(coordinator: NativeCleanupCoordinator) {
+    this.#cleanupCoordinator = coordinator
+  }
+
+  static {
+    internalBoot = (plugins, required, coordinator) =>
+      KernelHost.#boot(plugins, required, coordinator)
+    internalCleanup = (host) => host.#joinCleanup()
+  }
 
   /**
    * Boots a profile. Fails closed: a missing required service, a cycle, a
@@ -73,7 +168,17 @@ export class KernelHost {
     plugins: readonly KernelPlugin[],
     required: readonly ServiceKey[]
   ): Promise<KernelHost> {
-    const host = new KernelHost()
+    const result = await KernelHost.#boot(plugins, required, legacyCleanup)
+    if (result.ok) return result.host
+    throw result.primary
+  }
+
+  static async #boot(
+    plugins: readonly KernelPlugin[],
+    required: readonly ServiceKey[],
+    coordinator: NativeCleanupCoordinator
+  ): Promise<NativeBootReport> {
+    const host = new KernelHost(coordinator)
     try {
       for (const plugin of KernelHost.order(plugins)) {
         await host.#apply(plugin)
@@ -87,15 +192,31 @@ export class KernelHost {
         }
       }
     } catch (error) {
-      await host.dispose()
-      if (error instanceof KernelBootError) throw error
-      throw new KernelBootError(
+      let primary = new KernelBootError(
         'plugin_apply_failed',
-        error instanceof Error ? error.message : 'plugin apply failed'
+        'plugin apply failed'
       )
+      // Error presentation must not skip rollback by throwing from a getter.
+      try {
+        if (error instanceof KernelBootError) primary = error
+        else if (error instanceof Error) {
+          const message = Object.getOwnPropertyDescriptor(error, 'message')
+          if (
+            message &&
+            'value' in message &&
+            typeof message.value === 'string'
+          ) {
+            primary = new KernelBootError('plugin_apply_failed', message.value)
+          }
+        }
+      } catch {
+        // Opaque thrown values retain the fixed primary; cleanup still runs.
+      }
+      const cleanup = await host.#joinCleanup()
+      return Object.freeze({ ok: false, primary, cleanup })
     }
     host.#sealed = true
-    return host
+    return Object.freeze({ ok: true, host })
   }
 
   public get<K extends ServiceKey>(key: K): Services[K] {
@@ -128,14 +249,80 @@ export class KernelHost {
 
   /** Unwinds registrations in reverse order and waits for each to finish. */
   public async dispose(): Promise<void> {
+    await this.#joinCleanup()
+  }
+
+  #joinCleanup(): Promise<NativeCleanupReport> {
+    // Store before any callback can run or reenter through another observer.
+    this.#cleanup ??= Promise.resolve().then(() => this.#unwind())
+    return this.#cleanup
+  }
+
+  async #unwind(): Promise<NativeCleanupReport> {
+    const failures: { readonly item: number; readonly cause: unknown }[] = []
     while (this.#disposers.length > 0) {
-      const dispose = this.#disposers.pop()
-      try {
-        await dispose?.()
-      } catch {
-        // One failing disposer must not leave the remaining ones running.
+      const position = this.#disposers.length - 1
+      const { ordinal: item, dispose } = this.#disposers[position]!
+      let original: Promise<void> | undefined
+      let settled = false
+      let rejected = false
+      let originalFailure: unknown
+      const invokeOnce = (): Promise<void> => {
+        original ??= Promise.resolve()
+          .then(() => dispose())
+          .then(
+            () => {
+              settled = true
+            },
+            (cause: unknown) => {
+              settled = true
+              rejected = true
+              originalFailure = cause
+              throw cause
+            }
+          )
+        // A broken coordinator may stop observing; the original stays owned.
+        void original.catch(() => {})
+        return original
       }
+      try {
+        const result = await this.#cleanupCoordinator.runItem(invokeOnce)
+        if (
+          !original ||
+          !settled ||
+          !result ||
+          result.status !== 'SETTLED' ||
+          !Array.isArray(result.failures)
+        ) {
+          // The stack still owns the exact item. No retry, pop, or terminal
+          // report is justified by unknown coordinator/descendant settlement.
+          await new Promise<never>(() => {})
+        }
+        // The uncertain branch cannot resume; this assertion is erased in JS.
+        const causes = [
+          ...(result as { readonly failures: readonly unknown[] }).failures
+        ]
+        if (rejected && !causes.includes(originalFailure))
+          causes.push(originalFailure)
+        for (const cause of causes)
+          failures.push(Object.freeze({ item, cause: cleanupCause(cause) }))
+      } catch {
+        // A coordinator rejection is not proof that its subtree settled.
+        await new Promise<never>(() => {})
+      }
+      // A pending acquire may register a late resource while this item's
+      // subtree is joining. Remove only this settled frame; unwind the late
+      // frames before earlier dependencies, without repeating this callback.
+      this.#disposers.splice(position, 1)
     }
+    return Object.freeze({
+      status: failures.length ? 'FAILED' : 'DISPOSED',
+      failures: Object.freeze(failures)
+    })
+  }
+
+  #registerDisposer(dispose: Disposer): void {
+    this.#disposers.push({ ordinal: this.#nextDisposer++, dispose })
   }
 
   static order(plugins: readonly KernelPlugin[]): KernelPlugin[] {
@@ -209,7 +396,7 @@ export class KernelHost {
         const dispose: Disposer = async () => {
           this.#services.delete(key)
         }
-        this.#disposers.push(dispose)
+        this.#registerDisposer(dispose)
         return dispose
       },
       get: (key) => this.get(key),
@@ -226,7 +413,7 @@ export class KernelHost {
           const index = table.indexOf(entry)
           if (index >= 0) table.splice(index, 1)
         }
-        this.#disposers.push(dispose)
+        this.#registerDisposer(dispose)
         return dispose
       },
       guard: (guard) => {
@@ -243,12 +430,12 @@ export class KernelHost {
           const index = this.#guards.indexOf(entry)
           if (index >= 0) this.#guards.splice(index, 1)
         }
-        this.#disposers.push(dispose)
+        this.#registerDisposer(dispose)
         return dispose
       },
       effect: (dispose) => {
         this.#assertOpen()
-        this.#disposers.push(dispose)
+        this.#registerDisposer(dispose)
       }
     }
     await plugin.apply(context)

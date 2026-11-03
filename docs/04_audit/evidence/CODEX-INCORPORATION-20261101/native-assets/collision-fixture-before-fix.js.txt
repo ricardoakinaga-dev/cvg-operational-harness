@@ -1,0 +1,215 @@
+// @vitest-environment node
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { afterEach, describe, expect, it } from 'vitest'
+import { copyRuntimeNativeAssets } from '../scripts/lib/runtime-native-assets.mjs'
+
+const roots = []
+function fixture() {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'native-assets-'))
+  roots.push(scratch)
+  const root = path.join(scratch, 'source')
+  const context = path.join(scratch, 'runtime')
+  fs.mkdirSync(root)
+  fs.mkdirSync(context)
+  return {
+    root,
+    context,
+    native: path.join(root, 'packages/harness/native/runtime')
+  }
+}
+afterEach(() => {
+  for (const root of roots.splice(0))
+    fs.rmSync(root, { recursive: true, force: true })
+})
+const workspaces = ['packages/harness', 'apps/worker']
+
+describe('runtime package native asset transport (no loading or ABI proof)', () => {
+  it('preserves native compiler sources outside runtime while delivering selected assets', () => {
+    const { root, context, native } = fixture()
+    fs.mkdirSync(native, { recursive: true })
+    const sandboxNative = path.join(root, 'packages/sandbox/native')
+    fs.mkdirSync(sandboxNative, { recursive: true })
+    const cSource =
+      '/* existing Landlock compiler input, not a runtime asset */\n'
+    fs.writeFileSync(path.join(sandboxNative, 'cvg-landlock-exec.c'), cSource)
+    fs.writeFileSync(path.join(native, 'reader.node'), 'opaque fixture')
+    expect(
+      copyRuntimeNativeAssets(root, context, [
+        'packages/harness',
+        'packages/sandbox'
+      ])
+    ).toEqual(['packages/harness/native/runtime/reader.node'])
+    expect(fs.existsSync(path.join(context, 'packages/sandbox/native'))).toBe(
+      false
+    )
+    expect(
+      fs.readFileSync(path.join(sandboxNative, 'cvg-landlock-exec.c'), 'utf8')
+    ).toBe(cSource)
+  })
+
+  it('keeps absent optional trees absent without changing existing runtime files', () => {
+    const { root, context } = fixture()
+    const existing = path.join(context, 'package.json')
+    fs.writeFileSync(existing, '{"unchanged":true}\n')
+    expect(copyRuntimeNativeAssets(root, context, workspaces)).toEqual([])
+    expect(fs.readdirSync(context)).toEqual(['package.json'])
+    expect(fs.readFileSync(existing, 'utf8')).toBe('{"unchanged":true}\n')
+  })
+
+  it('copies nested opaque binary/JSON bytes and normal modes across workspaces', () => {
+    const { root, context, native } = fixture()
+    fs.mkdirSync(path.join(native, 'nested'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'apps/worker/native/runtime'), {
+      recursive: true
+    })
+    const binary = Buffer.concat([
+      Buffer.from([0, 255, 127]),
+      Buffer.alloc(150_000, 41)
+    ])
+    fs.writeFileSync(path.join(native, 'nested/reader.node'), binary, {
+      mode: 0o640
+    })
+    fs.writeFileSync(path.join(native, 'asset.json'), '{"opaque":true}\n', {
+      mode: 0o600
+    })
+    fs.chmodSync(path.join(native, 'nested'), 0o750)
+    fs.writeFileSync(
+      path.join(root, 'apps/worker/native/runtime/worker.node'),
+      'transport'
+    )
+    expect(copyRuntimeNativeAssets(root, context, workspaces)).toEqual([
+      'packages/harness/native/runtime/asset.json',
+      'packages/harness/native/runtime/nested/reader.node',
+      'apps/worker/native/runtime/worker.node'
+    ])
+    expect(
+      fs.readFileSync(
+        path.join(context, 'packages/harness/native/runtime/nested/reader.node')
+      )
+    ).toEqual(binary)
+    expect(
+      fs.statSync(path.join(context, 'packages/harness/native/runtime/nested'))
+        .mode & 0o777
+    ).toBe(0o750)
+    expect(
+      fs.statSync(
+        path.join(context, 'packages/harness/native/runtime/asset.json')
+      ).mode & 0o777
+    ).toBe(0o600)
+    expect(
+      fs.statSync(
+        path.join(context, 'packages/harness/native/runtime/nested/reader.node')
+      ).mode & 0o777
+    ).toBe(0o640)
+  })
+
+  for (const kind of ['relative', 'absolute', 'dangling']) {
+    it(`rejects a ${kind} native asset link before copying any selected tree`, () => {
+      const { root, context, native } = fixture()
+      fs.mkdirSync(native, { recursive: true })
+      fs.writeFileSync(path.join(native, 'a.node'), 'valid-but-not-copied')
+      const outside = path.join(root, 'outside.node')
+      fs.writeFileSync(outside, 'outside-not-copied')
+      fs.symlinkSync(
+        kind === 'relative'
+          ? '../../../../outside.node'
+          : kind === 'absolute'
+            ? outside
+            : path.join(root, 'missing.node'),
+        path.join(native, 'z.node')
+      )
+      expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+        /native_asset_symlink/
+      )
+      expect(fs.readdirSync(context)).toEqual([])
+    })
+  }
+
+  it('rejects a dangling native root link', () => {
+    const { root, context, native } = fixture()
+    fs.mkdirSync(path.dirname(native), { recursive: true })
+    fs.symlinkSync(path.join(root, 'not-present'), native)
+    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+      /native_asset_symlink/
+    )
+    expect(fs.readdirSync(context)).toEqual([])
+  })
+
+  it('rejects a linked native parent before traversing runtime', () => {
+    const { root, context, native } = fixture()
+    const parent = path.dirname(native)
+    fs.mkdirSync(path.dirname(parent), { recursive: true })
+    fs.symlinkSync(path.join(root, 'not-present'), parent)
+    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+      /native_asset_symlink/
+    )
+    expect(fs.readdirSync(context)).toEqual([])
+  })
+
+  it('rejects a file where the native directory belongs', () => {
+    const { root, context, native } = fixture()
+    fs.mkdirSync(path.dirname(native), { recursive: true })
+    fs.writeFileSync(native, 'not-a-directory')
+    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+      /native_asset_not_directory/
+    )
+    expect(fs.readdirSync(context)).toEqual([])
+  })
+
+  for (const extension of ['ts', 'js', 'c', 'cc', 'txt']) {
+    it(`rejects ${extension} source instead of contradicting sourceIncluded:false`, () => {
+      const { root, context, native } = fixture()
+      fs.mkdirSync(native, { recursive: true })
+      fs.writeFileSync(
+        path.join(native, `unwanted.${extension}`),
+        'never copied'
+      )
+      expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+        /native_asset_unsupported_file/
+      )
+      expect(fs.readdirSync(context)).toEqual([])
+    })
+  }
+
+  it('refuses a FIFO without opening it or copying earlier regular assets', () => {
+    const { root, context, native } = fixture()
+    fs.mkdirSync(native, { recursive: true })
+    fs.writeFileSync(path.join(native, 'a.node'), 'regular')
+    const result = spawnSync('mkfifo', [path.join(native, 'z.node')], {
+      timeout: 2000
+    })
+    expect(result.status).toBe(0)
+    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+      /native_asset_not_regular/
+    )
+    expect(fs.readdirSync(context)).toEqual([])
+  })
+
+  it('does not overwrite an existing output asset or touch its source', () => {
+    const { root, context, native } = fixture()
+    fs.mkdirSync(native, { recursive: true })
+    fs.mkdirSync(path.join(context, 'packages/harness/native'), {
+      recursive: true
+    })
+    fs.writeFileSync(path.join(native, 'reader.node'), 'source')
+    fs.writeFileSync(
+      path.join(context, 'packages/harness/native/runtime/reader.node'),
+      'existing'
+    )
+    expect(() => copyRuntimeNativeAssets(root, context, workspaces)).toThrow(
+      /native_asset_copy_failed/
+    )
+    expect(
+      fs.readFileSync(
+        path.join(context, 'packages/harness/native/runtime/reader.node'),
+        'utf8'
+      )
+    ).toBe('existing')
+    expect(fs.readFileSync(path.join(native, 'reader.node'), 'utf8')).toBe(
+      'source'
+    )
+  })
+})

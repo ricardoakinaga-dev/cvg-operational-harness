@@ -1,0 +1,9 @@
+# Proposta de accounting por árvore
+
+O [anexo SC-L02](../../../../02_spec/0311_agent_tree_accounting.md) acrescenta à SPEC0311 um algoritmo explícito para envelopes de pai/filhos/netos, saldo livre, reserva de tentativa, uso parcial/final, devolução, consumo desconhecido, overrun e recuperação. Define também unidades exatas, versionamento de preço, diferença entre tempo ativo e prazo de parede, contagem da raiz e liberação de slots somente com assentamento real. Os doze casos AC01–AC12 permanecem NOT_RUN; exemplos aritméticos não são prova do runtime.
+
+As sete fontes primárias e a preimagem da SPEC0311 estão em [source-inputs.json](source-inputs.json). A proposta preserva os controles locais atuais. Não atribui uma transação durável ao store síncrono, não cria uma segunda autoridade de execução e não afirma que exista um helper compatível com a ordem de locks K03b/0239/0302. SC-L01, SC-L03, SC-L04 e os bounds de provider continuam pendentes.
+
+A revisão independente Hubble teve orçamento de 300 segundos e foi encerrada automaticamente em 300,036 segundos, incluindo o encerramento. Não entregou nenhum dos três artefatos requeridos. Portanto, o [resultado de admissão](review-admission.json) é `NOT_ADMITTED_TIMEOUT_NO_OUTPUTS`, sem parecer técnico e sem contagem de achados conhecida. Não houve recovery, nova rodada de revisão ou crédito de aprovação. A [conferência posterior do Lead](review-inputs-post-parent.json) confirmou os dez inputs congelados; não constitui revisão independente.
+
+Nenhum código de aplicação, migration, schema público ou teste foi alterado nesta etapa. O anexo e a SPEC0311 seguem em rascunho. Próxima fronteira: dispor a revisão técnica pendente e resolver a integração com os owners antes de gate humano T3 e BUILD. Os 18 recortes, os 12 comandos e a jornada CQ01–14 continuam integralmente abertos onde não há prova funcional; este documento não os encerra.

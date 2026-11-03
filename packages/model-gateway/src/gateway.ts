@@ -102,6 +102,14 @@ interface Candidate {
   fallbackUsed: boolean
 }
 
+/** Detach admitted configuration while leaving future calls free to reload it. */
+function snapshotProfile(profile: ModelProfile): ModelProfile {
+  return Object.freeze({
+    ...profile,
+    pricing: Object.freeze({ ...profile.pricing })
+  })
+}
+
 /**
  * Provider-agnostic model gateway.
  *
@@ -230,11 +238,14 @@ export class ModelGateway {
     }
 
     const candidates: Candidate[] = [
-      { profile: route.profile, fallbackUsed: false }
+      { profile: snapshotProfile(route.profile), fallbackUsed: false }
     ]
     const fallback = this.#router.fallbackFor(route.profile)
     if (fallback) {
-      candidates.push({ profile: fallback, fallbackUsed: true })
+      candidates.push({
+        profile: snapshotProfile(fallback),
+        fallbackUsed: true
+      })
     }
 
     let lastError: ModelGatewayError | undefined
