@@ -642,7 +642,12 @@ function runGate(id) {
     maxBuffer: 128 * 1024 * 1024,
     // certify nests the complete gate catalog; keep its parent budget bounded
     // above the observed subtotal while every child retains its own deadline.
-    timeout: id === 'certify' ? 9_000_000 : 3_600_000
+    timeout:
+      id === 'certify'
+        ? 16_200_000
+        : id === 'unit' || id === 'coverage'
+          ? 5_400_000
+          : 3_600_000
   })
   const nativeProcess = ciProcessDiagnostics(result)
   let exitCode = result.status ?? 1

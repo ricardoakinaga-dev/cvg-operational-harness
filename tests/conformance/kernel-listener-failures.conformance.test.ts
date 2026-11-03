@@ -278,7 +278,7 @@ describe('SPEC0181 I7: public runtime normalizes listener failures', () => {
       expect(result.response).toContain(PLUGIN)
       expect(result.response).toContain(FAILURE)
       expect(result.toolCalls).toBe(1)
-      expect(calls).toEqual(['started', 'body', 'finished:threw'])
+      expect(calls).toEqual(['started', 'body', 'finished:succeeded'])
       expect(
         log.events.filter((event) => event.type === 'tool/result')
       ).toEqual([expect.objectContaining({ outcome: 'threw' })])
@@ -287,7 +287,7 @@ describe('SPEC0181 I7: public runtime normalizes listener failures', () => {
     }
   })
 
-  it('sync throw after next observes the pending body before closing its ledger', async () => {
+  it('failure after dispatch starts joins the pending body before closing its ledger', async () => {
     let enter!: () => void
     let release!: () => void
     const entered = new Promise<void>((resolve) => {
@@ -301,8 +301,9 @@ describe('SPEC0181 I7: public runtime normalizes listener failures', () => {
         name: PLUGIN,
         kind: 'capability',
         apply(ctx) {
-          ctx.on('tool/execute', (_call, next) => {
+          ctx.on('tool/execute', async (_call, next) => {
             void next()
+            await entered
             throw new Error(FAILURE)
           })
         }
@@ -326,13 +327,37 @@ describe('SPEC0181 I7: public runtime normalizes listener failures', () => {
       const outcome = await execution
       expect(outcome).toHaveProperty('result.stopReason', 'TOOL_FAILURE')
       expect(outcome).toHaveProperty('result.toolCalls', 1)
-      expect(calls).toEqual(['started', 'body', 'finished:threw'])
+      expect(calls).toEqual(['started', 'body', 'finished:succeeded'])
       expect(
         log.events.filter((event) => event.type === 'tool/result')
       ).toEqual([expect.objectContaining({ outcome: 'threw' })])
     } finally {
       release()
       await execution
+      await runtime.dispose()
+    }
+  })
+
+  it('sync throw after next invalidates delegation before the body starts', async () => {
+    const { runtime, calls, log } = await build({
+      name: PLUGIN,
+      kind: 'capability',
+      apply(ctx) {
+        ctx.on('tool/execute', (_call, next) => {
+          void next()
+          throw new Error(FAILURE)
+        })
+      }
+    })
+    try {
+      const result = await runtime.execute(input())
+      expect(result.stopReason).toBe('INSUFFICIENT_EVIDENCE')
+      expect(result.toolCalls).toBe(0)
+      expect(calls).toEqual([])
+      expect(
+        log.events.filter((event) => event.type === 'tool/result')
+      ).toEqual([expect.objectContaining({ outcome: 'not_started' })])
+    } finally {
       await runtime.dispose()
     }
   })
