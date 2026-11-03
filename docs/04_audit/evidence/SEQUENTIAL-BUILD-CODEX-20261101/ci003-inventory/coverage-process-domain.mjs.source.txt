@@ -1,0 +1,144 @@
+import fs from 'node:fs'
+
+const vanished = (error) => ['ENOENT', 'ESRCH'].includes(error.code)
+const refusal = (reason) => new Error(`coverage_process_domain:${reason}`)
+
+export function parseProcessStat(text, expectedPid, uid) {
+  const close = text.lastIndexOf(')')
+  const pid = Number(text.slice(0, text.indexOf(' ')))
+  const fields = text
+    .slice(close + 2)
+    .trim()
+    .split(/\s+/)
+  if (
+    close < 0 ||
+    pid !== expectedPid ||
+    !Number.isSafeInteger(pid) ||
+    pid < 1 ||
+    fields.length < 20 ||
+    !/^[A-Za-z]$/.test(fields[0]) ||
+    !/^[0-9]+$/.test(fields[19]) ||
+    !Number.isSafeInteger(uid)
+  )
+    throw refusal('invalid_stat')
+  const [ppid, pgid, sid] = fields.slice(1, 4).map(Number)
+  if (
+    ![ppid, pgid, sid].every(Number.isSafeInteger) ||
+    ppid < 0 ||
+    pgid < 1 ||
+    sid < 1
+  ) {
+    throw refusal('invalid_stat_identity')
+  }
+  return { pid, ppid, pgid, sid, uid, starttime: fields[19], state: fields[0] }
+}
+
+export function sameProcessIdentity(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    ['pid', 'pgid', 'sid', 'uid', 'starttime'].every(
+      (field) => left[field] === right[field]
+    )
+  )
+}
+
+export function readProcessIdentity(pid, procRoot = '/proc') {
+  if (!Number.isSafeInteger(pid) || pid < 1) throw refusal('invalid_pid')
+  try {
+    const file = `${procRoot}/${pid}/stat`
+    const uid = fs.statSync(`${procRoot}/${pid}`).uid
+    const first = parseProcessStat(fs.readFileSync(file, 'utf8'), pid, uid)
+    const second = parseProcessStat(fs.readFileSync(file, 'utf8'), pid, uid)
+    if (!sameProcessIdentity(first, second)) throw refusal('identity_changed')
+    return second
+  } catch (error) {
+    if (vanished(error)) return null
+    throw error
+  }
+}
+
+export function scanSession(owner, procRoot = '/proc') {
+  const members = []
+  for (const name of fs.readdirSync(procRoot)) {
+    if (!/^[0-9]+$/.test(name)) continue
+    try {
+      if (fs.statSync(`${procRoot}/${name}`).uid !== owner.uid) continue
+      const identity = readProcessIdentity(Number(name), procRoot)
+      if (identity?.sid === owner.sid) members.push(identity)
+    } catch (error) {
+      if (!vanished(error)) throw error
+    }
+  }
+  return members
+}
+
+export function captureSessionBaseline() {
+  if (process.platform !== 'linux') throw refusal('linux_required')
+  const owner = readProcessIdentity(process.pid)
+  if (!owner || owner.sid !== process.pid || owner.pgid !== process.pid) {
+    throw refusal('exclusive_session_required')
+  }
+  const baseline = scanSession(owner)
+  if (!baseline.some((member) => sameProcessIdentity(member, owner))) {
+    throw refusal('owner_not_observed')
+  }
+  return { owner, baseline }
+}
+
+export function assertSessionQuiescent(owner, baseline, procRoot = '/proc') {
+  if (!sameProcessIdentity(readProcessIdentity(owner.pid, procRoot), owner)) {
+    throw refusal('owner_identity_changed')
+  }
+  const members = scanSession(owner, procRoot)
+  for (const member of members) {
+    if (member.pgid !== owner.pgid) throw refusal('process_group_drift')
+    if (['Z', 'X', 'x'].includes(member.state))
+      throw refusal('unreaped_process')
+    if (!baseline.some((known) => sameProcessIdentity(known, member))) {
+      throw refusal('work_residue')
+    }
+  }
+  return members
+}
+
+export function signalOwnedProcess(owner, expected, signal = 'SIGTERM') {
+  if (
+    !expected ||
+    expected.pid === process.pid ||
+    expected.uid !== owner.uid ||
+    expected.sid !== owner.sid ||
+    BigInt(expected.starttime) < BigInt(owner.starttime)
+  )
+    throw refusal('unowned_signal_target')
+  const current = readProcessIdentity(expected.pid)
+  if (!current) return false
+  if (!sameProcessIdentity(current, expected))
+    throw refusal('signal_identity_changed')
+  if (current.state === 'Z') return false
+  process.kill(current.pid, signal)
+  return true
+}
+
+export function captureAncestorIdentities() {
+  const ancestors = []
+  const seen = new Set([process.pid])
+  let pid = process.ppid
+  while (pid > 1) {
+    if (seen.has(pid)) throw refusal('ancestor_cycle')
+    seen.add(pid)
+    const identity = readProcessIdentity(pid)
+    if (!identity) throw refusal('ancestor_not_observed')
+    ancestors.push(identity)
+    pid = identity.ppid
+  }
+  return ancestors
+}
+
+export function assertAncestorsPresent(ancestors) {
+  for (const identity of ancestors) {
+    if (!sameProcessIdentity(identity, readProcessIdentity(identity.pid))) {
+      throw refusal('supervisor_lost')
+    }
+  }
+}
