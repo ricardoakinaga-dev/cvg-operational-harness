@@ -4,7 +4,7 @@
 | ---- | ---------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | P1   | Sandbox `PROCESS` indisponível na imagem de produção | T3/T4  | [SPEC 0313](02_spec/0313_process_sandbox_production_image.md) decisão D1 = só Landlock registrada; falta o go de BUILD; coordenar o `Dockerfile` com o Codex (Debian 13)            |
 | P2   | `boundary:products` `INCOMPLETE` (HISO-005)          | T2/T3  | Programa B6 (SPECs 0236/0237). Os `pinsHold: false` são o catálogo legado (SPEC 0228, só inventário histórico: não removem diagnóstico), não regressão. Prova positiva segue aberta |
-| P3   | Dividir `apps/api/src/server.ts` (6.285 linhas)      | T2     | [SPEC 0315](02_spec/0315_api_server_route_modules.md) decisão: 9 fatias, T2; falta o go de BUILD; começa pela suíte base com PostgreSQL                                             |
+| P3   | Dividir `apps/api/src/server.ts` (6.285 linhas)      | T2     | [SPEC 0315](02_spec/0315_api_server_route_modules.md) **implementada localmente** (`server.ts` 6.285 → 1.268 linhas); falta a CI com PostgreSQL no PR                               |
 | P3   | Evidência de 4 GB fora do caminho do clone           | T3     | [SPEC 0314](02_spec/0314_evidence_archive_offrepo.md) opção A **entregue** em 04/11/2026 ([clone enxuto](08_runtime/clone_enxuto.md)); B e C seguem fora de escopo                  |
 
 Produção continua `NO_GO`; nenhuma frente acima concede release.

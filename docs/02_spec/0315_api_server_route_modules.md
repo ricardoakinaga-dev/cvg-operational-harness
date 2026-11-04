@@ -1,6 +1,6 @@
 # SPEC 0315 — Dividir `apps/api/src/server.ts` por domínio de rota
 
-Status: `DECISIONS_RECORDED_AWAITING_BUILD_GO` (T2: refatoração sem mudança de contrato público; revisão humana desejável, não obrigatória). Data: 04/11/2026. Origem: achado P3 da [auditoria 0626](../04_audit/0626_repository_audit_2026-11-04.md). Nenhum BUILD iniciado.
+Status: `BUILD_DONE_LOCAL` (PostgreSQL e CI pendentes) (T2: refatoração sem mudança de contrato público; revisão humana desejável, não obrigatória). Data: 04/11/2026. Origem: achado P3 da [auditoria 0626](../04_audit/0626_repository_audit_2026-11-04.md). Nenhum BUILD iniciado.
 
 ## 1. Reconhecimento
 
@@ -43,3 +43,25 @@ C6. Registro em SPEC (resultado), ledgers e evidência pequena; sem `certify` po
 - Condições: suíte base com PostgreSQL rodada antes da primeira fatia; claim exclusivo de `apps/api/src/server.ts` e `apps/api/src/routes/**`; commit seletivo por fatia; sem push.
 - D2 (janela com o Codex) fica resolvida pelo claim exclusivo; se houver claim vivo do Codex em `server.ts`, a fatia espera.
 - **Pendente:** o usuário ainda não pediu para iniciar o BUILD.
+
+## 7. Resultado do BUILD (04/11/2026)
+
+**Fatia 0 (`56069ff3e`):** tipos, esquemas e helpers que ficavam fora do `buildServer` foram para `server-options`, `-schemas`, `-persistence`, `-query`, `-identity`, `-inbound` e `-capability` (124 a 439 linhas cada, sem ciclos de importação). `server.ts` reexporta a API pública anterior.
+
+**Fatias 1–9:** 13 registradores em `apps/api/src/routes/register-*.ts` (health, session, executions, webhooks, takeover, tasks, approvals, capability-approvals, observability, catalog, release-candidates, agents, test-lab) mais `routes/context.ts` com o `RouteContext` (38 dependências explícitas). `buildServer` monta `routeContext` e chama os registradores **na mesma posição e ordem** das rotas originais; `registerCaseAuthorizationRoutes`, `registerSecretaryJourneyRoutes` e o bloco `sessionEventStreams` permaneceram no lugar.
+
+| Medida                   |        Antes |                                             Depois |
+| ------------------------ | -----------: | -------------------------------------------------: |
+| `apps/api/src/server.ts` | 6.285 linhas |                         1.268 linhas (R5: ≤ 1.500) |
+| Maior módulo novo        |          n/a | 554 linhas (`register-executions.ts`; R5: ≤ 1.000) |
+
+Evidência (Node 22.23.3):
+
+- C4: `server-route-order.test.ts` compara a lista ordenada de rotas e sua classe (115 entradas em modo simulação e 115 em modo trusted) com um fixture capturado do `server.ts` **original** (conferido byte a byte numa worktree de `HEAD` anterior à mudança).
+- C1: `typecheck`, `npm run lint` (repositório inteiro) e prettier limpos. A atribuição `routeContext: RouteContext` é verificada pelo compilador.
+- C2: `apps/api` 976 → 977 testes passam (+1 novo), 164 pulados, antes e depois. Um teste de OIDC estoura prazo sob carga na suíte completa e passa isolado (32/32), antes e depois da mudança. Outros 66 testes que importam o servidor (`tests/e2e`, `products/shift-assistant`) passam.
+- `build:runtime` (usado pela imagem) passa; `boundary:products` segue com 0 violações e `INCOMPLETE`, igual ao estado anterior.
+
+**Não verificado localmente (C3, C5):** esta máquina não tem PostgreSQL nem Docker. Os 164 testes de `apps/api` que exigem PostgreSQL, `test:postgres`, cobertura por arquivo/`coverage:critical` e `certify` não rodaram. Dependem da CI do PR. Não houve mudança de `package.json`, lockfile, migrations ou schemas.
+
+**Desvio da SPEC:** as 13 fatias saíram num único commit gerado por transformação automática (compilador do TypeScript) em vez de uma por commit, porque a ordem de registro precisava ser preservada de ponta a ponta. A equivalência é protegida pelo teste de ordem, pelo typecheck e pelas suítes acima.
