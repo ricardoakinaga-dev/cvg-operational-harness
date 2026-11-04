@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { test } from 'vitest'
@@ -229,4 +229,62 @@ test('doc link checker classifies registered removed targets and rejects stale o
   assert.deepEqual(output.broken, [])
   assert.equal(output.staleRemovedTargets.length, 1)
   assert.match(result.stderr, /STALE_REMOVED_TARGETS=1/)
+})
+
+function sparseRepository() {
+  const root = mkdtempSync(join(tmpdir(), 'spec0314-sparse-'))
+  const git = (...args) =>
+    execFileSync('git', args, { cwd: root, encoding: 'utf8' })
+  git('init', '-q')
+  git('config', 'user.email', 'test@example.invalid')
+  git('config', 'user.name', 'test')
+  mkdirSync(join(root, 'docs/04_audit/evidence/RUN-1'), { recursive: true })
+  writeFileSync(join(root, 'docs/04_audit/evidence/RUN-1/result.json'), '{}\n')
+  writeFileSync(
+    join(root, 'docs/note.md'),
+    '[file](04_audit/evidence/RUN-1/result.json)\n[dir](04_audit/evidence/RUN-1/)\n[ghost](04_audit/evidence/RUN-1/never-tracked.json)\n'
+  )
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  // Simulates a sparse clone: tracked in Git, absent from the working tree.
+  rmSync(join(root, 'docs/04_audit/evidence'), { recursive: true })
+  return root
+}
+
+function runIn(cwd, script, args, env = {}) {
+  return spawnSync(process.execPath, [join(repositoryRoot, script), ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, ...env }
+  })
+}
+
+test('sparse evidence: strict by default, tracked-only when opted in', () => {
+  const root = sparseRepository()
+  const strict = runIn(root, 'scripts/check-doc-links.mjs', ['docs'])
+  assert.equal(strict.status, 1, 'strict mode must reject missing evidence')
+
+  const sparse = runIn(root, 'scripts/check-doc-links.mjs', ['docs'], {
+    CVG_SPARSE_EVIDENCE: '1'
+  })
+  const output = JSON.parse(sparse.stdout)
+  assert.equal(sparse.status, 1, 'an untracked target must still be broken')
+  assert.deepEqual(
+    output.broken.map(({ target }) => target),
+    ['04_audit/evidence/RUN-1/never-tracked.json']
+  )
+  assert.equal(output.sparseUnmaterialized.length, 2)
+})
+
+test('sparse evidence hygiene is reported as skipped, never as passed', () => {
+  const root = sparseRepository()
+  const strict = runIn(root, 'scripts/check-evidence-hygiene.mjs', [])
+  assert.notEqual(strict.status, 0)
+
+  const sparse = runIn(root, 'scripts/check-evidence-hygiene.mjs', [], {
+    CVG_SPARSE_EVIDENCE: '1'
+  })
+  assert.equal(sparse.status, 0, sparse.stderr)
+  assert.equal(JSON.parse(sparse.stdout).status, 'SKIPPED_SPARSE_EVIDENCE')
+  assert.match(sparse.stderr, /not verified/)
 })

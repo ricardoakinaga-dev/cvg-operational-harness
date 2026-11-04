@@ -6,7 +6,8 @@
  * Unknown historical metadata is represented as null; it is never inferred as
  * a successful command.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 
 const evidenceRoot = resolve(process.argv[2] ?? 'docs/04_audit/evidence')
@@ -37,6 +38,24 @@ function walk(dir, out = []) {
 
 function portablePath(file) {
   return relative(evidenceRoot, file).split(sep).join('/')
+}
+
+// SPEC 0314: a sparse clone may leave docs/04_audit/evidence/ out on purpose.
+// Only with CVG_SPARSE_EVIDENCE=1, only when the directory is absent and Git
+// still tracks it, the check is reported as skipped (never as passed).
+if (process.env.CVG_SPARSE_EVIDENCE === '1' && !existsSync(evidenceRoot)) {
+  const rel = relative(process.cwd(), evidenceRoot).split(sep).join('/')
+  const tracked = execFileSync('git', ['ls-files', '-z', '--', `${rel}/`], {
+    encoding: 'utf8',
+    maxBuffer: 1 << 28
+  })
+  if (tracked.length > 0) {
+    console.log(
+      JSON.stringify({ evidenceRoot: rel, status: 'SKIPPED_SPARSE_EVIDENCE' })
+    )
+    console.error('EVIDENCE_HYGIENE_SKIPPED_SPARSE (not verified)')
+    process.exit(0)
+  }
 }
 
 const errors = []

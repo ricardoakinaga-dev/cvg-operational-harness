@@ -1,6 +1,6 @@
 # SPEC 0314 — Tirar a evidência pesada do caminho do clone
 
-Status: `DECISIONS_RECORDED_AWAITING_BUILD_GO`. Trilha **T3** (afeta evidência hash-bound e fluxo de clone). Data: 04/11/2026. Origem: achado P3 da [auditoria 0626](../04_audit/0626_repository_audit_2026-11-04.md). **Nada foi removido nem reescrito.**
+Status: `BUILD_DONE_LOCAL` (opção A). Trilha **T3** (afeta evidência hash-bound e fluxo de clone). Data: 04/11/2026. Origem: achado P3 da [auditoria 0626](../04_audit/0626_repository_audit_2026-11-04.md). **Nada foi removido nem reescrito.**
 
 ## 1. Reconhecimento
 
@@ -42,3 +42,11 @@ C3. Ledgers registram a movimentação; arquivos de política atualizados sem en
 - D3 (retenção) = sem mudança; vale `0801_evidence_retention_policy.md`.
 - Escopo do BUILD: documentar e testar o clone enxuto (C1). Os critérios C2 e C3 só se aplicam se a B for reaberta.
 - **Pendente:** autorização explícita de BUILD.
+
+## 7. Resultado do BUILD (04/11/2026)
+
+- Entregue: [clone enxuto](../08_runtime/clone_enxuto.md) e modo opt-in `CVG_SPARSE_EVIDENCE=1` em `scripts/check-doc-links.mjs` e `scripts/check-evidence-hygiene.mjs`, com dois testes novos em `tests/docs-check-links.test.js`.
+- Medição em worktree esparsa de `HEAD`: ~56 MB contra ~4,3 GB; 2.108 links para evidência aceitos como `sparseUnmaterialized`, 0 quebrados, 0 destinos movidos ausentes.
+- Salvaguardas: sem a variável o checker continua estrito (a worktree esparsa reprova); um alvo não rastreado pelo Git continua sendo link quebrado; a higiene retorna `SKIPPED_SPARSE_EVIDENCE` (não verificada), nunca "OK".
+- Gates: modo estrito completo `DOC_LINKS_OK` e `EVIDENCE_HYGIENE_OK`; ESLint e prettier limpos; `tests/docs-check-links.test.js` 11/11. Sem mudança de CI: a CI segue sem a variável e com a evidência completa.
+- Pendente (fora da opção A): C2/C3, só se a opção B for reaberta.

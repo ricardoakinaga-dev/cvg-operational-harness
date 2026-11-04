@@ -21,6 +21,8 @@ mescladas; `main` é a única branch remota e as pontas antigas ficam em tags
   [`30_backlog_master.md`](docs/30_backlog_master.md). O histórico anterior está
   arquivado em [`docs/08_runtime/archive/`](docs/08_runtime/archive/).
 - O [índice AUD0625](docs/08_runtime/aud0625_current_index.md) é histórico de 29/10.
+- Para um clone leve (~56 MB em vez de ~4,3 GB), sem a evidência histórica, veja o
+  [clone enxuto](docs/08_runtime/clone_enxuto.md).
 
 As seções abaixo são histórico preservado.
 
