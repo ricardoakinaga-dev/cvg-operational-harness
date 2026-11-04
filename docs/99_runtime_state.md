@@ -7,6 +7,7 @@
 - Implementado localmente em 04/11/2026 (sem push): SPEC 0314 opção A, SPEC 0315 (`server.ts` 6.285 → 1.268 linhas). SPEC 0313 bloqueada para nova decisão.
 - PR #41 aberto (`claude/audit-0626-impl`). CodeQL: 7 alertas `js/missing-rate-limiting` (#41–#47) em rotas apenas movidas foram dispensados como falso positivo por decisão do usuário em 04/11/2026 (mesma justificativa de PROD-0373: rate limit global `onRequest`). Meta definida pelo usuário: média 85 antes de mirar >90.
 - Gate novo `scripts/check-ledgers.mjs` (via `docs:check-links`): teto de linhas dos ledgers, data igual entre README e estado, SHA-256 dos arquivos arquivados.
+- Decisões do usuário em 04/11/2026: sandbox `PROCESS` por **runner separado** ([SPEC 0316](02_spec/0316_tool_runner_service.md), proposta T3; 0313 superada); **staging nesta máquina** para restore, alerta e game day (exige Docker instalado pelo usuário e `apparmor_restrict_unprivileged_userns=1`); **Keycloak com MFA no staging** para a U09. Proteção do `main` conferida como já ativa (barra 0373, condição 5).
 - `next_action`: abrir PR para a CI com PostgreSQL (0314/0315) e decidir D1' da 0313; demais pendências em [0626 §3](04_audit/0626_repository_audit_2026-11-04.md): sandbox `PROCESS` na imagem de produção (P1, T3/T4), prova positiva do `boundary:products` (HISO-005), divisão de `apps/api/src/server.ts` (T2) e arquivamento de evidência pesada fora do Git (decisão humana).
 - Índice conciliado do programa: [aud0625_current_index.md](08_runtime/aud0625_current_index.md).
 

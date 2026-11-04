@@ -1,6 +1,6 @@
 # SPEC 0313 — Disponibilizar o sandbox `PROCESS` na imagem de produção
 
-Status: `BLOCKED_NEEDS_REDECISION` (premissa corrigida em 04/11/2026, sem BUILD). Trilha **T3** (segurança) com gate **T4** para ativar. Data: 04/11/2026. Origem: achado P1 da [auditoria 0626](../04_audit/0626_repository_audit_2026-11-04.md). Nenhum BUILD autorizado.
+Status: `SUPERSEDED_BY_0316` (D1' decidida em 04/11/2026; sem BUILD). Trilha **T3** (segurança) com gate **T4** para ativar. Data: 04/11/2026. Origem: achado P1 da [auditoria 0626](../04_audit/0626_repository_audit_2026-11-04.md). Nenhum BUILD autorizado.
 
 ## 1. Reconhecimento (fatos verificados)
 
@@ -66,3 +66,7 @@ Ao preparar o BUILD, a leitura do código mostrou que as seções 1–6 partiram
 **Recomendação:** C agora e A quando o servidor de destino (U10) confirmar user namespaces e kernel com Landlock ABI ≥ 4; evitar B.
 
 Pendente: D1' do usuário, D3 (coordenação do `Dockerfile` com o Codex; conferido em 04/11/2026 que não há claim vivo) e a autorização de BUILD.
+
+## 8. Decisão D1' (04/11/2026, usuário)
+
+Escolhido o **runner separado**: API e worker permanecem como hoje (`cap_drop: ALL`, `read_only`, `no-new-privileges`, seccomp padrão) e um serviço próprio executa as ferramentas de processo. Até o runner existir, `PROCESS` continua indisponível (fail-closed) e a imagem atual não muda. O desenho está na [SPEC 0316](0316_tool_runner_service.md); esta SPEC fica superada por ela.
