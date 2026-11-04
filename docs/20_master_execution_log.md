@@ -7,5 +7,6 @@
 - SPEC 0314 (opção A) implementada: clone enxuto de ~56 MB e modo `CVG_SPARSE_EVIDENCE=1` nos checkers de links e higiene, com testes. Nada removido do repositório.
 - SPEC 0315 implementada: `server.ts` dividido em 7 módulos de apoio e 13 registradores de rota; ordem de rotas protegida por fixture do original. `apps/api` 977/977 (sem PG), lint, tipos e build de runtime verdes. `test:postgres`, cobertura e `certify` ficam para a CI.
 - SPEC 0313 revisada sem BUILD: o código só habilita `PROCESS` com `bubblewrap`; a decisão "só Landlock" partia de premissa errada e foi revogada. `Dockerfile` intacto; nova decisão D1' registrada como pendente.
+- PR #41: 7 alertas CodeQL de rate limit (código movido) dispensados como falso positivo por decisão do usuário. Novo gate de ledgers (`check-ledgers.mjs`, 5 testes) encadeado em `docs:check-links`.
 
 - Histórico anterior (até 03/11/2026) arquivado integralmente, sem alteração, em [`execution_log_ate_20261103.md.txt`](08_runtime/archive/execution_log_ate_20261103.md.txt) (SHA-256 `4d8e2cdcd2776a2fea4016241710745c7ab19032e68191991e204ec910ade57c`, ledger original completo). Texto `.md.txt` para não manter links relativos quebrados.
