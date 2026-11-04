@@ -2,7 +2,6 @@ import { performance } from 'node:perf_hooks'
 import Fastify from 'fastify'
 import {
   ApprovalStatusSchema,
-  auditEvidenceGovernance,
   createCorrelationId,
   CreateInternalTaskSchema,
   DomainError,
@@ -10,24 +9,17 @@ import {
   IDENTITY_MODE_ENV,
   ok,
   parseIdentityMode,
-  parseOperatorIdentity,
   redactSensitiveText,
-  roleHasPermission,
   ResolveApprovalSchema,
-  sanitizeAuditEvidencePayload,
   TaskStatusSchema,
   toSafeError,
-  type Channel,
-  type IdentityMode,
-  type OperatorIdentity,
-  type OperatorIdentityResolver
+  type OperatorIdentity
 } from '@cvg/shared'
 import {
   AgentConfigSchema,
   AgentIdSchema,
   AgentVersionIdSchema,
   AgentVersionStatusSchema,
-  ApprovedKnowledgeForTestSchema,
   assertReleaseCandidatePublishAuthority,
   assertPromptProfileClone,
   KnowledgeSourceCreateInputSchema,
@@ -39,124 +31,68 @@ import {
   PluginCatalogCreateInputSchema,
   PluginCatalogIdSchema,
   PluginCatalogTransitionInputSchema,
-  canBotRespond,
   createControlledCapabilityGateway,
-  createTestSuiteRunId,
   executeConfiguredAgent,
   InMemoryControlPlaneStore,
-  TenantIdSchema,
-  TestLabCaseSchema,
   TestSuiteCloneInputSchema,
   TestSuiteCreateInputSchema,
   TestSuiteIdSchema,
   runCriticalSafetyPreflight,
-  assessConversationSafety,
   evaluateTestLabSuite,
   runTestLab,
-  InMemoryCapabilityApprovalAuthority,
-  sanitizeTraceForPersistence,
   type AgentExecutionActor,
-  type CapabilityActorAuthorizer,
-  type CapabilityApproval,
-  type CapabilityApprovalAuthority,
-  type CapabilityApprovalRecord,
-  type CapabilityApprovalResolver,
-  type CapabilityGateway,
-  type ApprovedKnowledgeForTest,
-  type ApprovedKnowledgeResolver,
   type AgentId,
-  type PluginAuditEvent,
   type TenantId,
-  type AgentVersionId,
-  type ControlPlaneStore,
-  type TestLabCase,
-  type TestSuiteRecord,
-  type TestSuiteRunRecord,
   type TestSuiteVariantResult
 } from '@cvg/platform'
 import {
-  JourneyRepository,
-  PostgresJourneyRepository,
   ensureControlledSecretaryPreset,
-  registerSecretaryJourneyRoutes,
-  type JourneyRepositoryPort
+  registerSecretaryJourneyRoutes
 } from './legacy-composition.ts'
 import {
-  ApprovalEngine,
-  ApprovalRepository,
   ApprovalError,
   DurableApprovalEngineAdapter,
-  type ApprovalAuthority,
-  type AuditEventRecord,
-  type AuditEventType,
-  type AuditEvidenceFilters,
-  type AuditEvidenceQuery,
   AuditEvidenceCheckpointCreateInputSchema,
   AuditEvidenceCheckpointIdSchema,
   AuditEvidenceCheckpointTransitionInputSchema,
-  type AuditEvidenceCheckpointCreateInput,
-  type AuditEvidenceCheckpointRecord,
-  AuditRepository,
-  ConversationRepository,
-  type DurableOutboxAdapter,
-  API_CREATION_KEY_PATTERN,
-  InMemoryApiCreation,
-  InMemoryDatabase,
   PostgresApiCreation,
   PostgresRuntimeApprovalDecision,
   PostgresAuthorizedWrites,
-  type ApiCreationPort,
-  OutboxRepository,
   PostgresApprovalAuthority,
   PostgresOperationalExecutionStore,
-  PostgresRuntimeRepository,
   PostgresControlPlaneRepository,
-  TenantScopedPostgresCapabilityApprovalRepository,
-  TenantScopedPostgresRuntimeRepository,
   TenantScopedPostgresControlPlaneRepository,
-  type InboundRuntimeCompletionInput,
-  type PostgresPoolClient,
-  type PostgresPoolLike,
-  type SessionRecord,
   runPostgresMigrations,
-  guardPostgresPoolErrors,
-  TaskRepository,
-  type PageInfo,
-  type PostgresQueryable,
-  type TaskRecord,
-  type TaskStatusTransitionCommand,
-  withTenantContext
+  CaseAuthorityError,
+  InMemoryCaseAuthority,
+  PostgresCaseAuthority,
+  type CaseAuthorityPort
 } from '@cvg/persistence'
 import {
   createInboundIdempotencyKey,
-  executePublishedAgent,
   getConversationTimeline,
   receiveInboundMessage,
   requestHumanApproval
 } from '@cvg/agent-core'
-import { CompositeTelemetry, type Telemetry } from '@cvg/observability'
+import { CompositeTelemetry } from '@cvg/observability'
 import {
   createInMemoryOperationalExecutionStore,
   OperationalExecutionError,
   deriveExecutionResume,
-  parseExecutionSubmission,
-  type ExecutionStepStore,
-  type OperationalExecutionStore
+  parseExecutionSubmission
 } from '@cvg/harness'
-import { Pool } from 'pg'
 import { z } from 'zod'
 import {
   installHttpSecurityHooks,
   normalizeHttpSecurityOptions,
-  parseHttpSecurityEnv,
-  type HttpSecurityOptions
+  parseHttpSecurityEnv
 } from './http-security.ts'
 import {
   createConfiguredRateLimitKeyRing,
   InMemoryRateLimiter,
-  PostgresRateLimiter
+  PostgresRateLimiter,
+  type RateLimiterPort
 } from './rate-limit.ts'
-import type { RateLimiterPort } from './rate-limit.ts'
 import {
   decodeTrustedOperatorTokenClaims,
   TRUSTED_OPERATOR_TOKEN_HEADER
@@ -167,41 +103,26 @@ import {
   parseOperatorSessionCookie,
   type OperatorCookiePolicy,
   type OperatorSessionRecord,
-  type OperatorSessionStore,
   serializeOperatorSessionCookie
 } from './operator-session.ts'
 import { installOperatorSessionHook } from './operator-session-hook.ts'
 import { revalidateOperatorSession } from './operator-session-revalidation.ts'
-import {
-  installSessionEventStream,
-  type SessionEventStreamOptions
-} from './session-event-stream.ts'
+import { installSessionEventStream } from './session-event-stream.ts'
 import {
   installOperatorPrincipalGuard,
   recordRegisteredRoutes
 } from './operator-principal-guard.ts'
-import type { RegisteredRoute } from './operator-route-class.ts'
+import { type RegisteredRoute } from './operator-route-class.ts'
 import {
   assertSessionBinding,
   readCurrentPrincipal,
   SessionBindingError
 } from './operator-session-binding.ts'
-import type { OidcTransport } from './oidc-authority.ts'
-import {
-  parseOperatorLoginConfig,
-  type OidcLoginConfig
-} from './oidc-config.ts'
+import { parseOperatorLoginConfig } from './oidc-config.ts'
 import {
   installOperatorLoginGuards,
-  registerOperatorLoginRoutes,
-  type OperatorLoginComposition
+  registerOperatorLoginRoutes
 } from './oidc-routes.ts'
-import {
-  CaseAuthorityError,
-  InMemoryCaseAuthority,
-  PostgresCaseAuthority,
-  type CaseAuthorityPort
-} from '@cvg/persistence'
 import {
   authorizeCaseMutation,
   mapCaseMutationError,
@@ -230,183 +151,110 @@ import {
   classifyHttpRequestTarget,
   HTTP_REQUEST_MAX_PARAM_LENGTH
 } from './http-target-boundary.ts'
+import { PAGINATION_OFFSET_ERROR_MESSAGE } from './pagination-boundary.ts'
 import {
-  classifyPaginationOffset,
-  PAGINATION_OFFSET_ERROR_MESSAGE
-} from './pagination-boundary.ts'
-import { classifyAuditFilterValue } from './audit-filter-duplicate-boundary.ts'
-import {
-  HmacWebhookVerifier,
   PostgresWebhookReplayStore,
   type WebhookReplayStore,
   type WebhookVerificationLease
 } from './webhook-security.ts'
-
-export interface RuntimeLogEntry {
-  event: string
-  correlationId: string
-  route: string
-  status: 'ok' | 'error'
-  sessionId?: string | null
-  conversationId?: string | null
-  resourceId?: string | null
-  errorCode?: string
-}
+import {
+  assertApprovalDecisionAuditDedupe,
+  assertCaseAuthorizationSchema,
+  assertMigrationOwnerFromCatalog,
+  assertMigrationRoleIsLeastPrivilege,
+  assertMigrationRoleSecurityBoundary,
+  assertRateLimitSchema,
+  assertRuntimeRoleIsLeastPrivilege,
+  assertRuntimeRoleIsNotRlsBypass,
+  assertTenantIsolationMigrationState,
+  assertTenantIsolationSchema,
+  assertWebhookReplaySchema,
+  readCurrentDatabaseRole
+} from './tenant-preflight.ts'
+import {
+  BuildServerFromEnvOptions,
+  BuildServerOptions,
+  RuntimeLogEntry,
+  WebhookVerifier
+} from './server-options.ts'
+import {
+  createCapabilityApprovalAuthority,
+  createOperationalApprovalAuthority,
+  evaluateTestSuiteVariant,
+  httpStatusBucket,
+  operationalApprovalError,
+  recordSuiteRun,
+  safeTelemetry,
+  serverCapabilityActorAuthorizer,
+  withDefaultCapabilityGateway,
+  withDefaultKnowledgeResolver
+} from './server-capability.ts'
+import {
+  createConfiguredInboundAgentRuntime,
+  createConfiguredInboundTenantResolver,
+  createConfiguredWebhookVerifier,
+  executeInboundRuntime,
+  isWebhookVerificationLease,
+  parseInboundChannel,
+  resolveInboundTenant,
+  withDefaultInboundCompletion
+} from './server-inbound.ts'
+import {
+  appendPlatformAudit,
+  assertOperatorLoginComposition,
+  assertPrincipalVersionsCurrent,
+  capabilityApprovalReference,
+  createEffectiveOperatorIdentityResolver,
+  createSessionAwareOperatorIdentityResolver,
+  requireAnyOperatorPermission,
+  requireOperatorIdentity,
+  requirePlatformScope,
+  resolveDataPlaneTenant,
+  resolveOperatorIdentity,
+  resolveOptionalRequestTenant
+} from './server-identity.ts'
+import {
+  CapabilityApprovalExecutionRequestSchema,
+  CapabilityApprovalIssueRequestSchema,
+  CapabilityApprovalParamsSchema,
+  OperationalApprovalDecisionSchema,
+  OperationalExecutionCancelSchema,
+  OperationalExecutionInputSchema,
+  TakeoverRequestSchema,
+  TestLabEvaluationRequestSchema,
+  TestLabRequestSchema,
+  VersionCloneRequestSchema
+} from './server-schemas.ts'
+import {
+  okPage,
+  parseAuditEvidenceQuery,
+  parsePagination,
+  parseStatusPageQuery,
+  parseTraceLimit,
+  readCreationKey,
+  readIdempotencyKey,
+  sanitizeAuditEvidencePage,
+  statusCodeForError
+} from './server-query.ts'
+import {
+  RuntimePersistence,
+  assertSafeRuntimeSchemaName,
+  createPersistence,
+  createPostgresPool,
+  createReadinessDatabaseProbe
+} from './server-persistence.ts'
+export type {
+  RuntimeLogEntry,
+  WebhookVerification,
+  WebhookVerifier,
+  InboundRuntimeCompletion,
+  InboundTenantResolver,
+  AgentRuntimeOptions,
+  BuildServerOptions,
+  BuildServerFromEnvOptions
+} from './server-options.ts'
 
 export type { OperatorIdentityResolver } from '@cvg/shared'
-
-export type WebhookVerification = boolean | WebhookVerificationLease | null
-
-export type WebhookVerifier = (input: {
-  headers: Record<string, unknown>
-  body: unknown
-  channel: string
-  rawBody?: string
-}) => WebhookVerification | Promise<WebhookVerification>
-
-export type InboundRuntimeCompletion = (
-  input: InboundRuntimeCompletionInput
-) => Promise<{ status: 'completed' | 'paused' }>
-
-export type InboundTenantResolver = (input: {
-  headers: Record<string, unknown>
-  body: unknown
-  channel: Channel
-}) => TenantId | Promise<TenantId>
-
-export interface AgentRuntimeOptions {
-  resolveAgentId: (input: {
-    tenantId: TenantId
-    channel: Channel
-    senderRef: string
-  }) => AgentId | null | Promise<AgentId | null>
-  approvedKnowledge?: ApprovedKnowledgeForTest
-  resolveApprovedKnowledge?: ApprovedKnowledgeResolver
-  capabilityGateway?: CapabilityGateway
-  actor?: AgentExecutionActor
-  resolveCapabilityApproval?: CapabilityApprovalResolver
-  completeInboundRuntime?: InboundRuntimeCompletion
-}
-
-const CONTROLLED_CAPABILITY_PERMISSION = 'scheduling:read'
-const serverCapabilityActorAuthorizer: CapabilityActorAuthorizer = ({
-  actor,
-  requiredPermission
-}) => {
-  if (requiredPermission !== CONTROLLED_CAPABILITY_PERMISSION) return []
-  if (actor.role === 'System') {
-    return actor.id.startsWith('system.') ? [requiredPermission] : []
-  }
-  return ['Operator', 'Approver', 'Supervisor', 'Admin'].includes(actor.role)
-    ? [requiredPermission]
-    : []
-}
-
-export interface BuildServerOptions {
-  runtimeLogger?: (entry: RuntimeLogEntry) => void
-  /** Optional composed telemetry; defaults to a bounded local facade. */
-  telemetry?: Telemetry
-  persistence?:
-    | { kind: 'memory' }
-    | { kind: 'postgres'; client: PostgresQueryable }
-    | { kind: 'postgres-pool'; pool: PostgresPoolLike }
-  platform?: ControlPlaneStore
-  operatorIdentityResolver?: OperatorIdentityResolver
-  /**
-   * Explicit browser session authority. Local implementations are for
-   * controlled fixtures only; production must inject an owned durable store.
-   */
-  operatorSessionStore?: OperatorSessionStore
-  /**
-   * Explicit identity mode. Defaults to `simulation` only for `NODE_ENV=test`;
-   * every other environment defaults to `trusted` and must inject a resolver.
-   */
-  identityMode?: IdentityMode
-  webhookVerifier?: WebhookVerifier
-  inboundTenantResolver?: InboundTenantResolver
-  agentRuntime?: AgentRuntimeOptions
-  resolveApprovedKnowledge?: ApprovedKnowledgeResolver
-  capabilityApprovalAuthority?: CapabilityApprovalAuthority
-  requireAuthenticatedMutations?: boolean
-  httpSecurity?: HttpSecurityOptions
-  requestMetrics?: ControlledRequestMetrics
-  requestMetricsEnabled?: boolean
-  /**
-   * SPEC 0296: the SSE stream of session events. Absent = the route does not exist (404, D7).
-   * The store is built per request with the tenant of the identity.
-   */
-  sessionEventStreams?: SessionEventStreamOptions
-  /**
-   * Queue inbound work for the durable worker contract. Inline execution stays
-   * the default for existing controlled fixtures until this flag is enabled.
-   */
-  durableInbound?: boolean
-  /** Explicit adapter override, useful for deterministic controlled tests. */
-  outbox?: DurableOutboxAdapter
-  /**
-   * REM21-003 / AUD19-006 — distributed token-replay authority. When set
-   * with trusted identity mode, an onRequest hook authenticates each
-   * presented token before claiming its id, so replays are rejected across
-   * processes and restarts. Omitted: the resolver keeps its process-local
-   * replay cache.
-   */
-  tokenReplayStore?: WebhookReplayStore
-  /**
-   * AUD19-006 — rate limiter authority. Defaults to process-local memory,
-   * while `buildServerFromEnv` explicitly wires PostgreSQL for durable
-   * deployments. Store errors deny (fail-closed).
-   */
-  rateLimiter?: RateLimiterPort
-  /**
-   * Extra bounded readiness probes (for example the consumer heartbeat wired
-   * by the integrated composition). The database probe is built from
-   * `persistence` and needs no injection.
-   */
-  readinessProbes?: readonly ReadinessProbe[]
-  /**
-   * Explicit journey persistence override. Omitted: memory uses the in-memory
-   * repository and PostgreSQL constructs PostgresJourneyRepository or fails
-   * startup. `null` keeps the journey routes fail-closed because no journey
-   * adapter is available.
-   */
-  journeyRepository?: JourneyRepositoryPort | null
-  /** Neutral Phase 2 execution authority. Memory is for controlled tests only. */
-  operationalExecution?: OperationalExecutionStore
-  /** Durable approval authority paired with the neutral execution spine. */
-  operationalApprovalAuthority?: ApprovalAuthority
-  /**
-   * Phase 3 step/checkpoint authority. When present, the safe trajectory
-   * export becomes available; it never exposes payloads or reasoning.
-   */
-  executionSteps?: ExecutionStepStore
-  /**
-   * SPEC0176 case authority. Omitted: memory persistence uses the synthetic
-   * in-memory authority and PostgreSQL the 0029 tables on the same database.
-   */
-  caseAuthority?: CaseAuthorityPort
-  /**
-   * SPEC0176 trusted principal producer (SPEC0152 adapter). Trusted case
-   * reads require it; without it they fail closed with 503. Outside
-   * NODE_ENV=test it exists only with `operatorLogin` (SPEC0254 I3), whose
-   * authority version it must carry.
-   */
-  casePrincipalAuthority?: { authorityVersion: string }
-  /**
-   * SPEC0254 OIDC operator login: routes, verified principal producer,
-   * CSRF by exact `Origin` and HMAC token refusal. Composed only with
-   * NODE_ENV=test in this slice (synthetic IdP); never with an HMAC resolver.
-   */
-  operatorLogin?: OperatorLoginComposition
-  /** SPEC0254: injected OIDC transport, accepted only with NODE_ENV=test. */
-  oidcTransport?: OidcTransport
-}
-
-export type BuildServerFromEnvOptions = Omit<
-  BuildServerOptions,
-  'persistence'
-> & {
-  webhookReplayStore?: WebhookReplayStore
-}
 
 export function buildServer(options: BuildServerOptions = {}) {
   const identityMode =
@@ -4290,801 +4138,6 @@ export function buildServer(options: BuildServerOptions = {}) {
   return app
 }
 
-const CONTROLLED_TENANT_ID = TenantIdSchema.parse(
-  'tenant_00000000-0000-4000-8000-000000000001'
-)
-
-async function evaluateTestSuiteVariant(input: {
-  store: ControlPlaneStore
-  tenantId: TenantId
-  agentId: AgentId
-  versionId: AgentVersionId
-  cases: TestLabCase[]
-  resolveApprovedKnowledge?: ApprovedKnowledgeResolver
-  label: 'A' | 'B'
-}): Promise<TestSuiteVariantResult> {
-  const version = await input.store.getVersion(
-    { tenantId: input.tenantId },
-    input.versionId
-  )
-  if (!version || version.agentId !== input.agentId) {
-    throw new DomainError(
-      'invalid_action',
-      'A/B version is outside agent scope'
-    )
-  }
-  const result = await evaluateTestLabSuite({
-    store: input.store,
-    tenantId: input.tenantId,
-    agentId: input.agentId,
-    versionId: version.id,
-    cases: input.cases,
-    ...(input.resolveApprovedKnowledge
-      ? { resolveApprovedKnowledge: input.resolveApprovedKnowledge }
-      : {})
-  })
-  return {
-    label: input.label,
-    versionId: version.id,
-    passed: result.passed,
-    results: result.results
-  }
-}
-
-async function recordSuiteRun(input: {
-  platform: ControlPlaneStore
-  scope: { tenantId: TenantId }
-  suite: TestSuiteRecord
-  variants: TestSuiteVariantResult[]
-  createdBy: string
-}): Promise<TestSuiteRunRecord> {
-  const run: TestSuiteRunRecord = {
-    id: createTestSuiteRunId(),
-    tenantId: input.scope.tenantId,
-    suiteId: input.suite.id,
-    agentId: input.suite.agentId,
-    variants: input.variants,
-    passed: input.variants.every((variant) => variant.passed),
-    createdBy: input.createdBy,
-    createdAt: new Date()
-  }
-  return input.platform.recordTestSuiteRun(input.scope, run)
-}
-
-async function executeInboundRuntime(input: {
-  options: AgentRuntimeOptions
-  platform: ControlPlaneStore
-  tenantId: TenantId
-  correlationId: string
-  channel: Channel
-  senderRef: string
-  message: string
-  conversationId: string
-  sessionId: string | null
-  messageId: string
-  audit: Pick<RuntimePersistence['audit'], 'append'>
-  conversations: RuntimePersistence['conversations']
-  sessionVersionPinning: boolean
-}) {
-  let history: string[] = []
-  let session: SessionRecord | null = null
-  let parsedAgentId: AgentId | undefined
-  let pinnedVersionId: AgentVersionId | undefined
-  const toolAuditEvents: PluginAuditEvent[] = []
-  if (input.sessionId) {
-    const timeline = await getConversationTimeline(
-      input.conversations,
-      input.tenantId,
-      input.conversationId
-    )
-    session =
-      timeline.sessions.find((candidate) => candidate.id === input.sessionId) ??
-      null
-    if (!session) {
-      throw new DomainError('invalid_action', 'Session not found')
-    }
-    if (!canBotRespond(session.takeoverState)) {
-      return {
-        status: 'paused' as const,
-        trace: null,
-        reason: 'human_takeover_active' as const
-      }
-    }
-    const timelineHistory = timeline.messages
-      .filter((message) => message.id !== input.messageId)
-      .map(
-        (message) =>
-          `${message.direction}: ${redactSensitiveText(message.body)}`
-      )
-    const historicalSafety = assessConversationSafety('', timelineHistory)
-    history = timelineHistory.slice(-20)
-    // Keep the model context bounded without discarding an older safety
-    // signal. The marker carries no user text and is intentionally lexical so
-    // the independent Test Lab gate remains conservative after truncation.
-    if (historicalSafety.level === 'critical') {
-      history = ['history: medication safety signal', ...history]
-    } else if (historicalSafety.level === 'high') {
-      history = ['history: unresolved symptom dor signal', ...history]
-    }
-  }
-  if (session) {
-    const hasAgent = session.agentId !== undefined
-    const hasVersion = session.agentVersionId !== undefined
-    if (hasAgent !== hasVersion) {
-      throw new DomainError(
-        'invalid_action',
-        'Session agent binding is incomplete'
-      )
-    }
-    if (hasAgent && hasVersion) {
-      parsedAgentId = AgentIdSchema.parse(session.agentId)
-      pinnedVersionId = AgentVersionIdSchema.parse(session.agentVersionId)
-    }
-  }
-  if (!parsedAgentId) {
-    const agentId = await input.options.resolveAgentId({
-      tenantId: input.tenantId,
-      channel: input.channel,
-      senderRef: input.senderRef
-    })
-    if (!agentId) {
-      await input.conversations.markInboundRuntimeCompleted(
-        input.messageId,
-        input.tenantId
-      )
-      return {
-        status: 'not_configured' as const,
-        trace: null,
-        reason: 'agent_mapping_missing' as const
-      }
-    }
-    parsedAgentId = AgentIdSchema.parse(agentId)
-    if (session && input.sessionVersionPinning) {
-      const published = await input.platform.resolvePublished(
-        { tenantId: input.tenantId },
-        parsedAgentId
-      )
-      if (!published) {
-        await input.conversations.markInboundRuntimeCompleted(
-          input.messageId,
-          input.tenantId
-        )
-        return {
-          status: 'not_configured' as const,
-          trace: null,
-          reason: 'published_version_missing' as const
-        }
-      }
-      if (!input.sessionId) {
-        throw new DomainError(
-          'invalid_action',
-          'Session id is required for runtime pinning'
-        )
-      }
-      const bound = await input.conversations.bindSessionAgentVersion(
-        input.tenantId,
-        input.sessionId,
-        parsedAgentId,
-        published.id
-      )
-      if (!bound?.agentId || !bound.agentVersionId) {
-        throw new DomainError(
-          'invalid_action',
-          'Session agent binding could not be established'
-        )
-      }
-      parsedAgentId = AgentIdSchema.parse(bound.agentId)
-      pinnedVersionId = AgentVersionIdSchema.parse(bound.agentVersionId)
-    }
-  }
-  if (!parsedAgentId) {
-    throw new DomainError(
-      'invalid_action',
-      'Agent mapping could not be resolved'
-    )
-  }
-  const result = await executePublishedAgent({
-    store: input.platform,
-    tenantId: input.tenantId,
-    agentId: parsedAgentId,
-    ...(pinnedVersionId ? { versionId: pinnedVersionId } : {}),
-    message: input.message,
-    history,
-    ...(input.options.capabilityGateway
-      ? { capabilityGateway: input.options.capabilityGateway }
-      : {}),
-    ...(input.options.actor ? { actor: input.options.actor } : {}),
-    ...(input.options.resolveCapabilityApproval
-      ? { resolveCapabilityApproval: input.options.resolveCapabilityApproval }
-      : {}),
-    onToolAudit: async (event) => {
-      if (input.options.completeInboundRuntime) {
-        toolAuditEvents.push(event)
-        return
-      }
-      await input.audit.append(
-        {
-          type: event.type,
-          actorType: 'System',
-          actorId: 'agent-runtime',
-          correlationId: event.correlationId,
-          policyVersion: 'plugin-gateway-v1',
-          payload: {
-            tenantId: event.tenantId,
-            agentId: event.agentId,
-            versionId: event.versionId,
-            traceId: event.traceId,
-            conversationId: input.conversationId,
-            sessionId: input.sessionId,
-            plugin: event.plugin,
-            toolName: event.toolName,
-            status: event.status,
-            payload: event.payload
-          }
-        },
-        event.tenantId
-      )
-    },
-    context: {
-      conversationId: input.conversationId,
-      ...(input.sessionId ? { sessionId: input.sessionId } : {})
-    },
-    ...(input.options.resolveApprovedKnowledge
-      ? { resolveApprovedKnowledge: input.options.resolveApprovedKnowledge }
-      : {}),
-    ...(input.options.approvedKnowledge &&
-    !input.options.resolveApprovedKnowledge
-      ? { approvedKnowledge: input.options.approvedKnowledge }
-      : {})
-  })
-  if (result.status === 'completed') {
-    const safeTrace = sanitizeTraceForPersistence(result.trace)
-    if (input.options.completeInboundRuntime) {
-      const completion = await input.options.completeInboundRuntime({
-        tenantId: input.tenantId,
-        conversationId: input.conversationId,
-        sessionId: input.sessionId,
-        inboundMessageId: input.messageId,
-        trace: safeTrace,
-        toolAuditEvents,
-        correlationId: input.correlationId
-      })
-      if (completion.status === 'paused') {
-        return {
-          status: 'paused' as const,
-          trace: null,
-          reason: 'human_takeover_active' as const
-        }
-      }
-      return { ...result, trace: safeTrace }
-    }
-    if (input.sessionId) {
-      const latestTimeline = await getConversationTimeline(
-        input.conversations,
-        input.tenantId,
-        input.conversationId
-      )
-      const latestSession = latestTimeline.sessions.find(
-        (candidate) => candidate.id === input.sessionId
-      )
-      if (!latestSession || !canBotRespond(latestSession.takeoverState)) {
-        return {
-          status: 'paused' as const,
-          trace: null,
-          reason: 'human_takeover_active' as const
-        }
-      }
-    }
-    if (safeTrace.handoff.requested && input.sessionId) {
-      const session = await input.conversations.transitionTakeover(
-        input.tenantId,
-        input.sessionId,
-        'request_handoff'
-      )
-      if (!session) {
-        throw new DomainError('invalid_action', 'Session not found')
-      }
-      await input.audit.append(
-        {
-          type: 'handoff',
-          actorType: 'System',
-          actorId: 'agent-runtime',
-          correlationId: input.correlationId,
-          policyVersion: 'human-takeover-v1',
-          payload: {
-            tenantId: input.tenantId,
-            conversationId: input.conversationId,
-            sessionId: input.sessionId,
-            traceId: safeTrace.traceId,
-            state: session.takeoverState,
-            reason: safeTrace.handoff.reason,
-            effect: 'human_handoff_requested'
-          }
-        },
-        input.tenantId
-      )
-    }
-    if (safeTrace.response.text.trim().length > 0) {
-      await input.conversations.appendOutboundMessage({
-        tenantId: input.tenantId,
-        conversationId: input.conversationId,
-        externalMessageId: `runtime:${safeTrace.traceId}`,
-        body: safeTrace.response.text
-      })
-    }
-    await input.platform.recordExecutionTrace(
-      { tenantId: input.tenantId },
-      safeTrace
-    )
-    await input.conversations.markInboundRuntimeCompleted(
-      input.messageId,
-      input.tenantId
-    )
-    return { ...result, trace: safeTrace }
-  }
-  return result
-}
-
-function parseInboundChannel(rawChannel: string): Channel {
-  const parsed = z.enum(['whatsapp', 'web', 'internal']).safeParse(rawChannel)
-  if (!parsed.success) {
-    throw new DomainError('validation_failed', 'Channel is invalid')
-  }
-  return parsed.data
-}
-
-async function resolveInboundTenant(
-  input: Parameters<InboundTenantResolver>[0],
-  resolver?: InboundTenantResolver
-): Promise<TenantId> {
-  if (resolver) return TenantIdSchema.parse(await resolver(input))
-  if (process.env.NODE_ENV !== 'test') {
-    throw new DomainError(
-      'unauthorized',
-      'A trusted inbound tenant resolver is required in production'
-    )
-  }
-  const rawHeader = input.headers['x-tenant-id']
-  const candidate = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader
-  const parsed = TenantIdSchema.safeParse(candidate)
-  return parsed.success ? parsed.data : CONTROLLED_TENANT_ID
-}
-
-function resolveDataPlaneTenant(
-  headers: Record<string, unknown>,
-  identity: OperatorIdentity
-): TenantId {
-  const rawHeader = headers['x-tenant-id']
-  const candidate = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader
-  const parsedHeader = TenantIdSchema.safeParse(candidate)
-  if (
-    identity.tenantId &&
-    parsedHeader.success &&
-    identity.tenantId !== parsedHeader.data
-  ) {
-    throw new DomainError(
-      'forbidden',
-      'Operator identity cannot access this tenant scope'
-    )
-  }
-  if (process.env.NODE_ENV !== 'test' && !identity.tenantId) {
-    throw new DomainError(
-      'unauthorized',
-      'Trusted operator tenant scope is required in production'
-    )
-  }
-  return (
-    identity.tenantId ??
-    (parsedHeader.success ? parsedHeader.data : CONTROLLED_TENANT_ID)
-  )
-}
-
-function resolveOptionalRequestTenant(
-  headers: Record<string, unknown>
-): TenantId {
-  const rawHeader = headers['x-tenant-id']
-  const candidate = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader
-  const parsed = TenantIdSchema.safeParse(candidate)
-  if (process.env.NODE_ENV !== 'test' && !parsed.success) {
-    throw new DomainError(
-      'unauthorized',
-      'Trusted tenant scope is required for this mutation'
-    )
-  }
-  return parsed.success ? parsed.data : CONTROLLED_TENANT_ID
-}
-
-function requireOperatorIdentity(
-  headers: Record<string, unknown>,
-  permission: string,
-  resolver?: OperatorIdentityResolver
-): OperatorIdentity {
-  try {
-    const identity = resolveOperatorIdentity(headers, resolver)
-    if (!roleHasPermission(identity.role, permission)) {
-      throw new DomainError('forbidden', `Role cannot perform ${permission}`)
-    }
-    return identity
-  } catch (error) {
-    if (error instanceof DomainError) throw error
-    throw new DomainError(
-      'unauthorized',
-      'Valid operator identity headers are required'
-    )
-  }
-}
-
-function requireAnyOperatorPermission(
-  headers: Record<string, unknown>,
-  permissions: string[],
-  resolver?: OperatorIdentityResolver
-): OperatorIdentity {
-  try {
-    const identity = resolveOperatorIdentity(headers, resolver)
-    if (
-      !permissions.some((permission) =>
-        roleHasPermission(identity.role, permission)
-      )
-    ) {
-      throw new DomainError('forbidden', 'Role cannot access this resource')
-    }
-    return identity
-  } catch (error) {
-    if (error instanceof DomainError) throw error
-    throw new DomainError(
-      'unauthorized',
-      'Valid operator identity headers are required'
-    )
-  }
-}
-
-const TestLabRequestSchema = z
-  .object({
-    agentId: AgentIdSchema,
-    versionId: AgentVersionIdSchema,
-    message: z.string().trim().min(1).max(4000),
-    history: z.array(z.string().max(4000)).max(50).default([]),
-    approvedKnowledge: ApprovedKnowledgeForTestSchema.optional()
-  })
-  .strict()
-
-const VersionCloneRequestSchema = z
-  .object({ config: AgentConfigSchema.optional() })
-  .strict()
-
-const TakeoverRequestSchema = z
-  .object({
-    event: z.enum([
-      'request_handoff',
-      'accept_handoff',
-      'resolve_handoff',
-      'release_to_bot'
-    ])
-  })
-  .strict()
-
-const TestLabEvaluationRequestSchema = z
-  .object({
-    agentId: AgentIdSchema,
-    versionId: AgentVersionIdSchema,
-    cases: z.array(TestLabCaseSchema).min(1).max(100)
-  })
-  .strict()
-
-const OperationalApprovalDecisionSchema = z
-  .object({
-    decision: z.preprocess(
-      (value) => (typeof value === 'string' ? value.toUpperCase() : value),
-      z.enum(['APPROVED', 'REJECTED'])
-    ),
-    note: z.string().trim().max(500).optional()
-  })
-  .strict()
-
-const OperationalExecutionCancelSchema = z
-  .object({
-    reason: z.string().trim().max(500).optional()
-  })
-  .strict()
-
-const OperationalExecutionInputSchema = z
-  .object({
-    message: z.string().trim().min(1).max(32_000)
-  })
-  .strict()
-
-const CapabilityApprovalParamsSchema = z
-  .object({ approvalId: z.string().trim().min(1).max(160) })
-  .strict()
-
-const CapabilityApprovalIssueRequestSchema = z
-  .object({
-    agentId: AgentIdSchema,
-    versionId: AgentVersionIdSchema,
-    toolName: z
-      .string()
-      .trim()
-      .min(1)
-      .max(120)
-      .regex(/^[A-Za-z0-9._:-]+$/),
-    actorId: z
-      .string()
-      .trim()
-      .min(3)
-      .max(80)
-      .regex(/^[A-Za-z0-9._:-]+$/),
-    input: z
-      .object({
-        message: z.string().trim().min(1).max(4000)
-      })
-      .strict(),
-    expiresAt: z.coerce.date(),
-    nonce: z
-      .string()
-      .trim()
-      .min(8)
-      .max(160)
-      .regex(/^[A-Za-z0-9._:-]+$/)
-      .optional()
-  })
-  .strict()
-  .superRefine((input, context) => {
-    const now = Date.now()
-    const expiry = input.expiresAt.getTime()
-    if (!Number.isFinite(expiry) || expiry <= now) {
-      context.addIssue({
-        code: 'custom',
-        path: ['expiresAt'],
-        message: 'Approval expiry must be in the future'
-      })
-    } else if (expiry > now + 15 * 60 * 1000) {
-      context.addIssue({
-        code: 'custom',
-        path: ['expiresAt'],
-        message: 'Approval lifetime cannot exceed 15 minutes'
-      })
-    }
-  })
-
-const CapabilityApprovalExecutionRequestSchema = z
-  .object({
-    message: z.string().trim().min(1).max(4000),
-    history: z.array(z.string().max(4000)).max(50).default([]),
-    approvedKnowledge: ApprovedKnowledgeForTestSchema.optional()
-  })
-  .strict()
-
-function requirePlatformScope(
-  headers: Record<string, unknown>,
-  permission: string,
-  resolver?: OperatorIdentityResolver
-): { tenantId: z.infer<typeof TenantIdSchema> } {
-  const identity = requireOperatorIdentity(headers, permission, resolver)
-  const rawTenant = Array.isArray(headers['x-tenant-id'])
-    ? headers['x-tenant-id'][0]
-    : headers['x-tenant-id']
-  const tenant = TenantIdSchema.safeParse(rawTenant)
-  const scopedTenant = tenant.success
-    ? tenant.data
-    : identity.tenantId
-      ? TenantIdSchema.parse(identity.tenantId)
-      : null
-  if (!scopedTenant) {
-    throw new DomainError(
-      'unauthorized',
-      'Valid tenant scope headers are required'
-    )
-  }
-  if (identity.tenantId && identity.tenantId !== scopedTenant) {
-    throw new DomainError(
-      'forbidden',
-      'Operator identity cannot access this tenant scope'
-    )
-  }
-  if (process.env.NODE_ENV !== 'test' && !identity.tenantId) {
-    throw new DomainError(
-      'unauthorized',
-      'Trusted operator tenant scope is required in production'
-    )
-  }
-  return { tenantId: scopedTenant }
-}
-
-function capabilityApprovalReference(
-  record: CapabilityApprovalRecord
-): CapabilityApproval {
-  return {
-    id: record.id,
-    tenantId: record.tenantId,
-    agentId: record.agentId,
-    versionId: record.versionId,
-    toolName: record.toolName,
-    actorId: record.actorId,
-    expiresAt: new Date(record.expiresAt.getTime())
-  }
-}
-
-function resolveOperatorIdentity(
-  headers: Record<string, unknown>,
-  resolver?: OperatorIdentityResolver
-): OperatorIdentity {
-  if (resolver) return resolver(headers)
-  if (process.env.NODE_ENV !== 'test') {
-    throw new DomainError(
-      'unauthorized',
-      'A trusted operator identity resolver is required in production'
-    )
-  }
-  return parseOperatorIdentity(headers)
-}
-
-/**
- * SPEC0254 §4.8 — composition refusals, read from `process.env` (I3, I4, I6).
- * The OIDC login and an injected transport exist only with NODE_ENV=test in
- * this slice; the principal authority outside test exists only with the
- * login that produces its principals.
- */
-function assertOperatorLoginComposition(
-  options: BuildServerOptions,
-  identityMode: IdentityMode
-): void {
-  const controlledTest = process.env.NODE_ENV === 'test'
-  if (options.oidcTransport !== undefined && !controlledTest) {
-    throw new Error('oidcTransport is accepted only with NODE_ENV=test')
-  }
-  const login = options.operatorLogin
-  if (!login) {
-    if (options.casePrincipalAuthority && !controlledTest) {
-      throw new Error(
-        'casePrincipalAuthority requires the OIDC operator login outside NODE_ENV=test'
-      )
-    }
-    return
-  }
-  if (!controlledTest) {
-    throw new Error('OIDC login is not qualified for this environment')
-  }
-  if (identityMode !== 'trusted') {
-    throw new Error('OIDC login requires the trusted identity mode')
-  }
-  if (!options.operatorSessionStore) {
-    throw new Error('OIDC login requires an operator session store')
-  }
-  if (options.operatorIdentityResolver) {
-    throw new Error(
-      'OIDC login refuses an HMAC operatorIdentityResolver in the same composition'
-    )
-  }
-  if (
-    options.casePrincipalAuthority &&
-    options.casePrincipalAuthority.authorityVersion !== login.authorityVersion
-  ) {
-    throw new Error(
-      'casePrincipalAuthority must carry the OIDC login authority version'
-    )
-  }
-}
-
-/**
- * SPEC0254 §4.8 step 6 (P5): a principal recorded under the current matrix
- * version N with another digest means the matrix was edited without raising
- * N. Reads `case_principals` of each matrix tenant under its RLS context.
- */
-async function assertPrincipalVersionsCurrent(
-  caseAuthority: CaseAuthorityPort,
-  config: OidcLoginConfig
-): Promise<void> {
-  const prefix = `oidc-v${config.groupMatrix.version}-`
-  const tenants = [
-    ...new Set(config.groupMatrix.entries.map((entry) => entry.tenantId))
-  ]
-  for (const tenantId of tenants) {
-    const mismatch = await caseAuthority.readSnapshot(tenantId, (snapshot) =>
-      snapshot.hasPrincipalVersionMismatch(prefix, config.authorityVersion)
-    )
-    if (mismatch) {
-      throw new Error(
-        'OIDC group matrix changed without a higher version; raise the matrix version'
-      )
-    }
-  }
-}
-
-/**
- * Trusted mode never falls back to simulation headers: without a resolver it
- * fails closed, and resolver identities must be tenant-bound so a
- * self-asserted tenant header can never widen scope. Simulation mode keeps the
- * controlled header flow, delegating to an injected resolver when present.
- */
-function createEffectiveOperatorIdentityResolver(
-  identityMode: IdentityMode,
-  resolver: OperatorIdentityResolver | undefined
-): OperatorIdentityResolver | undefined {
-  if (!resolver) {
-    if (identityMode === 'trusted') {
-      return () => {
-        throw new DomainError(
-          'unauthorized',
-          'A trusted operator identity resolver is required in production'
-        )
-      }
-    }
-    return undefined
-  }
-  if (identityMode === 'simulation') return resolver
-  /**
-   * Trusted resolvers enforce replay protection per token. Some platform/admin
-   * routes resolve the identity more than once for the same request, so the
-   * effective resolver memoizes per headers object: a replay is rejected only
-   * when the same token is presented in a different request.
-   */
-  const memo = new WeakMap<object, OperatorIdentity>()
-  return (headers) => {
-    const cached = memo.get(headers)
-    if (cached) return cached
-    const identity = resolver(headers)
-    if (!identity.tenantId) {
-      throw new DomainError(
-        'unauthorized',
-        'Trusted operator identity must be tenant-bound'
-      )
-    }
-    memo.set(headers, identity)
-    return identity
-  }
-}
-
-function createSessionAwareOperatorIdentityResolver(
-  resolver: OperatorIdentityResolver | undefined,
-  sessionStore: OperatorSessionStore | undefined,
-  sessionIdentityByHeaders: WeakMap<object, OperatorIdentity | null>,
-  requireSessionStore: boolean
-): OperatorIdentityResolver | undefined {
-  if (!resolver) return undefined
-  if (requireSessionStore && !sessionStore) {
-    return () => {
-      throw new DomainError(
-        'configuration_error',
-        'Operator session store is required for trusted requests'
-      )
-    }
-  }
-  if (!sessionStore) return resolver
-  return (headers) => {
-    if (sessionIdentityByHeaders.has(headers)) {
-      const identity = sessionIdentityByHeaders.get(headers)
-      if (!identity) {
-        throw new DomainError(
-          'unauthorized',
-          'Operator session is missing or expired'
-        )
-      }
-      return identity
-    }
-    return resolver(headers)
-  }
-}
-
-async function appendPlatformAudit(
-  audit: RuntimePersistence['audit'],
-  identity: OperatorIdentity,
-  correlationId: string,
-  tenantId: TenantId,
-  payload: Record<string, unknown>
-): Promise<void> {
-  await audit.append(
-    {
-      type: 'integration_event',
-      actorType: identity.role,
-      actorId: identity.operatorId,
-      correlationId,
-      policyVersion: 'platform-control-plane-v1',
-      payload
-    },
-    tenantId
-  )
-}
-
 /**
  * Client-caused refusals (4xx such as a rejected webhook signature) are
  * warnings; only server-side failures are logged as errors (ENG-018).
@@ -5097,46 +4150,6 @@ export function runtimeLogLevel(
     statusCodeForError(entry.errorCode) < 500
     ? 'warn'
     : 'error'
-}
-
-/**
- * SPEC 0257 §2: the single `Idempotency-Key` header. Occurrences are counted in
- * the raw headers (case-insensitive); duplicates, commas, spaces, a missing
- * header or a value outside 8-200 `[A-Za-z0-9._:-]` are `validation_failed`.
- */
-function readCreationKey(rawHeaders: readonly string[]): string {
-  const values: string[] = []
-  for (let index = 0; index < rawHeaders.length; index += 2) {
-    if (rawHeaders[index]?.toLowerCase() === 'idempotency-key') {
-      values.push(rawHeaders[index + 1] ?? '')
-    }
-  }
-  const [value] = values
-  if (
-    values.length !== 1 ||
-    value === undefined ||
-    !API_CREATION_KEY_PATTERN.test(value)
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      'A single valid Idempotency-Key header is required'
-    )
-  }
-  return value
-}
-
-function statusCodeForError(code: string): number {
-  if (code === 'unauthorized') return 401
-  if (code === 'forbidden') return 403
-  if (code === 'conflict') return 409
-  if (code === 'rate_limited') return 429
-  if (code === 'payload_too_large') return 413
-  if (code === 'unsupported_media_type') return 415
-  if (code === 'not_found') return 404
-  if (code === 'request_uri_too_long') return 414
-  if (code === 'configuration_error') return 503
-  if (code === 'internal_error') return 500
-  return 400
 }
 
 export {
@@ -5153,644 +4166,6 @@ export {
   assertWebhookReplaySchema,
   readCurrentDatabaseRole
 } from './tenant-preflight.ts'
-
-function assertSafeRuntimeSchemaName(schemaName: string | undefined): void {
-  if (schemaName && !/^[a-z][a-z0-9_]{0,62}$/.test(schemaName)) {
-    throw new Error('Invalid PostgreSQL schema name')
-  }
-}
-
-/**
- * Builds a bounded database readiness probe from the configured persistence.
- * Pool connections are returned on success and destroyed on failure/timeout so
- * repeated probes cannot accumulate leaked clients.
- */
-function createReadinessDatabaseProbe(
-  persistence: BuildServerOptions['persistence']
-): (() => Promise<void>) | undefined {
-  if (!persistence || persistence.kind === 'memory') return undefined
-  if (persistence.kind === 'postgres') {
-    const client = persistence.client
-    return async () => {
-      await client.query('SELECT 1')
-    }
-  }
-  const pool = persistence.pool
-  // Keep admission occupied until the underlying acquisition/query settles.
-  // A deadline cannot cancel pool.connect(), so admitting another probe while
-  // it is pending would grow the pool queue on every health check.
-  let occupied = false
-  return async () => {
-    if (occupied) throw new Error('readiness probe is still pending')
-    occupied = true
-    let expired = false
-    let releaseClient: ((error?: Error) => void) | undefined
-    const timeoutError = new Error('readiness probe timeout')
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => {
-        expired = true
-        reject(timeoutError)
-        releaseClient?.(timeoutError)
-      }, 900)
-      timer.unref?.()
-    })
-    const operation = (async () => {
-      try {
-        const client = await pool.connect()
-        let released = false
-        releaseClient = (error?: Error): void => {
-          if (released) return
-          released = true
-          client.release(error)
-        }
-        if (expired) {
-          releaseClient(timeoutError)
-          throw timeoutError
-        }
-        try {
-          await client.query('SELECT 1')
-          if (expired) throw timeoutError
-          releaseClient()
-        } catch (error) {
-          releaseClient(
-            error instanceof Error ? error : new Error('readiness failed')
-          )
-          throw error
-        }
-      } finally {
-        occupied = false
-      }
-    })()
-    try {
-      await Promise.race([operation, deadline])
-    } finally {
-      clearTimeout(timer)
-    }
-  }
-}
-
-function createPostgresPool(
-  connectionString: string,
-  schemaName: string | undefined
-): Pool {
-  assertSafeRuntimeSchemaName(schemaName)
-  return guardPostgresPoolErrors(
-    new Pool({
-      connectionString,
-      ...(schemaName ? { options: `-c search_path=${schemaName}` } : {})
-    })
-  )
-}
-import {
-  assertApprovalDecisionAuditDedupe,
-  assertCaseAuthorizationSchema,
-  assertMigrationOwnerFromCatalog,
-  assertMigrationRoleIsLeastPrivilege,
-  assertMigrationRoleSecurityBoundary,
-  assertRateLimitSchema,
-  assertRuntimeRoleIsLeastPrivilege,
-  assertRuntimeRoleIsNotRlsBypass,
-  assertTenantIsolationMigrationState,
-  assertTenantIsolationSchema,
-  assertWebhookReplaySchema,
-  readCurrentDatabaseRole
-} from './tenant-preflight.ts'
-
-interface RuntimePersistence {
-  /** SPEC0176: synthetic memory database backing the in-memory case authority. */
-  memoryDb?: InMemoryDatabase
-  /** Legacy direct-client fixtures do not have the tenant-scoped pin columns. */
-  sessionVersionPinning: boolean
-  outbox: DurableOutboxAdapter
-  /** R3 controlled journey store: memory or tenant-scoped PostgreSQL adapter. */
-  journeys: JourneyRepositoryPort | null
-  /**
-   * SPEC 0257: atomic creation of task/approval + audit + receipt. Absent on a
-   * shared queryable client (no exclusive transactional pool): the two POSTs
-   * answer 503 before any write.
-   */
-  apiCreation: ApiCreationPort | null
-  /** SPEC 0262: task status and attendance decision in the authorization unit. */
-  authorizedWrites: PostgresAuthorizedWrites | null
-  conversations:
-    | ConversationRepository
-    | PostgresRuntimeRepository
-    | TenantScopedPostgresRuntimeRepository
-
-  tasks: {
-    create: TaskRepository['create'] | PostgresRuntimeRepository['createTask']
-    list: TaskRepository['list'] | PostgresRuntimeRepository['listTasks']
-    findById:
-      | TaskRepository['findById']
-      | PostgresRuntimeRepository['findTaskById']
-    transitionStatusWithAudit: (
-      command: TaskStatusTransitionCommand,
-      tenantId?: TenantId
-    ) => TaskRecord | Promise<TaskRecord>
-  }
-  approvals: {
-    save: ApprovalRepository['save'] | PostgresRuntimeRepository['saveApproval']
-    decideWithAudit:
-      | ApprovalRepository['decideWithAudit']
-      | PostgresRuntimeRepository['decideApprovalWithAudit']
-    findById:
-      | ApprovalRepository['findById']
-      | PostgresRuntimeRepository['findApprovalById']
-    list:
-      | ApprovalRepository['list']
-      | PostgresRuntimeRepository['listApprovals']
-  }
-  audit: {
-    append: (
-      input: Parameters<AuditRepository['append']>[0],
-      tenantId?: TenantId
-    ) => AuditEventRecord | Promise<AuditEventRecord>
-    listBySession:
-      | AuditRepository['listBySession']
-      | PostgresRuntimeRepository['listAuditBySession']
-    listEvidence:
-      | AuditRepository['listEvidence']
-      | PostgresRuntimeRepository['listAuditEvidence']
-    summarizeEvidence:
-      | AuditRepository['summarizeEvidence']
-      | PostgresRuntimeRepository['summarizeAuditEvidence']
-    createAuditEvidenceCheckpoint: (
-      input: AuditEvidenceCheckpointCreateInput,
-      createdBy: string,
-      tenantId: TenantId
-    ) => AuditEvidenceCheckpointRecord | Promise<AuditEvidenceCheckpointRecord>
-    getAuditEvidenceCheckpoint: (
-      id: string,
-      tenantId: TenantId
-    ) =>
-      | AuditEvidenceCheckpointRecord
-      | null
-      | Promise<AuditEvidenceCheckpointRecord | null>
-    listAuditEvidenceCheckpoints: (
-      tenantId: TenantId
-    ) =>
-      | AuditEvidenceCheckpointRecord[]
-      | Promise<AuditEvidenceCheckpointRecord[]>
-    transitionAuditEvidenceCheckpoint: (
-      id: string,
-      status: 'SEALED' | 'ARCHIVED',
-      updatedBy: string,
-      expectedStatus: 'SEALED' | 'ARCHIVED',
-      tenantId: TenantId
-    ) =>
-      | AuditEvidenceCheckpointRecord
-      | null
-      | Promise<AuditEvidenceCheckpointRecord | null>
-  }
-}
-
-function sanitizeAuditEvidencePage(page: {
-  items: Array<{ payload: unknown }>
-  pageInfo: unknown
-}) {
-  const redactedFields = new Set<string>()
-  const items = page.items.map((event) => {
-    const sanitized = sanitizeAuditEvidencePayload(event.payload)
-    sanitized.redactedFields.forEach((field) => redactedFields.add(field))
-    return { ...event, payload: sanitized.payload }
-  })
-
-  return {
-    page: { ...page, items },
-    governance: {
-      ...auditEvidenceGovernance,
-      payload: {
-        ...auditEvidenceGovernance.payload,
-        redactedFields: Array.from(redactedFields)
-      }
-    }
-  }
-}
-
-/**
- * SPEC0250 §3.4 — `limit`/`offset` reuse the conversation bounds; `status`
- * is one comma-separated list of distinct values of the resource enum.
- * Repeated parameters arrive as arrays and are rejected.
- */
-function parseStatusPageQuery<S extends string>(
-  query: unknown,
-  allowed: readonly S[]
-): { limit: number; offset: number; statuses?: S[] } {
-  const pagination = parsePagination(query)
-  if (!pagination) {
-    throw new DomainError(
-      'invalid_pagination',
-      `limit must be between 1 and 100 and ${PAGINATION_OFFSET_ERROR_MESSAGE}`
-    )
-  }
-  const raw = (query as { status?: unknown } | undefined)?.status
-  if (raw === undefined) return pagination
-  const values = typeof raw === 'string' ? raw.split(',') : null
-  if (
-    !values ||
-    new Set(values).size !== values.length ||
-    values.some((value) => !(allowed as readonly string[]).includes(value))
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      `status must be a comma-separated list of distinct values among ${allowed.join(', ')}`
-    )
-  }
-  return { ...pagination, statuses: values as S[] }
-}
-
-function okPage<T>(
-  page: { items: T[]; pageInfo: PageInfo },
-  correlationId: ReturnType<typeof createCorrelationId>
-) {
-  const envelope = ok(page.items, correlationId)
-  return { ...envelope, meta: { ...envelope.meta, pageInfo: page.pageInfo } }
-}
-
-/**
- * SPEC0250 §3.3 — the atomic task transition is not on
- * `TenantScopedPostgresRuntimeRepository` (the paged reads moved to the case
- * snapshot in SPEC0251 §4.1); in pool mode this applies the same
- * tenant context per operation that its `run` does. The single-client mode is
- * not production and shares one connection across requests (SPEC0250 §8).
- */
-function runTaskApprovalOperation<T>(
-  config: PostgresPersistenceConfig,
-  direct: PostgresRuntimeRepository | null,
-  rawTenantId: TenantId | undefined,
-  operation: (repository: PostgresRuntimeRepository) => Promise<T>
-): Promise<T> {
-  if (config.kind === 'postgres' && direct) return operation(direct)
-  if (config.kind !== 'postgres-pool') {
-    return Promise.reject(
-      new DomainError('invalid_action', 'PostgreSQL persistence is required')
-    )
-  }
-  const tenantId = TenantIdSchema.safeParse(rawTenantId)
-  if (!tenantId.success) {
-    return Promise.reject(
-      new DomainError('invalid_action', 'Tenant scope is required')
-    )
-  }
-  return withTenantContext(config.pool, tenantId.data, (client) =>
-    operation(new PostgresRuntimeRepository(client, { tenantIsolation: true }))
-  )
-}
-
-function parsePagination(
-  query: unknown
-): { limit: number; offset: number } | null {
-  const params = query as { limit?: unknown; offset?: unknown }
-  const limit = params.limit === undefined ? 25 : Number(params.limit)
-  const rawOffset = params.offset === undefined ? 0 : params.offset
-  const offsetFailure = classifyPaginationOffset(rawOffset)
-
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100 || offsetFailure) {
-    return null
-  }
-
-  const offset = Number(rawOffset)
-  return { limit, offset }
-}
-
-function parseTraceLimit(query: unknown): number {
-  const parsed = z
-    .object({
-      limit: z.coerce.number().int().min(1).max(100).default(25)
-    })
-    .strict()
-    .safeParse(query)
-  if (!parsed.success) {
-    throw new DomainError(
-      'invalid_pagination',
-      'limit must be between 1 and 100'
-    )
-  }
-  return parsed.data.limit
-}
-
-const auditEventTypes: AuditEventType[] = [
-  'tool_call',
-  'safety_event',
-  'integration_event',
-  'policy_decision',
-  'approval_decision',
-  'handoff'
-]
-
-function parseAuditEvidenceQuery(query: unknown): {
-  query: AuditEvidenceQuery
-  filters: AuditEvidenceFilters
-} {
-  const pagination = parsePagination(query)
-  if (!pagination) {
-    throw new DomainError(
-      'invalid_pagination',
-      `limit must be between 1 and 100 and ${PAGINATION_OFFSET_ERROR_MESSAGE}`
-    )
-  }
-  const params = query as Record<string, unknown>
-  const filters: AuditEvidenceFilters = {}
-  const sessionId = parseOptionalAuditFilter(params.sessionId)
-  const correlationId = parseOptionalAuditFilter(params.correlationId)
-  const actorId = parseOptionalAuditFilter(params.actorId)
-  const type = parseOptionalAuditFilter(params.type)
-
-  if (sessionId) filters.sessionId = sessionId
-  if (correlationId) filters.correlationId = correlationId
-  if (actorId) filters.actorId = actorId
-  if (type) {
-    if (!auditEventTypes.includes(type as AuditEventType)) {
-      throw new DomainError('validation_failed', 'Audit event type is invalid')
-    }
-    filters.type = type as AuditEventType
-  }
-
-  return { query: { ...pagination, ...filters }, filters }
-}
-
-function parseOptionalAuditFilter(value: unknown): string | undefined {
-  if (value === undefined) return undefined
-  const duplicateFailure = classifyAuditFilterValue(value)
-  if (duplicateFailure) {
-    throw new DomainError(duplicateFailure.code, duplicateFailure.message)
-  }
-  if (typeof value !== 'string') {
-    throw new DomainError(
-      'validation_failed',
-      'Audit evidence filters must be strings'
-    )
-  }
-  const trimmed = value.trim()
-  if (
-    trimmed.length === 0 ||
-    trimmed.length > 120 ||
-    !/^[A-Za-z0-9._:-]+$/.test(trimmed)
-  ) {
-    throw new DomainError(
-      'validation_failed',
-      'Audit evidence filter is invalid'
-    )
-  }
-  return trimmed
-}
-
-function createPersistence(
-  config: BuildServerOptions['persistence'],
-  journeyRepository?: JourneyRepositoryPort | null
-): RuntimePersistence {
-  if (config?.kind === 'postgres' || config?.kind === 'postgres-pool') {
-    const postgres =
-      config.kind === 'postgres'
-        ? new PostgresRuntimeRepository(config.client)
-        : new TenantScopedPostgresRuntimeRepository(config.pool)
-    const journeys =
-      journeyRepository !== undefined
-        ? journeyRepository
-        : createPostgresJourneyRepository(config)
-    const direct =
-      postgres instanceof PostgresRuntimeRepository ? postgres : null
-    return {
-      sessionVersionPinning: config.kind === 'postgres-pool',
-      outbox: postgres as unknown as DurableOutboxAdapter,
-      journeys,
-      conversations: postgres,
-      apiCreation:
-        config.kind === 'postgres-pool'
-          ? new PostgresApiCreation(config.pool)
-          : null,
-      authorizedWrites:
-        config.kind === 'postgres-pool'
-          ? new PostgresAuthorizedWrites(config.pool)
-          : null,
-      tasks: {
-        create: (
-          input: Parameters<PostgresRuntimeRepository['createTask']>[0],
-          tenantId?: TenantId
-        ) => postgres.createTask(input, tenantId),
-        list: (tenantId) => postgres.listTasks(tenantId),
-        findById: (id, tenantId) => postgres.findTaskById(id, tenantId),
-        transitionStatusWithAudit: (command, tenantId) =>
-          runTaskApprovalOperation(config, direct, tenantId, (repository) =>
-            repository.transitionTaskStatusWithAudit(command, tenantId)
-          )
-      },
-      approvals: {
-        decideWithAudit: (input, tenantId) =>
-          postgres.decideApprovalWithAudit(input, tenantId),
-        save: (request, tenantId) => postgres.saveApproval(request, tenantId),
-        findById: (id, tenantId) => postgres.findApprovalById(id, tenantId),
-        list: (tenantId) => postgres.listApprovals(tenantId)
-      },
-      audit: {
-        append: (input, tenantId) =>
-          config.kind === 'postgres-pool'
-            ? postgres.appendAudit(input, tenantId)
-            : postgres.appendAudit(
-                tenantId === undefined ? input : { ...input, tenantId }
-              ),
-        listBySession: (sessionId, tenantId: TenantId) =>
-          postgres.listAuditBySession(sessionId, tenantId),
-        listEvidence: (query: AuditEvidenceQuery, tenantId: TenantId) =>
-          postgres.listAuditEvidence(query, tenantId),
-        summarizeEvidence: (
-          filters: AuditEvidenceFilters,
-          tenantId: TenantId
-        ) => postgres.summarizeAuditEvidence(filters, tenantId),
-        createAuditEvidenceCheckpoint: (
-          input: AuditEvidenceCheckpointCreateInput,
-          createdBy: string,
-          tenantId: TenantId
-        ) => postgres.createAuditEvidenceCheckpoint(input, createdBy, tenantId),
-        getAuditEvidenceCheckpoint: (id: string, tenantId: TenantId) =>
-          postgres.getAuditEvidenceCheckpoint(id, tenantId),
-        listAuditEvidenceCheckpoints: (tenantId: TenantId) =>
-          postgres.listAuditEvidenceCheckpoints(tenantId),
-        transitionAuditEvidenceCheckpoint: (
-          id: string,
-          status: 'SEALED' | 'ARCHIVED',
-          updatedBy: string,
-          expectedStatus: 'SEALED' | 'ARCHIVED',
-          tenantId: TenantId
-        ) =>
-          postgres.transitionAuditEvidenceCheckpoint(
-            id,
-            status,
-            updatedBy,
-            expectedStatus,
-            tenantId
-          )
-      }
-    }
-  }
-
-  const db = new InMemoryDatabase()
-  const outbox = new OutboxRepository(db)
-  return {
-    memoryDb: db,
-    sessionVersionPinning: true,
-    outbox,
-    journeys:
-      journeyRepository !== undefined
-        ? journeyRepository
-        : new JourneyRepository(db),
-    conversations: new ConversationRepository(db),
-    apiCreation: new InMemoryApiCreation(db),
-    authorizedWrites: null,
-    tasks: new TaskRepository(db),
-    approvals: new ApprovalRepository(db),
-    audit: new AuditRepository(db)
-  }
-}
-
-type PostgresPersistenceConfig = Extract<
-  NonNullable<BuildServerOptions['persistence']>,
-  { kind: 'postgres' } | { kind: 'postgres-pool' }
->
-
-/**
- * PostgreSQL persistence mode always exposes a concrete journey repository.
- * If the configured adapter cannot carry tenant-scoped transactions, startup
- * fails closed instead of hiding a missing adapter behind a cast.
- */
-function createPostgresJourneyRepository(
-  config: PostgresPersistenceConfig
-): PostgresJourneyRepository {
-  if (config.kind === 'postgres-pool') {
-    if (typeof config.pool?.connect !== 'function') {
-      throw new Error(
-        'PostgreSQL journey persistence requires a pool adapter with connect()'
-      )
-    }
-    return new PostgresJourneyRepository(config.pool)
-  }
-  if (typeof config.client?.query !== 'function') {
-    throw new Error(
-      'PostgreSQL journey persistence requires a queryable persistence client'
-    )
-  }
-  return new PostgresJourneyRepository(singleConnectionPool(config.client))
-}
-
-function singleConnectionPool(client: PostgresQueryable): PostgresPoolLike {
-  const pooled: PostgresPoolClient = {
-    query: (text, values) => client.query(text, values),
-    release: () => undefined
-  }
-  return { connect: async () => pooled }
-}
-
-function withDefaultCapabilityGateway(
-  agentRuntime: AgentRuntimeOptions | undefined,
-  approvalAuthority: CapabilityApprovalAuthority,
-  actorAuthorizer: CapabilityActorAuthorizer
-): AgentRuntimeOptions | undefined {
-  if (!agentRuntime || agentRuntime.capabilityGateway) {
-    return agentRuntime
-  }
-
-  return {
-    ...agentRuntime,
-    capabilityGateway: createControlledCapabilityGateway({
-      approvalAuthority,
-      actorAuthorizer
-    })
-  }
-}
-
-function withDefaultKnowledgeResolver(
-  agentRuntime: AgentRuntimeOptions | undefined,
-  resolver: ApprovedKnowledgeResolver | undefined
-): AgentRuntimeOptions | undefined {
-  if (!agentRuntime || agentRuntime.resolveApprovedKnowledge || !resolver) {
-    return agentRuntime
-  }
-  return { ...agentRuntime, resolveApprovedKnowledge: resolver }
-}
-
-function createCapabilityApprovalAuthority(
-  configured: CapabilityApprovalAuthority | undefined,
-  persistence: BuildServerOptions['persistence']
-): CapabilityApprovalAuthority {
-  if (configured) return configured
-  if (persistence?.kind === 'postgres-pool') {
-    return new TenantScopedPostgresCapabilityApprovalRepository(
-      persistence.pool
-    )
-  }
-  return new InMemoryCapabilityApprovalAuthority()
-}
-
-function createOperationalApprovalAuthority(
-  persistence: BuildServerOptions['persistence']
-): ApprovalAuthority {
-  if (persistence?.kind === 'postgres-pool') {
-    return new PostgresApprovalAuthority(persistence.pool)
-  }
-  if (persistence?.kind === 'postgres') {
-    return new PostgresApprovalAuthority(
-      singleConnectionPool(persistence.client)
-    )
-  }
-  return new ApprovalEngine()
-}
-
-function readIdempotencyKey(headers: Record<string, unknown>): string {
-  const raw = headers['idempotency-key'] ?? headers['x-idempotency-key']
-  const candidate = Array.isArray(raw) ? raw[0] : raw
-  const parsed = z
-    .string()
-    .trim()
-    .min(8)
-    .max(200)
-    .regex(/^[A-Za-z0-9._:-]+$/)
-    .safeParse(candidate)
-  if (!parsed.success) {
-    throw new DomainError(
-      'validation_failed',
-      'Idempotency-Key is required and invalid'
-    )
-  }
-  return parsed.data
-}
-
-function operationalApprovalError(error: ApprovalError): {
-  code: string
-  message: string
-} {
-  if (error.code === 'not_found') {
-    return { code: 'not_found', message: error.message }
-  }
-  if (
-    error.code === 'not_authorized' ||
-    error.code === 'self_approval_denied'
-  ) {
-    return { code: 'forbidden', message: error.message }
-  }
-  if (error.code === 'invalid_request') {
-    return { code: 'validation_failed', message: error.message }
-  }
-  return { code: 'conflict', message: error.message }
-}
-
-function withDefaultInboundCompletion(
-  agentRuntime: AgentRuntimeOptions | undefined,
-  persistence: BuildServerOptions['persistence']
-): AgentRuntimeOptions | undefined {
-  if (
-    !agentRuntime ||
-    agentRuntime.completeInboundRuntime ||
-    persistence?.kind !== 'postgres-pool'
-  ) {
-    return agentRuntime
-  }
-  const runtime = new TenantScopedPostgresRuntimeRepository(persistence.pool)
-  return {
-    ...agentRuntime,
-    completeInboundRuntime: (input) => runtime.completeInboundRuntime(input)
-  }
-}
 
 export async function buildServerFromEnv(
   env: NodeJS.ProcessEnv = process.env,
@@ -6176,110 +4551,4 @@ export async function buildServerFromEnv(
     )
   }
   return app
-}
-
-function safeTelemetry(operation: () => void): void {
-  try {
-    operation()
-  } catch {
-    // Export/telemetry failures must never alter API, readiness or safety flow.
-  }
-}
-
-function httpStatusBucket(
-  statusCode: number
-): '2xx' | '3xx' | '4xx' | '5xx' | 'other' {
-  if (statusCode >= 200 && statusCode <= 299) return '2xx'
-  if (statusCode >= 300 && statusCode <= 399) return '3xx'
-  if (statusCode >= 400 && statusCode <= 499) return '4xx'
-  if (statusCode >= 500 && statusCode <= 599) return '5xx'
-  return 'other'
-}
-
-function createConfiguredWebhookVerifier(
-  env: NodeJS.ProcessEnv,
-  configuredVerifier: WebhookVerifier | undefined,
-  replayStore: WebhookReplayStore | undefined
-): WebhookVerifier | undefined {
-  if (configuredVerifier) return configuredVerifier
-  if (env.NODE_ENV === 'test') return undefined
-  const secret = env.WEBHOOK_SIGNING_SECRET?.trim()
-  if (!secret) {
-    throw new Error(
-      'WEBHOOK_SIGNING_SECRET is required outside test mode when no verifier is injected'
-    )
-  }
-  if (
-    env.NODE_ENV === 'production' &&
-    (secret.length < 32 || /replace[_-]?me|change[_-]?me|example/i.test(secret))
-  ) {
-    throw new Error(
-      'Production webhook signing secret must contain at least 32 non-placeholder characters'
-    )
-  }
-  if (env.NODE_ENV === 'production' && !replayStore) {
-    throw new Error(
-      'Production requires a distributed webhook replay store when no verifier is injected'
-    )
-  }
-  return new HmacWebhookVerifier({
-    secret,
-    ...(replayStore ? { replayStore } : {})
-  }).verifyWithLease
-}
-
-function createConfiguredInboundTenantResolver(
-  env: NodeJS.ProcessEnv,
-  configuredResolver: InboundTenantResolver | undefined
-): InboundTenantResolver | undefined {
-  if (configuredResolver) return configuredResolver
-  const rawTenantId = env.INBOUND_TENANT_ID?.trim()
-  if (!rawTenantId) {
-    if (env.NODE_ENV === 'production') {
-      throw new Error(
-        'Production requires INBOUND_TENANT_ID or an injected tenant resolver'
-      )
-    }
-    return undefined
-  }
-  const tenantId = TenantIdSchema.safeParse(rawTenantId)
-  if (!tenantId.success) {
-    throw new Error('INBOUND_TENANT_ID must be a valid tenant identifier')
-  }
-  return () => tenantId.data
-}
-
-function createConfiguredInboundAgentRuntime(
-  env: NodeJS.ProcessEnv,
-  configuredRuntime: AgentRuntimeOptions | undefined
-): AgentRuntimeOptions | undefined {
-  if (configuredRuntime) return configuredRuntime
-  const rawAgentId = env.INBOUND_AGENT_ID?.trim()
-  if (!rawAgentId) {
-    if (env.NODE_ENV === 'production') {
-      throw new Error(
-        'Production requires INBOUND_AGENT_ID or an injected agent runtime'
-      )
-    }
-    return undefined
-  }
-  const agentId = AgentIdSchema.safeParse(rawAgentId)
-  if (!agentId.success) {
-    throw new Error('INBOUND_AGENT_ID must be a valid agent id')
-  }
-  return {
-    resolveAgentId: () => agentId.data
-  }
-}
-
-function isWebhookVerificationLease(
-  value: WebhookVerification
-): value is WebhookVerificationLease {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    value.verified === true &&
-    typeof value.commit === 'function' &&
-    typeof value.release === 'function'
-  )
 }
