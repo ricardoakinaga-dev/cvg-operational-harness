@@ -1,3 +1,17 @@
+# MAIN-CONSOLIDATION-20261103 — integração solicitada
+
+- `status`: IN_PROGRESS; produção fora do escopo.
+- `last_completed_action`: onze HEADs arquivados em tags verificadas; sete branches já integradas removidas após identidade de árvore e ancestralidade. Quatro branches Codex compostas localmente; 101 regressões focadas PASS, tipos/lint e instalação sem vulnerabilidades PASS. Histórico de evidência com caminhos não portáveis preservado byte a byte como texto, com mapa de transporte.
+- `next_action`: validar contratos/build/formato, publicar candidata por PR, exigir CI integral verde, integrar e remover as quatro refs originais e a ref temporária; confirmar somente main e proteção preservada.
+- [Plano, orçamento, escopo e recuperação](08_runtime/main-consolidation-20261103.md).
+
+# PUBLICATION-20261102 — entrega documental preparada
+
+- status: READY_FOR_NEXT_STEP da publicação solicitada pelo usuário; implementação global e produção não concluídas.
+- last_completed_action: relatórios/evidências Open-ClaudeCode e folhas CI003 desta sessão reconciliados em branch isolada baseadaa2f345a3; patches de código continuam evidência, sem alterar aplicação.
+- next_action: concluir commit e push autorizado da branch `codex/openclaude-runtime-evidence-20261102`; confirmar SHA remoto e registrar resultado no GBrain.
+- [Escopo, reconciliação e limites](04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/README.md). CI003/F01/produção continuam sob seus gates.
+
 # Índice corrente do programa AUD0625 — 29/10/2026 (Claude Code, sessão 07)
 
 - `status`: ponto de entrada conciliado; nenhum item concede produção, que continua `NO_GO`. O detalhe, com os achados F01–F20, estado e SHA de cada um, está em [aud0625_current_index.md](08_runtime/aud0625_current_index.md). Os blocos abaixo continuam sendo o histórico e não foram reescritos.

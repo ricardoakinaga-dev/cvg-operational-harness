@@ -2,6 +2,8 @@
 
 Task `REA-CLAUDE-PLAN-20261022`, 22/10/2026. Recorte operacional das nove oportunidades CC22; [roadmap 0394](0394_roadmap_melhorias_claude_rea.md), [relatório 0623](../04_audit/0623_claude_code_improvements_2026-10-22.md) e [matriz de origem](../04_audit/evidence/REA-CLAUDE-20261022/improvement-matrix.json).
 
+Atualização documental `OPENCLAUDE-DOCS-20261101`,01/11/2026: incorporados o [relatório Open-ClaudeCode](../04_audit/evidence/OPENCLAUDE-REA-20261101/REPORT.md), suas dez contraprovas e o [caminho de produção0394](0394_roadmap_melhorias_claude_rea.md#caminho-crítico-até-produção). A origem adicional é estática, na revisão1f0fab6/CLI2.1.88; não substitui pin302, não altera estados dos pais e não demonstra defeitos equivalentes no CVG.
+
 ## Como usar este backlog
 
 As 16 fichas abaixo reutilizam IDs de cartões existentes. **Estado, dono e dependências canônicos continuam em 0383/0380**; este arquivo não cria novos status ou outra fila. As descrições detalham a contribuição ao recorte. Concluir a contribuição não fecha automaticamente o cartão pai nem muda seus aceites. Confirme o estado atual e o claim do dono antes de trabalhar.
@@ -21,8 +23,8 @@ Cada ficha tem preparação documental T1 possível dentro do claim e BUILD alvo
 | [C100-E02](#c100-e02) | P1                | Promoção de extensão vinculada à prova atual                  | CC22-03                   |
 | [C100-S01](#c100-s01) | P1                | Continue/resume/fork recompõem o contexto correto             | CC22-05                   |
 | [C100-C02](#c100-c02) | P1                | Snapshot efetivo de instruções/prompt por sessão              | CC22-04                   |
-| [C100-H01](#c100-h01) | P0                | Configuração tipada, origem e precedência explicáveis         | Suporte a CC22-04         |
-| [C100-H02](#c100-h02) | P1                | Modo de diagnóstico seguro e snapshot inspecionável           | CC22-04                   |
+| [C100-H01](#c100-h01) | P0                | Perfis de permissão e modo restricted verificáveis            | CC22-04; Open-ClaudeCode  |
+| [C100-H02](#c100-h02) | P1                | Configuração efetiva, safe/bare e diagnóstico                 | CC22-04; Open-ClaudeCode  |
 | [C100-B01](#c100-b01) | P0                | Saldo durável e reservas concorrentes por árvore              | CC22-07                   |
 | [C100-S02](#c100-s02) | P1                | Geração incremental com lifecycle, cursor e terminal único    | CC22-06                   |
 | [C100-P01](#c100-p01) | P1                | Transporte/configuração de cliente MCP governado              | CC22-09                   |
@@ -40,6 +42,37 @@ Cada ficha tem preparação documental T1 possível dentro do claim e BUILD alvo
 5. Guardar fonte/hash, comando/exit, resultados brutos, limitações e decisão. Atualizar o cartão canônico, log e estado pelo integrador. Não promover `NOT_RUN`, `INCOMPLETE`, parser/ajuda CLI ou simulação a paridade funcional.
 
 As fichas não autorizam provider/canal/dado real, shell ou rede livres, produção ou publicação de relatório. A barra do produto, D2/NO_MODEL, ADR010 e o gate de release permanecem separados.
+
+## Contraprovas Open-ClaudeCode incorporadas
+
+OC01–OC10 são identificadores de critérios derivados, **não novas tasks nem novos estados**. Fontes/linhas, Evidence IDs e limites estão no [relatório fixado](../04_audit/evidence/OPENCLAUDE-REA-20261101/REPORT.md#riscos-do-upstream-que-viram-contraprovas-para-o-cvg). Os critérios detalham falhas a exercitar nas SPECs/fatias existentes; não declaram implementação, revisão ou aceite. Preparação documental é T1; mudanças de contrato, persistência, identidade e autoridade continuam sob os gatesT3 dos pais. Controles que não fazem parte do release selecionado continuam nas carteiras, sem ativação implícita ou novo requisito geral de paridade para0373.
+
+| Critério/origem upstream                          | Cartão canônico e dono de função                   | Prova positiva a registrar                                                                                  | Contraprova que deve impedir falso sucesso                                                                                             | Artefato e gate                                                                            |
+| ------------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| OC01 — tracker sem uso integrado                  | C100-B01/O01; L1/L4; RT01 como reuso               | Uso real cobrado uma vez, reserva atômica de dois filhos e saldo após restart                               | Provider sem reserva, cobrança dupla ou crédito fictício após efeito incerto                                                           | Request/usage/settlement correlacionados e saldo durável; T3, sem reimplementar RT01       |
+| OC02 — stop entre etapas e await pendente         | C100-Q01/K02/O01; kernel/L1/L3/L4; RT02 como reuso | Porta cooperativa encerra e libera recursos dentro do prazo contratado                                      | Porta não cooperativa/cancelada não admite novo dispatch; efeito iniciado sem confirmação permanece incerto                            | Tempos, razão terminal, chamadas observadas e recibos de quiescência; contrato do pai/RT02 |
+| OC03 — human gate posterior e reasoner conclusivo | C100-Q01/H01/P02; L1/L2/L5                         | Approval autenticado da operação exata permite um efeito e retomada                                         | `continue`, verify falho/desligado, timeout ou mensagem do modelo não marcam sucesso nem autorizam WRITE                               | Pedido/aprovação/efeito e negativo de corpo não iniciado; T3                               |
+| OC04 — mailbox/corrupção mascarada como vazio     | C100-S01/O01 e PAR-O03; L1/L4                      | Mensagem persistida, lida e confirmada com identidade; limpeza concorrente é consistente                    | JSON truncado/residual, falha de leitura ou clear concorrente produz erro/recuperação explícitos, sem perder mensagem silenciosamente  | Estado antes/depois, erro e reconciliação; store/supervisor existentes, T3                 |
+| OC05 — lote retirado antes de append falho        | C100-S01/Q01; L1/L5                                | Append confirmado fica recuperável no segundo processo                                                      | Falha antes/depois de write não deixa promessa sem terminal, lote perdido ou confirmação sem durabilidade                              | Injeção de falha, log bruto, resultado terminal e replay; T3                               |
+| OC06 — input muda após classificação              | C100-H01/K01/K02/P01; L2/L3                        | Input final autorizado passa pelos controles antes do corpo                                                 | Hook que converte READ em WRITE/EXTERNAL invalida admissão anterior; deny/ask ou grant insuficiente bloqueia início                    | Argumentos/digests antes/depois e ordem do pipeline; T3                                    |
+| OC07 — retry MCP após possível efeito             | C100-P01/P02; L3/L2; SPEC0266                      | Reconexão dentro do prazo restante; READ/replay seguro mantém correlação                                    | Queda após início de efeito não repete WRITE por padrão, não zera prazo/budget e não vira COMPLETED                                    | Tentativas/efeito/prazo e disposição de incerteza; SPEC0266 e gateT3 próprios              |
+| OC08 — filho async desligado do pai               | C100-O01/K02 e PAR-K06/O03; L4/L3                  | Filho sob grant/budget herdados retorna resultado e recibo físico de término                                | Filho não amplia autoridade; cancelamento ou sobrevivência permitida é explícito e não se deduz de status do pai                       | Linhagem, reservas, cancelamento e recursos; reusar0302/0306, T3                           |
+| OC09 — unsubscribe sem parar produtor             | C100-S02/P02 e PAR-M01/A05; L2                     | Chunks, cursor, reconexão e terminal único funcionam com consumidor lento e buffers limitados               | EOF, unsubscribe, replay ou parcial não provam cancelamento físico nem resposta final                                                  | Trace produtor/transporte/consumidor, buffer e terminal; T3                                |
+| OC10 — sandbox/hook dependente de configuração    | C100-H01/H02/K01/K02/T01/T02 e PAR-X01–04; L2/L3   | Ferramenta/hook autorizado executa no confinamento exigido; configuração efetiva é inspecionável e redigida | Isolamento obrigatório indisponível, extensão sem grant ou egress proibido impede corpo; segredo/default permissivo não vaza para dump | Matriz de modos, origem/config e recibo do enforcement no caminho real; T3/T4 conforme pai |
+
+O mapa complementar do relatório cobre runtime, stop/retry, tools, permissões, agentes/teams, MCP, contexto, sessão, stream, hooks/skills/plugins, sandbox/host, persistência/segredos, diagnóstico e SDK/CLI/UI/distribuição. SDK/UI/distribuição foram inventariados com limites explícitos; não recebem prova funcional por essa listagem. Copiar implementação recuperada, trocar o kernel ou criar outro store/supervisor não é requisito de nenhum critério.
+
+### Seleção e encerramento de uma fatia
+
+O executor registra no cartão/SPEC existente quais critériosOC se aplicam à fatia e por quê; fixa candidata, interfaces públicas, fonte de evidência, dono e gatilho de revalidação. Cada prova guarda command/exit/signal, logs brutos, hashes, denominador e limite. Replay, falha e caso pendente permanecem preservados. `NOT_RUN`/`INCOMPLETE` não podem virar `DONE` por edição documental.
+
+CI002/CI003 e QA da [continuidade0410](../04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/source-snapshots/0410-context.source.txt) permanecem com seus claims. A prova local já existente de [RT01/RT02](../04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/source-snapshots/runtime-consumption-context.source.txt) é reuso a conferir na composição final; OC01/OC02 não abrem outra task para os mesmos reparos. C100-B01 continua tratando durabilidade/concorrência por árvore, além do erro de contagemRT01. Pares0394/0395 não alteram a barra0373 nem as decisões de operação0374.
+
+### Reusos por revisão a conferir antes de construir
+
+Na onda8 `c8be3a5168b1304ba4e3dc3d79a91c66ce494637` existem `packages/harness/src/session/persistence.ts`, `session/projection-cache.ts`, `model-compaction.ts`, `spill/composition.ts` e `packages/model-gateway/src/stream.ts`. A [observação de identidade](../04_audit/evidence/OPENCLAUDE-DOCS-20261101/reuse-source-observation.json) confirma seus blobs, sem executar ou aceitar o comportamento. Os próximos HOWs de S01/S02/C02 devem consumir esses módulos e os recibos do owner antes de propor novo store, provider incremental ou compactador. As descrições da inspeção de22/10 abaixo são contexto de origem; não são inventário negativo da candidata atual.
+
+Para agentes/jobs, reconciliar0302/0306 e os claims D9/07/DF. Para MCP, consumir o contrato0266 e sua autoridade própria; rascunho ou revisão estática não substitui os cenários executados. O catálogo e o pai0383 decidem o saldo remanescente; a origem Open-ClaudeCode não reatribui tarefas dos pares.
 
 ## C100-Q01
 
@@ -65,7 +98,7 @@ As fichas não autorizam provider/canal/dado real, shell ou rede livres, produç
 - **Gate:** preparação T1; contrato/BUILD alvo T3. Contrato completo e autoridade em [0383](0383_backlog_paridade_claude_code.md), cartão `C100-T01`; controles comuns acima.
 - **Critério de pronto do recorte:** JSON válido e skill Markdown suportada têm origem/digest; seleção carrega só o corpo escolhido. Symlink/traversal, hash divergente e tool sem grant são recusados.
 - **Como provar:** SI01–SI12 do contrato 0623, controles de leitura fora do root e corpus sintético; medir bytes/tokens por estágio sem executar conteúdo.
-- **Próxima ação:** Consolidar SI01–SI12 numa SPEC de aquisição/inspeção e mapear os campos não inferíveis de Markdown.
+- **Próxima ação:** Consumir0255 já decidida e seus recibos; reconciliar Q01/M1/PAR-K05 e separar a inspeção existente da compatibilidade SKILL.md, discovery e aquisição seletiva. Especificar somente o delta remanescente de SI01–SI12, sem pedir de novo a mesma aprovação.
 
 ## C100-T02
 
@@ -110,14 +143,14 @@ As fichas não autorizam provider/canal/dado real, shell ou rede livres, produç
 
 **Continue/resume/fork recompõem o contexto correto.** Origem: CC22-05. Prioridade do pai: P1. Dono de função: L1 — Sessões, persistência, memória e snapshots.
 
-- **O quê/onde:** packages/sdk/src/server.ts:274, session events e checkpoint durável existentes. Cobrir o caminho SDK hoje single_pass/contexto novo; não construir segundo banco ou novo runtime.
+- **O quê/onde:** composiçãoSDK, session events e checkpoint durável existentes. A origemCC22 examinou `packages/sdk/src/server.ts:274` em22/10; reconciliar a persistência/cache/fork já na candidata selecionada e provar a recomposição pública. Não construir segundo banco ou novo runtime.
 - **Como:** Reconstruir estado/transcript autorizados no caminho SDK; distinguir sessão, execução, fork e approval; reusar o store atual.
 - **Dependências C100, sem alteração:** C100-Q01.
 - **Reusos PAR obrigatórios do pai, sem alteração:** PAR-K03, PAR-S01, PAR-S02, PAR-S03, PAR-S04, PAR-S05, PAR-S07, PAR-H01. Consultar os estados/provas no 0380; não estão presumidos como atendidos.
 - **Gate:** preparação T1; contrato/BUILD alvo T3. Contrato completo e autoridade em [0383](0383_backlog_paridade_claude_code.md), cartão `C100-S01`; controles comuns acima.
 - **Critério de pronto do recorte:** Processo B retoma fatos e pendências do A; fork ganha identidade e linhagem. Outro tenant, conteúdo opt-out e approval do original não são reutilizados.
 - **Como provar:** Dois processos, restart e fork no boundary público; controle negativo entre tenants e idempotência de efeito.
-- **Próxima ação:** Especificar a projeção de histórico e as identidades sem confundir log persistido com sessão continuável.
+- **Próxima ação:** Conciliar persistência/projeção/fork e recibos da candidata; especificar apenas o delta público remanescente, incluindo OC04/OC05, sem confundir log persistido com sessão continuável.
 
 ## C100-C02
 
@@ -130,33 +163,33 @@ As fichas não autorizam provider/canal/dado real, shell ou rede livres, produç
 - **Gate:** preparação T1; contrato/BUILD alvo T3. Contrato completo e autoridade em [0383](0383_backlog_paridade_claude_code.md), cartão `C100-C02`; controles comuns acima.
 - **Critério de pronto do recorte:** Resume reproduz snapshot até fronteira explícita; origem proibida não entra. Compactação/override não removem obrigações nem elevam dados a instruções.
 - **Como provar:** Dois launches com settings diferentes, resume e compactação; identidade do snapshot e contraprova de conteúdo não confiável.
-- **Próxima ação:** Definir quais fontes compõem o snapshot e quando uma nova versão é legítima.
+- **Próxima ação:** Reconciliar model-compaction/spill e recibos existentes; fixar fontes do snapshot, preservação de obrigações/approval e fronteira legítima de versão no resume/compactação.
 
 ## C100-H01
 
-**Configuração tipada, origem e precedência explicáveis.** Origem: Suporte a CC22-04. Prioridade do pai: P0. Dono de função: L2 — API/SDK/CLI, configuração e clientes.
+**Perfis de permissão e modo restricted verificáveis.** Origem: CC22-04 e OC03/OC06/OC10. Prioridade do pai: P0. Dono de função: L2 — API/SDK/CLI, configuração e clientes.
 
-- **O quê/onde:** packages/shared/src/env.ts e host de configuração existente. Mantém prioridade P0 do pai. Não copiar o comportamento anunciado de ignorar configuração inválida no headless.
-- **Como:** Reconciliar catálogo, tipos e fontes explícitas; dump redigido e perfil efetivo devem refletir a configuração que realmente governa a execução.
+- **O quê/onde:** kernel/policy, perfis do host e console/CLI, conforme C100-H01 do0383. Mantém prioridadeP0; configuração/precedência/diagnóstico ficam emH02.
+- **Como:** Mapear allow/deny/manual/dontAsk/plan e restricted sobre o piso obrigatório de policy; tratar modos incompatíveis explicitamente e revalidar input final antes do corpo.
 - **Dependências C100, sem alteração:** C100-Q01.
 - **Reusos PAR obrigatórios do pai, sem alteração:** PAR-K05, PAR-U07, PAR-X04. Consultar os estados/provas no 0380; não estão presumidos como atendidos.
 - **Gate:** preparação T1; contrato/BUILD alvo T3. Contrato completo e autoridade em [0383](0383_backlog_paridade_claude_code.md), cartão `C100-H01`; controles comuns acima.
-- **Critério de pronto do recorte:** Operador vê valor efetivo/origem; versão/config inválida tem erro explícito. Campo oculto, variável indevida e segredo não entram em dump/log.
-- **Como provar:** Conflitos entre fontes sintéticas e controles de redigido; comparar dump com composição real sem ler configuração pessoal.
-- **Próxima ação:** Preparar contrato de precedência e diagnóstico sobre EnvSchema, sem criar outro sistema de settings.
+- **Critério de pronto do recorte:** READ permitido funciona; WRITE/EXTERNAL negado não inicia. Approval não é inferido de mensagem, timeout humano, resultado de modelo ou hook; regra cobre MCP e filhos.
+- **Como provar:** Matriz de modos/permissões/restricted, grant insuficiente e input alterado por hook; provar zero entrada no corpo após negação, além do caso autorizado.
+- **Próxima ação:** Reconciliar a matriz de modos/permissões com L1/L2 e os reusos existentes, preservando todos os controles obrigatórios.
 
 ## C100-H02
 
-**Modo de diagnóstico seguro e snapshot inspecionável.** Origem: CC22-04. Prioridade do pai: P1. Dono de função: L2 — API/SDK/CLI, configuração e clientes.
+**Configuração efetiva, safe/bare e diagnóstico.** Origem: CC22-04 e OC10. Prioridade do pai: P1. Dono de função: L2 — API/SDK/CLI, configuração e clientes.
 
-- **O quê/onde:** host CLI, config tipada, prompt snapshot e controles do kernel. Não reproduzir bypassPermissions; nomes dos modos podem ser próprios, com semântica explícita.
-- **Como:** Projetar safe/bare/restricted como supressão explícita de customizações opcionais, mantendo controles obrigatórios.
+- **O quê/onde:** packages/shared/src/env.ts, configuração de hosts, prompt-composer e inspetor autenticado, conforme H02 do0383; reusar EnvSchema e snapshot existentes.
+- **Como:** Declarar precedência user/project/local/managed, valor/origem e versão efetivos; safe/bare suprime customizações opcionais mantendo policy/approval e confinamento obrigatório. Restricted e a matriz de permissões pertencem aH01.
 - **Dependências C100, sem alteração:** C100-Q01, C100-C02.
 - **Reusos PAR obrigatórios do pai, sem alteração:** PAR-H02, PAR-M02, PAR-K05. Consultar os estados/provas no 0380; não estão presumidos como atendidos.
 - **Gate:** preparação T1; contrato/BUILD alvo T3. Contrato completo e autoridade em [0383](0383_backlog_paridade_claude_code.md), cartão `C100-H02`; controles comuns acima.
-- **Critério de pronto do recorte:** Diagnóstico identifica a personalização que alterou a composição; execução preserva policy/approval. Modo diagnóstico nunca amplia grant ou revela segredo.
-- **Como provar:** Matriz de modos com hook/plugin/config sintéticos; provar ausência de auto-load indevido e presença dos controles obrigatórios.
-- **Próxima ação:** Especificar o conjunto exato de customizações desligáveis e a evidência do modo efetivo.
+- **Critério de pronto do recorte:** Operador consulta valor efetivo/origem e snapshot; configuração inválida produz erro explícito. Sem auto-load indevido, elevação de grant ou segredo em dump/erro/log; safe/bare mantém controles.
+- **Como provar:** Fontes conflitantes sintéticas, sessão retomada, hook/plugin/config e redigido; comparar dump com composição real, sem ler configuração pessoal. PAR-I03 permanece reuso opcional conforme pai.
+- **Próxima ação:** Fechar contrato de precedência/diagnóstico e conjunto de customizações desligáveis sobre os componentes existentes, com snapshot/versão associados à sessão.
 
 ## C100-B01
 
@@ -182,7 +215,7 @@ As fichas não autorizam provider/canal/dado real, shell ou rede livres, produç
 - **Gate:** preparação T1; contrato/BUILD alvo T3. Contrato completo e autoridade em [0383](0383_backlog_paridade_claude_code.md), cartão `C100-S02`; controles comuns acima.
 - **Critério de pronto do recorte:** Chunks ordenados/correlacionados e exatamente um terminal; reconexão não duplica evento. EOF/corte/schema inválido não convertem parcial em resposta final.
 - **Como provar:** Servidor sintético de falhas existente, consumidor lento, reconexão/cancelamento e verificação de buffers; não usar framing JSON como prova de streaming.
-- **Próxima ação:** Definir envelopes/versionamento, limites e dono do cancelamento fim a fim.
+- **Próxima ação:** Consumir stream/transporte já implementados na candidata e conciliar seus owners; definir apenas envelopes/versionamento, limites e cancelamento fim a fim ainda sem prova, incluindo OC09.
 
 ## C100-P01
 
@@ -271,6 +304,8 @@ Nenhum item exige comprar conta ou abrir serviço externo nesta etapa documental
 
 ## Próxima ação e handoff
 
-**Primeira ação documental:** preparar a SPEC da inspeção offline C100-T01/T02 com SI01–SI12, confrontando o [contrato proposto](../04_audit/evidence/REA-CLAUDE-20261022/skill-preflight-proposal.md) e as dependências. Isso não declara Q01/M1 fechado nem torna o BUILD disponível por calendário.
+**Próxima ação documental:** consumir0255 já decidida no recorte C100-T01/T02 e confrontar seu resultado com SI01–SI12, Q01/M1/PAR-K05 e os recibos atuais. O [contrato de origem](../04_audit/evidence/REA-CLAUDE-20261022/skill-preflight-proposal.md) orienta apenas o delta ainda necessário. Em paralelo, o integrador associa OC01–OC10 às fatias existentes e segue a ordem de integração/produção do0394. Não reabrir a mesma decisão humana nem declarar Q01/M1 fechado por inspeção.
+
+[Incorporação Open-ClaudeCode](../08_runtime/handoffs/openclaude_docs_20261101.md) registra os arquivos efetivamente atualizados, a coordenação de navegação/ledgers e as verificações desta revisão documental. Implementação, revisão e aceite dos pais continuam separados.
 
 [Handoff do planejamento](../08_runtime/handoffs/rea_claude_plan_20261022.md) contém as entradas prontas de estado/log/backlog para integração pelos donos dos ledgers. [Verificação](../04_audit/evidence/REA-CLAUDE-PLAN-20261022/verification.json) trata da qualidade deste planejamento, não de implantação das funcionalidades.

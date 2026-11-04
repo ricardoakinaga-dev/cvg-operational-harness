@@ -1,0 +1,632 @@
+import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { setImmediate as nextTick } from "node:timers/promises";
+import {
+  ModelGateway,
+  ModelProviderError,
+  PromptRegistry,
+} from "@cvg/model-gateway";
+import {
+  createCapabilityRegistry,
+  createOperationalHarness,
+  InMemoryEffectJournal,
+} from "@cvg/harness";
+
+const startedAt = new Date().toISOString();
+const resourcesBefore = process.getActiveResourcesInfo();
+const records = [];
+const TENANT = "tenant_00000000-0000-4000-8000-0000000d0289";
+const INSTRUCTION =
+  "Synthetic approved instruction for public artifact observations.";
+const sha = (text) => createHash("sha256").update(text).digest("hex");
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((yes) => {
+    resolve = yes;
+  });
+  return { promise, resolve };
+};
+
+// Independent rendering from the normative SPEC0289 key order, not an import
+// of the application's frozen-request implementation.
+function canonical(r) {
+  const b = r.promptBinding;
+  return JSON.stringify({
+    v: "frozen-request-v1",
+    requestId: r.requestId,
+    tenantId: r.tenantId,
+    correlationId: r.correlationId,
+    model: r.model,
+    temperature: r.temperature,
+    maxTokens: r.maxTokens,
+    timeoutMs: r.timeoutMs,
+    promptSha256: r.promptSha256,
+    promptBinding: {
+      promptId: b.promptId,
+      promptVersion: b.promptVersion,
+      registrySha256: b.registrySha256,
+      rendererVersion: b.rendererVersion,
+      instructionSha256: b.instructionSha256,
+      renderedInputSha256: b.renderedInputSha256,
+    },
+    structuredSchemaName: r.structuredSchemaName ?? null,
+    metadata: r.metadata
+      ? Object.entries(r.metadata).sort(([a], [b]) =>
+          a < b ? -1 : a > b ? 1 : 0,
+        )
+      : null,
+    input: {
+      system: r.input.system,
+      messages: r.input.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      })),
+    },
+  });
+}
+
+function profile(extra = {}) {
+  return {
+    name: "fast",
+    providerId: "synthetic.public",
+    model: "synthetic-v1",
+    location: "local",
+    temperature: 0,
+    maxTokens: 32,
+    timeoutMs: 1000,
+    maxCostUsd: 100,
+    estimatedCostUsd: 0,
+    maxRetries: 1,
+    pricing: { inputPer1kUsd: 1, outputPer1kUsd: 1 },
+    ...extra,
+  };
+}
+
+function request(extra = {}) {
+  return {
+    requestId: "request_public_authority",
+    tenantId: TENANT,
+    correlationId: "correlation_public_authority",
+    promptId: "synthetic-public",
+    promptVersion: "1.0.0",
+    modelProfile: "fast",
+    dataClassification: "INTERNAL",
+    input: {
+      system: INSTRUCTION,
+      messages: [{ role: "user", content: "ação — 日本語 😀 synthetic input" }],
+    },
+    metadata: { b: "2", a: "1" },
+    ...extra,
+  };
+}
+
+function gatewayWorld(execute, options = {}) {
+  const events = [],
+    seen = [];
+  const prompts = new PromptRegistry();
+  prompts.register({
+    promptId: "synthetic-public",
+    version: "1.0.0",
+    content: INSTRUCTION,
+    owner: "synthetic-owner",
+    approvedBy: "synthetic-reviewer",
+    status: "approved",
+    effectiveFrom: "2026-09-01T00:00:00.000Z",
+    classification: "INTERNAL",
+    tenantId: TENANT,
+  });
+  const currentProfile = options.currentProfile ?? profile();
+  const gateway = new ModelGateway({
+    providers: [
+      {
+        id: "synthetic.public",
+        location: "local",
+        models: ["synthetic-v1", "synthetic-v2"],
+        execute: async (r) => {
+          seen.push({
+            canonical: canonical(r),
+            model: r.model,
+            deeplyFrozen: [
+              r,
+              r.metadata,
+              r.promptBinding,
+              r.input,
+              r.input.messages,
+              ...r.input.messages,
+            ].every(Object.isFrozen),
+          });
+          return execute(r, seen.length);
+        },
+      },
+    ],
+    profiles: { fast: currentProfile, ...(options.profiles ?? {}) },
+    prompts,
+    sleep: async () => {},
+    onEvent: (e) => events.push(structuredClone(e)),
+    ...(options.recordFrozenRequests === undefined
+      ? {}
+      : { recordFrozenRequests: options.recordFrozenRequests }),
+    ...(options.routing ? { routing: options.routing } : {}),
+  });
+  return { gateway, events, seen, currentProfile };
+}
+
+function providerResult(r) {
+  // The value originates in the synthetic provider body and passes through
+  // the real gateway; the driver never supplies the application's result.
+  return {
+    text: `provider-nonce:${randomUUID()}`,
+    usage: { inputTokens: 2, outputTokens: 3 },
+    providerId: "synthetic.public",
+    model: r.model,
+    externalCall: false,
+  };
+}
+
+function bindEntries(world) {
+  const events = world.events.filter((e) => e.type === "model.call.started");
+  assert.equal(events.length, world.seen.length);
+  world.seen.forEach((r, i) => {
+    assert.equal(events[i].requestSha256, sha(r.canonical));
+    assert.equal(
+      events[i].requestBytes,
+      Buffer.byteLength(r.canonical, "utf8"),
+    );
+    assert.equal(r.deeplyFrozen, true);
+  });
+  return events;
+}
+
+async function observe(id, run) {
+  const row = { id, startedAt: new Date().toISOString(), observations: {} };
+  records.push(row);
+  try {
+    await run(row.observations);
+    row.status = "PASS";
+  } catch (error) {
+    row.status = "FAIL";
+    row.error = {
+      name: error.name,
+      message: error.message,
+      code: error.code ?? null,
+    };
+  }
+  row.completedAt = new Date().toISOString();
+}
+
+await observe("PA01", async (o) => {
+  const w = gatewayWorld(async (r) => providerResult(r));
+  const result = await w.gateway.generate(request());
+  o.entries = w.seen;
+  o.events = w.events;
+  o.result = result;
+  const events = bindEntries(w);
+  assert.match(result.output.text, /^provider-nonce:[0-9a-f-]{36}$/);
+  assert.equal(Object.hasOwn(events[0], "frozenRequest"), false);
+  assert.ok(
+    Buffer.byteLength(w.seen[0].canonical) > w.seen[0].canonical.length,
+  );
+});
+
+await observe("PA02", async (o) => {
+  const w = gatewayWorld(async (r) => providerResult(r), {
+    recordFrozenRequests: true,
+  });
+  await w.gateway.generate(request());
+  o.entries = w.seen;
+  o.events = w.events;
+  const events = bindEntries(w);
+  assert.equal(events[0].frozenRequest, w.seen[0].canonical);
+});
+
+await observe("PA03", async (o) => {
+  const entered = deferred(),
+    release = deferred();
+  const currentProfile = profile();
+  const input = request();
+  const w = gatewayWorld(
+    async (r, count) => {
+      if (count === 1) {
+        entered.resolve();
+        await release.promise;
+        throw new ModelProviderError(
+          "synthetic.public",
+          "unavailable",
+          "synthetic retry",
+        );
+      }
+      return providerResult(r);
+    },
+    { currentProfile },
+  );
+  const running = w.gateway.generate(input);
+  await Promise.race([
+    entered.promise,
+    running.then(() => {
+      throw new Error("No first-attempt barrier observed");
+    }),
+  ]);
+  currentProfile.model = "caller-mutated-model";
+  currentProfile.maxTokens = 32000;
+  input.metadata.a = "caller-mutated-metadata";
+  input.input.messages[0].content = "caller-mutated-input";
+  release.resolve();
+  const result = await running;
+  o.entries = w.seen;
+  o.events = w.events;
+  o.result = result;
+  const events = bindEntries(w);
+  assert.equal(w.seen.length, 2);
+  assert.equal(w.seen[0].canonical, w.seen[1].canonical);
+  o.canonicalPayloadPreservedAcrossRetry = true;
+  o.eventModelsMatchActualAdapter = events.map(
+    (e, i) => e.model === w.seen[i].model,
+  );
+  for (let i = 0; i < events.length; i++)
+    assert.equal(
+      events[i].model,
+      w.seen[i].model,
+      "model.call.started model must identify the actual frozen adapter payload",
+    );
+});
+
+await observe("PA04", async (o) => {
+  const writes = [];
+  const w = gatewayWorld(
+    async (r, count) => {
+      if (count <= 2) {
+        for (const [name, action] of [
+          [
+            "root",
+            () => {
+              r.model = "adapter-mutated";
+            },
+          ],
+          [
+            "metadata",
+            () => {
+              r.metadata.a = "adapter-mutated";
+            },
+          ],
+          [
+            "binding",
+            () => {
+              r.promptBinding.instructionSha256 = "0".repeat(64);
+            },
+          ],
+        ]) {
+          try {
+            action();
+            writes.push({ name, threw: false });
+          } catch (error) {
+            writes.push({ name, threw: error instanceof TypeError });
+          }
+        }
+        throw new ModelProviderError(
+          "synthetic.public",
+          "unavailable",
+          "synthetic fallback",
+        );
+      }
+      return providerResult(r);
+    },
+    {
+      currentProfile: profile({ fallbackProfile: "balanced" }),
+      profiles: {
+        balanced: profile({ name: "balanced", model: "synthetic-v2" }),
+      },
+      routing: { allowFallback: true },
+    },
+  );
+  const result = await w.gateway.generate(request());
+  o.entries = w.seen;
+  o.events = w.events;
+  o.writes = writes;
+  o.result = result;
+  const events = bindEntries(w);
+  assert.equal(w.seen.length, 3);
+  assert.equal(w.seen[0].canonical, w.seen[1].canonical);
+  assert.notEqual(events[0].requestSha256, events[2].requestSha256);
+  assert.ok(writes.every((x) => x.threw));
+  assert.equal(JSON.parse(w.seen[2].canonical).metadata[0][1], "1");
+  assert.equal(result.fallbackUsed, true);
+});
+
+await observe("PA05", async (o) => {
+  const w = gatewayWorld(async (r) => providerResult(r));
+  let error;
+  try {
+    await w.gateway.generate(
+      request({
+        input: {
+          system: "tampered-instruction",
+          messages: [{ role: "user", content: "synthetic" }],
+        },
+      }),
+    );
+  } catch (e) {
+    error = e;
+  }
+  o.errorCode = error?.code;
+  o.entries = w.seen;
+  o.events = w.events;
+  assert.ok(error);
+  assert.equal(w.seen.length, 0);
+  assert.equal(
+    w.events.filter((e) => e.type === "model.call.started").length,
+    0,
+  );
+});
+
+await observe("PA06", async (o) => {
+  const w = gatewayWorld(async (r) => providerResult(r));
+  const controller = new AbortController();
+  controller.abort();
+  let error;
+  try {
+    await w.gateway.generate({ ...request(), signal: controller.signal });
+  } catch (e) {
+    error = e;
+  }
+  o.errorCode = error?.code;
+  o.entries = w.seen;
+  o.events = w.events;
+  assert.ok(error);
+  assert.equal(w.seen.length, 0);
+  assert.equal(
+    w.events.filter((e) => e.type === "model.call.started").length,
+    0,
+  );
+});
+
+function kernelWorld(execute) {
+  const calls = { body: 0, replacement: 0, approval: 0, model: 0 };
+  const policy = [],
+    logs = [];
+  const descriptor = {
+    id: "synthetic.public.read",
+    version: "1.0.0",
+    description: "Synthetic public authority READ",
+    inputSchema: { type: "object" },
+    outputSchema: { type: "object" },
+    risk: "LOW",
+    sideEffect: "READ",
+    idempotent: true,
+    requiresApproval: false,
+    origin: "core",
+    providerId: "synthetic.provider",
+    providerVersion: "1.0.0",
+  };
+  const implementation = {
+    validateInput: (v) => typeof v === "object" && v !== null,
+    execute: async (...args) => {
+      calls.body++;
+      return execute(...args);
+    },
+    validateOutput: () => true,
+  };
+  const registration = { descriptor, implementation };
+  const registry = createCapabilityRegistry([registration]);
+  const harness = createOperationalHarness({
+    capabilities: registry,
+    effectJournal: new InMemoryEffectJournal(),
+    orchestrator: {
+      decideNextStep: async ({ runtime }) => ({
+        action: "CALL_TOOL",
+        toolInvocation: runtime.requestedTool,
+      }),
+    },
+    modelGateway: {
+      complete: async () => {
+        calls.model++;
+        throw new Error("Unexpected model in READ-only fixture");
+      },
+    },
+    policy: {
+      evaluate: async (r) => {
+        policy.push({
+          id: r.tool.id,
+          version: r.tool.version,
+          sideEffect: r.tool.sideEffect,
+          requiresApproval: r.tool.requiresApproval,
+          risk: r.tool.risk,
+        });
+        return {
+          outcome: "ALLOW",
+          reason: "Synthetic READ policy",
+          policyVersion: "synthetic-policy-v1",
+        };
+      },
+    },
+    approvals: {
+      request: async () => {
+        calls.approval++;
+        throw new Error("Synthetic approvals are forbidden");
+      },
+    },
+    audit: { append: async () => {} },
+    telemetry: { record: () => {} },
+    log: { append: async (e) => logs.push(e) },
+  });
+  const input = {
+    agent: {
+      id: "synthetic.agent",
+      version: "1.0.0",
+      objective: "Synthetic READ",
+      instructions: ["synthetic only"],
+      skills: [],
+      tools: [descriptor.id],
+      policies: ["synthetic-only"],
+    },
+    tenantId: TENANT,
+    conversationId: "conversation_synthetic",
+    sessionId: "session_synthetic",
+    correlationId: "correlation_synthetic",
+    traceId: "trace_synthetic",
+    userMessage: "Synthetic READ only",
+    context: {
+      values: {},
+      sourceIds: [],
+      capturedAt: new Date().toISOString(),
+    },
+    state: { version: 1, values: {}, updatedAt: new Date().toISOString() },
+    budget: {
+      maxSteps: 4,
+      maxModelCalls: 1,
+      maxToolCalls: 2,
+      maxDurationMs: 5000,
+      maxCostUsd: 1,
+      maxTokens: 1000,
+    },
+    runtimeProfile: "single_pass",
+    requestedTool: {
+      toolId: descriptor.id,
+      toolVersion: descriptor.version,
+      input: {},
+      operationKey: "synthetic-operation-" + randomUUID(),
+    },
+  };
+  return {
+    harness,
+    input,
+    descriptor,
+    implementation,
+    registration,
+    registry,
+    calls,
+    policy,
+    logs,
+  };
+}
+
+await observe("PA07", async (o) => {
+  const entered = deferred(),
+    release = deferred();
+  let nonce;
+  const w = kernelWorld(async () => {
+    nonce = randomUUID();
+    entered.resolve();
+    await release.promise;
+    return { status: "SUCCEEDED", output: { nonce } };
+  });
+  const running = w.harness.run(w.input);
+  await Promise.race([
+    entered.promise,
+    running.then((r) => {
+      throw new Error(
+        "Kernel did not enter original READ body: " + r.stopReason,
+      );
+    }),
+  ]);
+  w.descriptor.sideEffect = "WRITE";
+  w.descriptor.requiresApproval = true;
+  w.descriptor.risk = "CRITICAL";
+  w.descriptor.inputSchema.type = "string";
+  w.implementation.execute = async () => {
+    w.calls.replacement++;
+    return { status: "SUCCEEDED", output: { forged: true } };
+  };
+  release.resolve();
+  const result = await running;
+  o.calls = w.calls;
+  o.policy = w.policy;
+  o.logs = w.logs;
+  o.result = result;
+  o.bodyNonce = nonce;
+  assert.equal(result.stopReason, "COMPLETED");
+  assert.equal(result.toolResult.output.nonce, nonce);
+  assert.ok(result.response.includes(nonce));
+  assert.equal(w.calls.body, 1);
+  assert.equal(w.calls.replacement, 0);
+  assert.equal(w.calls.approval, 0);
+  assert.ok(
+    w.policy.length > 0 &&
+      w.policy.every(
+        (t) => t.sideEffect === "READ" && t.requiresApproval === false,
+      ),
+  );
+  assert.equal(
+    w.registry.resolveDescriptor("synthetic.public.read", "1.0.0").sideEffect,
+    "READ",
+  );
+});
+
+await observe("PA08", async (o) => {
+  const w = kernelWorld(async () => ({
+    status: "SUCCEEDED",
+    output: { nonce: randomUUID() },
+  }));
+  const denied = await w.harness.run({
+    ...w.input,
+    agent: { ...w.input.agent, tools: [] },
+  });
+  const wrongVersion = await w.harness.run({
+    ...w.input,
+    requestedTool: {
+      ...w.input.requestedTool,
+      toolVersion: "2.0.0",
+      operationKey: "wrong-version-" + randomUUID(),
+    },
+  });
+  o.calls = w.calls;
+  o.denied = denied;
+  o.wrongVersion = wrongVersion;
+  assert.equal(denied.stopReason, "POLICY_DENIED");
+  assert.equal(wrongVersion.stopReason, "TOOL_FAILURE");
+  assert.equal(w.calls.body, 0);
+  assert.equal(w.calls.approval, 0);
+  assert.equal(w.calls.model, 0);
+});
+
+await observe("PA09", async (o) => {
+  const w = kernelWorld(async () => ({ status: "SUCCEEDED", output: {} }));
+  let getterCalls = 0,
+    error;
+  Object.defineProperty(w.descriptor, "sandbox", {
+    enumerable: true,
+    get() {
+      getterCalls++;
+      return "PROCESS";
+    },
+  });
+  try {
+    createCapabilityRegistry([w.registration]);
+  } catch (e) {
+    error = e;
+  }
+  o.errorCode = error?.code;
+  o.getterCalls = getterCalls;
+  o.calls = w.calls;
+  assert.ok(error);
+  assert.equal(getterCalls, 0);
+  assert.equal(w.calls.body, 0);
+});
+
+await nextTick();
+const summary = {
+  startedAt,
+  completedAt: new Date().toISOString(),
+  scope:
+    "PACKAGED_COMPONENT_OBSERVATION_NOT_FULL_KR03_OR_NATIVE_PARITY_ACCEPTANCE",
+  records,
+  passed: records.filter((r) => r.status === "PASS").length,
+  failed: records.filter((r) => r.status === "FAIL").length,
+  resourcesBefore,
+  resourcesAfter: process.getActiveResourcesInfo(),
+};
+writeFileSync(process.argv[2], JSON.stringify(summary, null, 2) + "\n");
+console.log(
+  JSON.stringify({
+    passed: summary.passed,
+    failed: summary.failed,
+    cases: records.map((r) => ({
+      id: r.id,
+      status: r.status,
+      error: r.error ?? null,
+    })),
+    resourcesBefore,
+    resourcesAfter: summary.resourcesAfter,
+  }),
+);
+process.exitCode = summary.failed ? 1 : 0;

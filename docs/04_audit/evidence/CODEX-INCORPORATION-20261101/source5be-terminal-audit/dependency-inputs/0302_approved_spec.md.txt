@@ -1,0 +1,192 @@
+# SPEC0302 — Agente vivo: registro, steering, cancelamento e espera de ociosidade (PAR-K06)
+
+R2, 01/11/2026 (R0 `1dc494a7d`; R1 `9c849d0cb` respondeu a revisão `cd6d6a3e9`, 3 P1, 7 P2 e 5 P3, em [R1-RESPONSE](../04_audit/evidence/AUD0625-PAR-K06-SPEC-07-20261031/R1-RESPONSE.md); R2 responde a conferência `11358aa07`, 1 P1, 3 P2, 2 P3 e observações, em [R2-RESPONSE](../04_audit/evidence/AUD0625-PAR-K06-SPEC-07-20261031/R2-RESPONSE.md); é o último ciclo do autor). Task `AUD0625-PAR-K06-SPEC-07-20261031` (Claude Sonnet 5.5, sessão 07), cartão PAR-K06 ([0380](../03_build/0380_backlog_paridade_100_deepseek.md); F2, P1, M, T3; depende de PAR-K01, `IN_PROGRESS`), capacidades CORE-01, CORE-02 e API-04. Estado `PROPOSED_FOR_NON_AUTHOR_REVIEW_AND_HUMAN_T3`: não há BUILD, não há aceite e nada aqui libera produção.
+
+Evidência: [DISCOVERY](../04_audit/evidence/AUD0625-PAR-K06-SPEC-07-20261031/DISCOVERY.md) (corrigida na R1 e na R2) e o RED `packages/harness/src/__tests__/aud0625-par-k06-red.test.ts` (12 controles verdes, 11 `it.fails`). Antecedentes: SPEC [0221](0221_pare100_public_session_persistence.md), [0296](0296_par_a01_session_event_stream.md) e a máquina de estados da execução em `packages/harness/src/execution-spine.ts`.
+
+## 1. Problema
+
+1. Um operador vê uma execução em andamento e não consegue **corrigir o rumo** dela: só pode esperar o fim ou, se ela estiver pausada pedindo dado, responder. O que ele disser durante o turno só vale para a próxima execução.
+2. Quem quer **parar** uma execução em andamento recebe 409. O sinal de cancelamento existe dentro do turno, mas a API e o worker são processos distintos e nada liga um ao outro.
+3. Não há lista do que está vivo, de quem iniciou, nem uma forma limitada de **esperar o agente ficar ocioso**.
+4. O aceite do cartão tem três exigências que se puxam: o steering entra **no passo seguinte**; o cancelamento **não executa efeito pendente de aprovação**; e **agente de outro tenant não é visível**. A revisão mostrou que a segunda exige mais do que o R0 dizia: o pedido de cancelamento precisa **sobreviver** a qualquer saída do estado ativo, e um efeito já iniciado sem reserva de aprovação hoje termina `CANCELLED` (como se nada tivesse acontecido).
+
+## 2. Decisões de forma (recomendadas; D1–D16 no §11)
+
+- **A unidade viva é a execução durável**: o registro de agentes vivos é a projeção das execuções do tenant em estado não terminal, mais o iniciador. Nada de mapa global de processo.
+- **Steering é uma caixa de entrada durável por execução**, drenada pelo runtime na fronteira `turn/before-step` (inclusive antes do passo 1) e acrescentada ao contexto do passo. Não interrompe chamada de modelo nem ferramenta em voo.
+- **Cancelar execução ativa é um pedido durável e pegajoso** (`cancelRequestedAt`): o destino de qualquer saída do estado ativo é decidido pelo pedido, numa operação atômica do store; o worker o observa na renovação de lease e relê depois de `RUNNING`.
+- **O desfecho de um efeito iniciado depende do efeito, não da reserva**: depois de `effects.started`, ferramenta `WRITE`/`EXTERNAL` ou não idempotente termina `unknown_effect`, com ou sem reserva (corrige um defeito existente em `iterative-dispatch.ts`, §6).
+- **Ocioso** = a execução está esperando alguém (`WAITING_APPROVAL`, `WAITING_USER`) ou terminou. `FAILED_RETRYABLE` **não** é ocioso: volta a rodar sozinha.
+- **Escopos existentes, não inventados**: leitura por `conversation:view_assigned` com escopo de caso; steering e cancelamento por `conversation:update` mais `authorizeCaseMutation`.
+- **O SDK fica fora desta SPEC** (o SDK roda `single_pass` em processo, sem execução durável): a parte do SDK vai para o cartão que puser o SDK no caminho durável (§8, D7).
+
+## 3. Invariantes
+
+LV1. **Tenant e escopo de caso, e a ausência não se distingue.** `list`, `get`, `steer`, `requestCancel` e `waitUntilSettled` recebem `tenantId` do limite autenticado (`resolveDataPlaneTenant`), nunca do corpo. Para papéis com escopo `assigned` (Operator, Approver), toda rota passa por `readExecutionForCaller` (leitura) ou `authorizeCaseMutation({ kind: 'execution', executionId })` (steer e cancel), como o `GET /v1/executions/:id` e a decisão de aprovação já fazem; a lista filtra por vínculo de caso **dentro da consulta** (F17, §4). Execução de outro tenant **ou de caso não atribuído** responde `not_found`, igual à inexistente, pelo mesmo caminho de código.
+
+LV2. **Iniciador imutável e vindo do limite.** `initiator = { kind: 'operator'|'system'|'agent', id (≤120), channel? (≤64) }` é gravado no `submit`, derivado do principal autenticado (API) ou da composição (worker, agente), nunca de campo livre do corpo. Sem identidade (nula), o iniciador é `{ kind: 'system', id: 'unknown' }`, nunca vazio. Não entra no `requestHash`; uma repetição com outro iniciador devolve o registro original sem alterá-lo.
+
+LV3. **Steering entra só na fronteira do passo.** O runtime drena a caixa em `turn/before-step`, **a cada passo, inclusive o primeiro**, depois de I8 (cancelamento) e do gate de pausa, e antes de montar o contexto. Mensagem que chega durante uma chamada de modelo ou de ferramenta espera o próximo `before-step`; steering aceito antes do passo 1 aparece **no passo 1**; mensagem que chega depois do último passo fica `PENDING` e o recibo diz que não foi consumida.
+
+LV4. **Exatamente uma vez, em ordem, e durável.** Cada steering tem `steerKey` (1–200, idempotente por `(tenant, execução, steerKey)`) e `seq` crescente por execução. O passo que consome grava o consumo no mesmo checkpoint da observação; após queda e retomada, o conjunto consumido é reapresentado pelo checkpoint e nada é consumido duas vezes.
+
+LV5. **Steering tem a autoridade do texto do usuário e nenhuma outra.** Mesmos limites e guardas de entrada de `userMessage`; não aprova, não amplia ferramenta, não muda orçamento nem política, **e não revoga uma decisão já aprovada**: o caminho para parar o que foi aprovado é o cancelamento. Estados que aceitam steering: `RECEIVED`, `QUEUED`, `CLAIMED`, `RUNNING`, `FAILED_RETRYABLE` (a mensagem espera o próximo passo). `WAITING_APPROVAL` (não contorna a aprovação), `WAITING_USER` (a via é `provideUserInput`) e terminais respondem `steer_not_running`. Runtime `single_pass` responde `steer_unsupported`.
+
+LV6. **Cancelamento é cooperativo e nunca esconde um efeito.** Depois que o pedido é observado, nenhum efeito começa (o último ponto antes de `effects.started` já checa o sinal). **Depois de `effects.started`** — ferramenta `WRITE`/`EXTERNAL` ou não idempotente — o desfecho é `TOOL_FAILURE` com `unknown_effect`, **com ou sem reserva de aprovação**, **nos dois perfis**: o iterativo (`iterative-dispatch.ts:558,590-606`) e o `single_pass` (`kernel/kernel-runtime.ts:551-568`, casos `deadline` e `cancelled`, perfil padrão do harness operacional); só ferramenta de leitura idempotente pode terminar `CANCELLED`/`MAX_DURATION`. O estado final vem do worker, com o fence token, não do pedido.
+
+LV7. **Cancelar o que espera aprovação não executa o efeito, por contrato.** `cancel` de `WAITING_APPROVAL` leva a execução a `CANCELLED` na transição fenceada que já existe. **Regra única de recusa:** `resolveApproval` (e, por simetria, `provideUserInput`) responde `conflict` com subcódigo `execution_cancelled` **se e somente se** a execução está `CANCELLED` e a decisão **não foi a que a retomou** (`resume?.kind !== 'approval'` ou `resume.approvalId !== approvalId`), **com ou sem pedido de cancelamento gravado**; o replay de uma aprovação que **já retomou** a execução (cancelada depois por `requestCancel` ou por `cancel`, mesmo que a API tenha caído antes de `audit.append`, `server.ts:1666-1690`) continua devolvendo o registro, como hoje (AUD19-003, C11). A rota da API já recusa com 409 uma decisão sobre aprovação `PENDING/REQUESTED` de execução fora de `WAITING_APPROVAL` (`server.ts:1570-1578`); a SPEC só dá nome estável a esse caminho no store. **Esta SPEC não cancela a aprovação no motor** (D4): o contrato neutro não tem `cancel` e o do motor exige ator operador; a aprovação órfã expira e a barreira que impede o efeito é o estado da execução.
+
+LV8. **O pedido de cancelamento é durável, pegajoso e decidido numa operação atômica, e a regra mora no `transition` do store.** `requestCancel` é uma operação única do store: se o estado já aceita `cancel`, cancela (`CANCELLED`, como hoje); se é `CLAIMED`/`RUNNING`, grava `cancelRequestedAt/By/Reason` sem tocar `leaseOwner`/`leaseUntil` e devolve o registro ainda ativo. **Com o pedido presente, nenhuma saída do estado ativo escapa dele:** a transição final do worker vai a `CANCELLED` (antes do efeito) ou `FAILED_TERMINAL` com `unknown_effect` (depois do efeito), **nunca** a `WAITING_APPROVAL`, `WAITING_USER`, `FAILED_RETRYABLE` ou `QUEUED`; `claimNext` nunca reivindica execução com pedido (defesa em profundidade); o worker **relê o pedido depois de `RUNNING`** (fecha a janela entre a reivindicação e o primeiro heartbeat) e a cada renovação de lease. Pedido repetido é idempotente. A rota não ramifica pelo estado lido antes: chama `requestCancel`. A regra vive no `transition` do store (memória e Postgres), não nos chamadores.
+
+**Saídas incertas (F16).** Nas duas saídas em que o worker não diz o que aconteceu — **lease vencido em `CLAIMED`/`RUNNING` (`recoverExpired`)** e **exceção de `harness.execute` (`FAILED_RETRYABLE`, `execution-spine.ts:1428-1440`)** — um pedido de cancelamento **não** leva sozinho a `CANCELLED`, porque pode haver efeito iniciado e não liquidado. O store consulta uma **porta injetada pela composição do worker** (`effectState(record) → 'none_started' | 'unsettled'`, implementada sobre o diário de efeitos e o checkpoint, que o núcleo não conhece): `none_started` ⇒ `CANCELLED`; `unsettled` ou **porta ausente ou falha** ⇒ `FAILED_TERMINAL` com falha `UNKNOWN_EFFECT` (`unknown_effect`, reconciliação manual, como o caminho de hoje, `execution-spine.ts:1590-1599`). Sem pedido, o comportamento atual (retentativa e `unknown_effect` na retomada) não muda. Testemunha W8 e mutantes (§12).
+
+LV9. **Ocioso tem definição única.** `settled(estado) = estado ∈ {WAITING_APPROVAL, WAITING_USER, SUCCEEDED, FAILED_TERMINAL, CANCELLED}`. `RECEIVED`, `QUEUED`, `CLAIMED`, `RUNNING` e `FAILED_RETRYABLE` não são ociosos (este último volta a rodar em cerca de 1 s). `waitUntilSettled(tenant, id, { timeoutMs, signal })` devolve `{ settled, state }` ao ficar ocioso ou ao fim do prazo, com `settled: false` e o estado real; nunca cancela a execução, é interrompível, e execução que volta a ficar ativa depois de `settled: true` não invalida a resposta anterior (a espera descreve o instante).
+
+LV10. **Sem texto na lista.** A listagem mostra ids, estado, iniciador, instantes, tentativa e contagem de passos; nunca `userMessage`, texto de steering, saída de ferramenta nem motivo de cancelamento. O texto do steering não vai a auditoria nem a telemetria: só `steerKey`, `seq`, comprimento e hash.
+
+LV11. **Auditoria: o cancelamento não depende dela; o steering sim.** O cancelamento grava o rastro (ator, instante, motivo) **no registro durável, na mesma transação do pedido**; a auditoria (`safety_event`) vem depois, e sua falha é contada e alertada, **sem desfazer o pedido** (o botão de parar não pode falhar fechado por causa do log). O steering falha fechado: sem auditoria, não é aceito.
+
+LV12. **Nada concede autoridade nova.** Escopos existentes: lista e espera exigem `conversation:view_assigned` (mais LV1); steer e cancel exigem `conversation:update` mais `authorizeCaseMutation`. Nenhuma operação desta SPEC aprova, executa ferramenta fora do runtime ou altera política.
+
+LV13. **O texto do steering é dado pessoal potencial.** Retenção: **sai com a execução**, e como hoje **não existe expurgo de execução**, isto equivale a **retenção indefinida até existir esse expurgo** (a SPEC não finge um prazo); a política de descarte é do hospital (D8) e fica registrada como pendência do inventário. Exclusão: o expurgo da execução, quando existir, apaga o steering; leitura: só por quem lê a execução (`readExecutionForCaller`), nunca na lista. A tabela de steering entra no inventário de dados pessoais ([09](../platform/09-personal-data-inventory.md)) **como linha própria e também no item DB-02** (tabelas operacionais), na BUILD da fatia 3, com a nota de que o texto é como `userMessage`.
+
+LV14. **Fronteira com o PAR-A02.** Este cartão entrega o **mecanismo** (`requestCancel`, `steer`, `waitUntilSettled`, `list`) e estende as rotas existentes; **quem pode** pausar, retomar e cancelar por papel (o 403 por papel) é do PAR-A02. Até lá valem os escopos da LV12. A fatia 1 (leituras: lista, iniciador, espera) **não depende do K01**: só lê o store que a API já usa e não mexe em worker nem pipeline; as fatias 2 e 3 dependem do K01.
+
+## 4. Registro de agentes vivos (K06-R)
+
+```ts
+interface ExecutionInitiator {
+  kind: 'operator' | 'system' | 'agent'
+  id: string // ≤120; 'unknown' sem identidade
+  channel?: string // ≤64
+}
+interface LiveAgentView {
+  executionId: string
+  tenantId: string
+  state: ExecutionState
+  initiator: ExecutionInitiator
+  agentId: string
+  attempt: number
+  steps: number // passos do checkpoint; 0 antes do primeiro
+  createdAt: string
+  updatedAt: string
+  cancelRequestedAt?: string
+  steering: { pending: number; consumed: number }
+}
+store.list({ tenantId, visibleTo?, states?, initiatorId?, limit?, cursor? }): { items: LiveAgentView[]; nextCursor?: string }
+type CaseVisibility = { kind: 'tenant' } | { kind: 'assigned'; operatorId: string } // dado opaco, sem importar a autoridade de caso
+```
+
+Por padrão `states` é o conjunto **vivo** (`RECEIVED, QUEUED, CLAIMED, RUNNING, WAITING_APPROVAL, WAITING_USER, FAILED_RETRYABLE`); terminais só com `states` explícito. `visibleTo` vem do chamador autenticado (LV1) e é **dado**, não código: o núcleo neutro não conhece o vínculo nem a concessão de caso (moram em `persistence/case-authority` e `apps/api`). **No Postgres** a consulta, na persistência, junta o vínculo e a concessão sob o snapshot da autoridade de caso, e o **cursor é sobre o conjunto já filtrado** (filtrar na API depois da página vazaria existência por páginas curtas com `nextCursor`); **em memória** a composição injeta `caseVisibility(ids) → Set` no construtor do store. Papéis `assigned` só veem execuções de casos que lhes foram atribuídos; uma página `assigned` sem mais nada visível vem **sem `nextCursor`** (W9). Ordem por `(updatedAt desc, id)`, cursor opaco assinado pelo tenant e pelo escopo (cursor de outro tenant é `invalid_cursor`). O W4 fixa lista, iniciador e tenant.
+
+## 5. Steering (K06-S)
+
+```ts
+store.steer({ tenantId, executionId, actorId, steerKey, text }): SteerReceipt
+interface SteerReceipt { steerKey; seq: number; status: 'ACCEPTED' | 'DUPLICATE'; executionState: ExecutionState }
+runtime option: steering?: { drain(tenantId, executionId): Promise<readonly { id; seq; text }[]> }
+```
+
+- **Fronteira (LV3):** em `iterative-runtime.ts`, depois de I8 e do gate `turn/before-step` e antes de `contextEngine.build`, a cada passo. As mensagens drenadas entram em `ContextBuildInput` como `steering` e no contexto como mensagens de usuário **rotuladas** (`origin: 'steering'`), depois da mensagem original e antes das observações. O W1 fixa que o passo 1 não vê uma mensagem que chegou durante ele e o passo 2 vê; o W1b fixa que uma mensagem aceita antes do passo 1 aparece no passo 1; o C8 pina que hoje a opção é desconhecida e ignorada.
+- **Consumo (LV4):** o consumo vai no checkpoint do passo (`state.steeringConsumed: { upToSeq, count }`, `checkpointVersion` sobe) e só depois o store marca `CONSUMED`; queda entre as duas coisas: o checkpoint manda, o store reconcilia (idempotente por `seq`).
+- **Steering antigo numa retomada:** mensagem `PENDING` há mais de `steerStaleMs` (padrão 1 h, D8) quando a execução retoma **não é entregue**: vira `EXPIRED`, aparece na visão da execução e o operador reenvia se ainda valer. Dentro do prazo, é entregue no primeiro `before-step` da retomada. Retomada com decisão aprovada pendente de despacho não revoga a decisão (LV5).
+- **Erros:** `steer_not_found` (também outro tenant ou caso não atribuído), `steer_not_running`, `steer_unsupported`, `steer_limit` (caixa cheia), `steer_text_too_large`, `invalid_steer_key`. Duplicata com o mesmo texto é `DUPLICATE`; mesma `steerKey` com texto diferente é `conflict`.
+
+## 6. Cancelamento de execução ativa (K06-C)
+
+```ts
+store.requestCancel({ tenantId, executionId, actorId, reason? }): ExecutionRecord  // LV8
+worker: um AbortController por execução; signal repassado a harness.execute({ ...runtime, signal })
+```
+
+- O worker liga `RuntimeInput.signal` ao controller da execução em curso (hoje não passa `signal`, `execution-spine.ts:1416-1423`) e, depois de `RUNNING` e a cada renovação de lease, relê `cancelRequestedAt`; se presente, `controller.abort()`.
+- **Correção de um defeito existente (F03).** Em `iterative-dispatch.ts:558` o desfecho de cancelamento e prazo usa `reserved = call.approval !== undefined`: sem reserva, um `WRITE` já iniciado vira `CANCELLED` e `raceInvoked` devolve antes de o corpo terminar. A fatia 2 muda a regra para: depois de `effects.started`, `sideEffect ∈ {WRITE, EXTERNAL}` ou `idempotent === false` ⇒ `unknown_effect` (`TOOL_FAILURE`), com ou sem reserva; leitura idempotente ⇒ `CANCELLED`/`MAX_DURATION` como hoje. O C10 pina o comportamento atual e o W6 fixa o novo.
+- `store.cancel` continua recusando `CLAIMED/RUNNING` (contrato antigo, C4); `requestCancel` é a via nova e é a que a rota chama (LV8). A rota responde `200` com o registro cancelado nos estados antigos e `202` com o registro ainda ativo e `cancelRequestedAt` nos ativos (D3).
+- **Escopo (LV1, D11):** o `POST /v1/executions/:id/cancel` hoje exige só `conversation:update`; passa a exigir também `authorizeCaseMutation`. Isso **muda** quem pode cancelar (um Operator sem o caso atribuído deixa de poder) e é decisão do Ricardo.
+
+## 7. Espera de ociosidade (K06-I)
+
+`store.waitUntilSettled(tenantId, executionId, { timeoutMs, signal })` (LV9). Em processo, a implementação em memória usa a notificação da própria transição; no Postgres, consulta com intervalo curto e jitter (§9), sem `LISTEN/NOTIFY` na primeira fatia (D6). A rota `GET /v1/executions/:id/wait?timeoutMs=` passa por `readExecutionForCaller` (LV1) e responde `200 { settled, state }`; acima do teto de esperas simultâneas por processo, `429 wait_limit` com `Retry-After`. O W5 fixa o contrato com transição do worker fenceada (primeiro `settled:false` em `RUNNING`, depois `settled:true` em `WAITING_APPROVAL`) e o tenant B.
+
+## 8. Superfícies
+
+| Superfície                                 | Escopo                                          | Idempotência        | Auditoria                                            |
+| ------------------------------------------ | ----------------------------------------------- | ------------------- | ---------------------------------------------------- |
+| `GET /v1/executions` (lista viva)          | `conversation:view_assigned` + caso             | n/a                 | leitura registrada como as demais                    |
+| `POST /v1/executions/:id/steer`            | `conversation:update` + `authorizeCaseMutation` | `steerKey` no corpo | `steer.accepted`, sem texto; falha fecha             |
+| `POST /v1/executions/:id/cancel` (estende) | idem                                            | já existe           | registro durável na transação; `safety_event` depois |
+| `GET /v1/executions/:id/wait`              | `conversation:view_assigned` + caso             | n/a                 | não audita (leitura sem efeito)                      |
+
+**SDK (F10, D7).** `turn.send` do SDK roda `single_pass` em processo e não cria execução durável: `turn.steer` nunca teria passo seguinte e `turn.cancel`/`turn.wait` não teriam execução para apontar. Esta SPEC **não** acrescenta métodos ao SDK. A parte do SDK (semântica em processo: abortar o controller do turno ativo e esperar a Promise; recusa de segundo turno na mesma sessão, `turn_in_progress`) vira a **linha de backlog `PAR-K06-SDK`** (sem cartão novo; registrada em `docs/30_backlog_master.md` junto desta SPEC) para ser absorvida pelo PAR-A06 (cliente de alto nível) quando o SDK ganhar o caminho durável; a recusa do segundo `turn.send` é **mudança visível** (hoje roda em paralelo) e entra lá como decisão própria.
+
+Nenhuma rota nova sem teste de tenant cruzado, de **caso não atribuído** e de escopo ausente, cada um com mutante.
+
+## 9. Orçamentos (valores iniciais, D8)
+
+| Item                                           | Valor                                                      |
+| ---------------------------------------------- | ---------------------------------------------------------- |
+| Steering pendente por execução                 | ≤ 8 mensagens e ≤ 16 KiB no total                          |
+| Steering total aceito por execução (vida toda) | ≤ 64 mensagens e ≤ 128 KiB                                 |
+| Texto de um steering                           | 1 a 4096 pontos de código                                  |
+| `steerKey`                                     | 1 a 200                                                    |
+| Steering consumido retido no contexto          | últimos 32; mais antigos só no contador                    |
+| `steerStaleMs`                                 | 1 h (1 min a 24 h)                                         |
+| Motivo de cancelamento                         | ≤ 500                                                      |
+| Iniciador `id`/`channel`                       | 120 / 64                                                   |
+| Página da listagem                             | padrão 50, teto 100                                        |
+| `timeoutMs` da espera                          | 1 a 60 000, padrão 30 000                                  |
+| Esperas simultâneas por processo               | ≤ 64; acima disso `429 wait_limit`                         |
+| Intervalo da consulta de espera (Postgres)     | 250 ms com jitter de ±20 %                                 |
+| Latência de observação do cancelamento         | ≤ 1 renovação de lease (padrão `leaseMs/3`, 10 s com 30 s) |
+
+## 10. Fatias de BUILD (depois do aceite)
+
+| Fatia | Conteúdo                                                                                                                                                                      | Depende de        |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| 0     | Caixa de steering no runtime iterativo (`steering.drain`, contexto rotulado, checkpoint) + store em memória; W1 e W1b viram `it`                                              | nada além da 0248 |
+| 1     | `initiator`, `list`, `waitUntilSettled` no store (memória e Postgres, migração aditiva) e rotas GET com escopo de caso; W4 e W5 viram `it`                                    | nada (leituras)   |
+| 2     | `requestCancel` pegajoso, `AbortController` por execução no worker, correção do desfecho sem reserva, `resolveApproval` com `execution_cancelled`; W2, W3, W6 e W7 viram `it` | K01, fatia 1      |
+| 3     | `steer` durável + rota, retenção/expurgo do texto e inventário (LV13)                                                                                                         | K01, fatias 0–2   |
+
+**Controles que mudam por fatia (F19).** Um controle verde de hoje é retirado ou invertido na fatia em que o contrato muda; a BUILD não pode deixá-lo verde contra a SPEC:
+
+| Fatia | Controles retirados ou invertidos                                                                                                                                                                                                                                                                                                                    |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | C8 (a opção `steering` deixa de ser ignorada; W1 e W1b assumem o lugar)                                                                                                                                                                                                                                                                              |
+| 1     | C9 na parte de `list` e `waitUntilSettled` (viram W4 e W5); C6 e C7 seguem                                                                                                                                                                                                                                                                           |
+| 2     | C9 na parte de `requestCancel`; C5 (aprovação tardia devolve o registro `CANCELLED` sem erro) é **substituído** pelo W3 a partir do mesmo estado, e o C11 (replay de aprovação que retomou) **fica**; C10 e C12 (WRITE iniciado ⇒ `CANCELLED`) são invertidos pelo W6 e W6-SP; C4 (`cancel` de `RUNNING` ⇒ `conflict`) **fica**, é o contrato antigo |
+| 3     | C9 na parte de `steer`                                                                                                                                                                                                                                                                                                                               |
+
+Cada fatia entra com RED próprio, mutantes por achado e revisão não autora. A migração (colunas `initiator`, `cancel_requested_*`, tabela de steering) é **aditiva**, com RLS por `tenant_id`; o número é reservado pela BUILD.
+
+## 11. Decisões T3 (recomendação em negrito)
+
+| ID  | Decisão                                 | Opções                                                                                                                                                                                                                              | Recomendação                                                                                                          |
+| --- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| D1  | O que é o "agente vivo"                 | (a) execução durável não terminal, com iniciador; (b) mapa em memória por processo                                                                                                                                                  | **(a)**                                                                                                               |
+| D2  | Onde mora a caixa de steering           | (a) tabela própria por execução, ordenada por `seq`; (b) coluna `jsonb` no registro; (c) só em memória                                                                                                                              | **(a)**                                                                                                               |
+| D3  | Cancelar `CLAIMED/RUNNING`              | (a) pedido durável pegajoso + abort cooperativo (`202`); (b) manter 409; (c) matar o processo do worker                                                                                                                             | **(a)**; (c) exclui o efeito em voo                                                                                   |
+| D4  | Aprovação tardia após cancelamento      | (a) `conflict execution_cancelled` só quando não há retomada por essa aprovação, **sem** cancelar no motor; (b) manter o no-op; (c) cancelar também no motor por um ator de sistema                                                 | **(a)**: nome estável sem quebrar o replay; (c) exige porta e ator novos no contrato neutro, fica para cartão próprio |
+| D5  | Steering em `single_pass`               | (a) recusar `steer_unsupported`; (b) aceitar e aplicar na próxima execução                                                                                                                                                          | **(a)**                                                                                                               |
+| D6  | Espera de ociosidade no Postgres        | (a) consulta com jitter e teto; (b) `LISTEN/NOTIFY`                                                                                                                                                                                 | **(a)** agora                                                                                                         |
+| D7  | SDK                                     | (a) fora desta SPEC; semântica em processo e `turn_in_progress` num cartão do SDK durável; (b) já no K06                                                                                                                            | **(a)**: o SDK não tem execução durável; a recusa do segundo turno é mudança visível                                  |
+| D8  | Limites                                 | tabela do §9                                                                                                                                                                                                                        | **Aprovar como valores iniciais**                                                                                     |
+| D9  | Dependência de K01                      | (a) fatias 0 e 1 já; 2–3 só depois de K01 aceito; (b) tudo agora                                                                                                                                                                    | **(a)**: leituras não tocam worker nem pipeline                                                                       |
+| D10 | Iniciador fora do hash de idempotência  | (a) fora; (b) dentro                                                                                                                                                                                                                | **(a)**                                                                                                               |
+| D11 | Escopo por caso no cancelamento         | (a) o cancelamento passa a exigir `authorizeCaseMutation`; (b) manter só `conversation:update`                                                                                                                                      | **(a)**: sem isso um Operator cancela caso alheio; **muda quem pode cancelar hoje**                                   |
+| D12 | Desfecho de efeito iniciado sem reserva | (a) `WRITE/EXTERNAL/não idempotente` ⇒ `unknown_effect` com ou sem reserva; (b) provar que nenhum WRITE roda sem reserva                                                                                                            | **(a)**: a fixture `reserve` já é WRITE sem aprovação; (b) não é verificável                                          |
+| D13 | Auditoria do cancelamento               | (a) rastro no registro na mesma transação, auditoria depois (falha contada e alertada); (b) falhar fechado                                                                                                                          | **(a)**: parar não pode depender do log; steering segue falhando fechado                                              |
+| D14 | Definição de "ocioso"                   | (a) `WAITING_APPROVAL/WAITING_USER` + terminais; (b) também `FAILED_RETRYABLE` e `RECEIVED`                                                                                                                                         | **(a)**: as outras voltam a rodar sozinhas                                                                            |
+| D15 | Steering antigo numa retomada           | (a) expira após `steerStaleMs` e o operador reenvia; (b) entrega sempre                                                                                                                                                             | **(a)**: instrução velha depois de horas pode já não valer                                                            |
+| D16 | Cancelamento com saída incerta          | (a) `CANCELLED` só com prova de que nenhum efeito ficou iniciado (porta do diário de efeitos); senão `FAILED_TERMINAL/UNKNOWN_EFFECT` e reconciliação; porta ausente = incerto; (b) sempre `CANCELLED`; (c) sempre `UNKNOWN_EFFECT` | **(a)**: (b) esconde efeito que pode ter ocorrido (F16); (c) marca como incerto o que o diário prova que não começou  |
+
+Fora do escopo: pausa/retomada por operador (já existe, I12; papéis são do PAR-A02), prioridade e fila de agentes, steering por modelo, cancelamento de ferramenta específica, qualquer escrita no log de sessão, SDK, cancelamento da aprovação no motor.
+
+## 12. Plano de testes e mutantes
+
+Mutantes que precisam morrer: steering consumido no mesmo passo em que chegou; steering drenado antes de I8 ou só a partir do passo 2; consumo sem checkpoint (duas vezes após retomada); `steerKey` repetida criando segundo registro; `tenantId` do corpo em vez do limite; lista ou espera sem filtro de tenant ou de **caso**; cursor de outro tenant aceito; `requestCancel` limpando `leaseOwner`; **transição para `WAITING_APPROVAL`/`WAITING_USER`/`FAILED_RETRYABLE` com pedido presente**; `claimNext`/`recoverExpired` que reivindicam execução com pedido; `resolveApproval`/`provideUserInput` que aceitam com pedido; worker que não relê o pedido depois de `RUNNING`; `reserved` decidindo o desfecho de um WRITE iniciado; `execution_cancelled` que quebra o replay AUD19-003; auditoria que falha o cancelamento; **`recoverExpired` ou a exceção do worker levando a `CANCELLED` com efeito `unsettled`**; porta de efeito ausente tratada como `none_started`; **regra do desfecho de WRITE só no iterativo** (o `single_pass` mantém `CANCELLED`); `resolveApproval` recusando o replay de uma aprovação que já retomou; filtro de caso aplicado depois da página (cursor sobre o conjunto não filtrado); `waitUntilSettled` sem teto ou tratando `FAILED_RETRYABLE` como ocioso; texto de steering na auditoria. Propriedades: para qualquer intercalação de `steer` e passos, cada mensagem é consumida uma vez e em ordem; para qualquer intercalação de `requestCancel` com as transições do worker, nenhum efeito **começa** depois do pedido e nenhuma execução com pedido termina fora de `CANCELLED`/`FAILED_TERMINAL`.
+
+## 13. Riscos aceitos
+
+A latência do cancelamento ativo é de uma renovação de lease, não imediata; o efeito já iniciado termina como `unknown_effect`, que o operador precisa conferir à mão. O steering de um passo longo só chega no próximo passo, por desenho. A listagem de vivos varre por `(tenant, estado)` e depende do índice da fatia 1. Uma aprovação já `APPROVED` no motor antes do cancelamento fica órfã até expirar; a barreira é o estado da execução (LV7). Um cancelamento de execução em `QUEUED`/`RECEIVED` depois de uma tentativa anterior que deixou efeito não liquidado continua indo a `CANCELLED` como hoje (o caso F16 cobre só as saídas em que o worker some); fica como risco aceito, a tratar no PAR-A02. Mudar a regra do desfecho sem reserva (D12) muda o comportamento de execuções existentes em cancelamento e prazo; a fatia 2 traz RED para os dois.

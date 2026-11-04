@@ -2,6 +2,34 @@
 
 Task `REA-CLAUDE-PLAN-20261022`, 22/10/2026. Planejamento do recorte das nove oportunidades CC22 do [relatório 0623](../04_audit/0623_claude_code_improvements_2026-10-22.md). [Backlog de execução 0395](0395_backlog_melhorias_claude_rea.md). Estado desta entrega: planejamento documental concluído; implementação depende dos cartões e gates existentes.
 
+## Incorporação Open-ClaudeCode — 01/11/2026
+
+Task documental `OPENCLAUDE-DOCS-20261101`, por pedido do usuário de incorporar a investigação à documentação e acelerar a construção do harness para produção. O [relatório Open-ClaudeCode](../04_audit/evidence/OPENCLAUDE-REA-20261101/REPORT.md) e seu mapa de15 elementos passam a complementar este roadmap. Os critérios positivos/negativos estão incorporados ao [0395](0395_backlog_melhorias_claude_rea.md#contraprovas-open-claudecode-incorporadas). As origens CC22 e os16 cartões existentes permanecem; esta atualização não cria outro backlog de status.
+
+Fonte adicional: Open-ClaudeCode `1f0fab6b70c9cb7ca921d088eaec0c92073318ba`, CLI empacotado2.1.88. MCP REA analisou46 arquivos selecionados, sem falhas de parsing e com cobertura parcial. Em33 fontes comparadas com `sourcesContent`,20 eram idênticas,3 diferentes e10 ausentes. Esses resultados são estáticos: não demonstram execução do bundle, paridade funcional ou segurança do CVG. O pin comparativoClaude2.1.302 e seu denominador permanecem próprios do programa; a nova origem não os substitui. [Identidades](../04_audit/evidence/OPENCLAUDE-REA-20261101/provenance.json) e [Evidence IDs/cobertura](../04_audit/evidence/OPENCLAUDE-REA-20261101/rea-summary.json) permitem reproduzir o recorte.
+
+### Caminho crítico até produção
+
+A produção do núcleo continua regida pela [barra0373](0373_barra_producao_harness.md), pelo [plano0374](0374_plano_producao_harness.md) e pelas decisões específicas já registradas. Pela separação vigente entre produção e paridade, concluir todas as capacidades C100/PAR não é pré-requisito geral do release do núcleo. Uma capacidade incluída na candidata deve, porém, demonstrar seus controles e contratos; uma capacidade adiada não pode aparecer ativada ou anunciada como pronta.
+
+| Ordem | Trabalho existente a consumir                                                                                                                                 | Resultado que permite avançar                                                                                                      | Responsável e limite                                                                                                             |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | AUD0627 F01 e [continuidade0410](../04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/source-snapshots/0410-context.source.txt)          | Diagnóstico nativo de falha/exit/signal preservado; causa de coverage tratada e barra aplicável concluída na candidata final       | Lead0410/claimsCI002–CI003. Revisão ou teste focal não fecha F01; não aumentar caps, excluir suítes ou repetir até verde         |
+| 2     | AUD0626 RT01/RT02 e Q01/K03 dos pais existentes                                                                                                               | Consumo único, término limitado, WRITE retida e recovery sem repetição de efeito, demonstrados pelo boundary público da composição | Kernel/journal/QA holders. RT01/RT02 já têm prova local na onda8; conferir integração e qualificação, sem construir outro reparo |
+| 3     | AchadosF02/F05/F06/F07 da [auditoria0627](../04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/source-snapshots/0627-context.source.txt) | Disposição individual de segurança, isolamento positivo aplicável, navegação por revisão e provas atuais com denominador explícito | Segurança/HISO/documentação/medição. O status da auditoria é datado; obter estado e recibos atuais com os owners                 |
+| 4     | Gates e operação0373/0374, runbooks e decisões de destino existentes                                                                                          | Mesmo SHA/imagem, testes completos aplicáveis, identidade, backup/restore, rollback, alertas e parecer de release registrados      | Integrador e operação; T4 e decisão humana específica. Prontidão documental não libera produção                                  |
+
+As linhas são ordem de integração e verificação, sem criar novas dependências entre cartões ou alterar a barra aprovada. Contraprovas Open-ClaudeCode entram no cartão e na fatia que exercitam o comportamento correspondente. Persistência de árvore, streaming, MCP e filhos podem avançar em paralelo quando suas dependências e claims permitirem; não entram automaticamente no caminho crítico de um release que não as inclua. O Assistente de Plantão conserva sua barra e dados separados, conforme ADR-010.
+
+### Considerações incorporadas à construção
+
+1. **Compor e qualificar o que existe.** Usar kernel, execution spine, effect journal, gateway, stores e supervisor atuais. Uma função encontrada em fonte upstream é referência de cenário, não motivo para criar segundo mecanismo no CVG.
+2. **Contabilizar e encerrar pelo resultado observável.** Budget precisa receber uso real, reservar antes do dispatch e liquidar uma vez; prazo/cancelamento precisam tratar portas pendentes e impedir autoridade tardia. Iterações, custo, tokens e tempo são limites distintos.
+3. **Preservar a verdade de efeitos e persistência.** Falha de append, sessão corrompida, perda de conexão e crash não se tornam sucesso, caixa vazia ou crédito devolvido por conveniência. Efeito incerto mantém essa classificação até reconciliação.
+4. **Revalidar autoridade na fronteira final.** Input alterado por hook, hint MCP, configuração e filho async continuam sujeitos a grant, policy, sandbox/egress, budget e approval vigentes. Reasoner, timeout humano e resultado de tool não concedem permissão.
+5. **Separar produtor, transporte e recuperação.** Sequência local, JSONL ou SSE não provam geração incremental, backpressure, cursor persistido ou cancelamento físico do produtor. Cada fronteira tem prova própria na mesma revisão.
+6. **Adotar princípios e contraprovas, com origem explícita.** Os arquivos de licença upstream não fornecem concessão permissiva geral para copiar implementação recuperada; o plano usa descrições, hashes e cenários, sem incorporar código. Runtime não executado e relações desconhecidas permanecem explícitos.
+
 ## Objetivo e relação com os programas vigentes
 
 Incorporar os resultados úteis observados no Claude: skills mais baratas de descobrir, plugins inspecionáveis, sessão recuperável, configuração reproduzível, streaming, orçamento compartilhado, hooks/MCP governados e promoção por avaliação comparativa. Reusar os mecanismos do harness; nenhum executor, sistema de policy ou avaliador paralelo será criado.
@@ -32,8 +60,8 @@ flowchart TD
   Q --> S1["C100-S01: continuar e fork"]
   S1 --> C2["C100-C02: snapshot efetivo"]
   S1 --> B1["C100-B01: saldo por árvore"]
-  Q --> H1["C100-H01: configuração tipada"]
-  Q --> H2["C100-H02: diagnóstico seguro"]
+  Q --> H1["C100-H01: permissões e restricted"]
+  Q --> H2["C100-H02: configuração e diagnóstico"]
   C2 --> H2
   Q --> S2["C100-S02: stream e terminal"]
   Q --> P1["C100-P01: transporte MCP"]
@@ -56,7 +84,7 @@ O desenho inclui as dependências C100 diretas do recorte; os reusos PAR complet
 
 ## Primeira entrega recomendada
 
-**Agora, documental:** consolidar o [contrato de inspeção offline](../04_audit/evidence/REA-CLAUDE-20261022/skill-preflight-proposal.md) numa SPEC concreta do owner C100-T01/T02. Definir perfis de inventário/admissão, campos, limites, redigido de segredos, estimador versionado e SI01–SI12. Reconciliar o delta 308 sem mover o pin 302. Essa preparação não espera nova execução de modelo ou canal.
+**Agora, documental:** consumir a inspeção0255 já decidida e reconciliar seus recibos/resultados com C100-T01/T02, Q01/M1 e PAR-K05. O [contrato de inspeção offline](../04_audit/evidence/REA-CLAUDE-20261022/skill-preflight-proposal.md) continua origem de SI01–SI12; compatibilidade SKILL.md, discovery, aquisição seletiva e admissão têm escopos próprios. Preparar somente o HOW remanescente de inventário/admissão, campos, limites, redigido e estimador versionado. Não reabrir o mesmo gate humano nem mover o pin302 para308 ou2.1.88 por associação.
 
 **Primeiro BUILD de valor visível, quando os pré-requisitos forem atendidos:** inventário de skill/plugin com custo de contexto e aquisição seletiva do corpo. Deve preservar o manifesto JSON strict e o grant existentes. A constatação do Claude — custo permanente estimado 17 tokens, invocação até 1,5 mil no corpo maior — fundamenta a separação das métricas, não uma meta universal de tokens para o CVG.
 
@@ -96,4 +124,4 @@ Medir por resultado: nove oportunidades com todos os aceites do recorte comprova
 
 [Evidências do planejamento](../04_audit/evidence/REA-CLAUDE-PLAN-20261022/verification.json) registram rastreabilidade/grafo/links/formato, não testes de implementação. [Handoff](../08_runtime/handoffs/rea_claude_plan_20261022.md) contém entradas prontas para os ledgers premodificados, preservando os writers concorrentes.
 
-Próxima ação única: preparar a SPEC da inspeção offline a partir de SI01–SI12, com vínculo a C100-T01/T02, recon dos reusos e gate explícito antes de código. O0395 é o índice das demais entregas e de seus pré-requisitos.
+Próxima ação para este recorte: o integrador reconcilia a composição atual e os recibos com a ordem de produção acima, enquanto o ownerC100-T01/T02 consome0255 e prepara apenas o delta de contrato que restar. O0395 contém as contraprovas incorporadas e os aceites dos cartões; o0410 conserva a execução CI/QA e seus claims. [Handoff desta incorporação](../08_runtime/handoffs/openclaude_docs_20261101.md) distingue edições aplicadas de navegação/ledgers aguardando integração coordenada.

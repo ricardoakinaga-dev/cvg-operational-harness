@@ -148,6 +148,7 @@ test('policy preserves exactly the 20 historical HISO moves and hashes', () => {
       'AUD0625-LEDGERS-D9-20261028',
       'HISO-004',
       'HISO-007',
+      'MAIN-CONSOLIDATION-20261103',
       'PARE100-EXEC-20261014'
     ]
   )
@@ -164,6 +165,53 @@ test('policy preserves exactly the 20 historical HISO moves and hashes', () => {
     }))
   )
   assert.match(policy.movedTargetsProvenance, /historical.*not a claim/)
+})
+
+test('consolidation transports exactly 15 historical documents without changing their bytes', () => {
+  const policy = JSON.parse(
+    readFileSync(join(repositoryRoot, 'docs/doc-link-policy.json'), 'utf8')
+  )
+  const proof = JSON.parse(
+    readFileSync(
+      join(
+        repositoryRoot,
+        'tests/fixtures/doc-relocations/consolidation-20261103.json'
+      ),
+      'utf8'
+    )
+  )
+  assert.equal(proof.schemaVersion, 1)
+  assert.equal(proof.moves.length, 15)
+  const additions = policy.movedTargets.filter(
+    ({ movedBy }) => movedBy === 'MAIN-CONSOLIDATION-20261103'
+  )
+  assert.deepEqual(
+    additions.map(({ old, new: target, sha256Before }) => ({
+      old,
+      new: target,
+      sha256: sha256Before
+    })),
+    proof.moves.map(({ old, new: target, sha256 }) => ({
+      old,
+      new: target,
+      sha256
+    }))
+  )
+  for (const entry of proof.moves) {
+    assert.ok(
+      [
+        'a2f345a3b7fac79f8a1506d369b9371f92e187c8',
+        'f2c10eba4684777299661daad8cfb54c1811a9e6'
+      ].includes(entry.sourceCommit)
+    )
+    assert.ok(entry.old.startsWith('docs/04_audit/evidence/'))
+    assert.equal(entry.new, entry.old + '.txt')
+    assert.equal(existsSync(join(repositoryRoot, entry.old)), false)
+    assert.equal(
+      sha256(readFileSync(join(repositoryRoot, entry.new))),
+      entry.sha256
+    )
+  }
 })
 
 test('AUD0625 relocations only resolve the frozen AUD-SCORE review links', () => {

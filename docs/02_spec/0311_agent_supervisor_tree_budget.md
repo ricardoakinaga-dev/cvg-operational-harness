@@ -1,0 +1,141 @@
+# SPEC0311 — supervisor de agentes e orçamento por árvore
+
+Proposta T3, preparação T1 de 02/11/2026. Task `CODEX-INCORPORATION:SUPERVISOR-CONTRACT-0311`, recortes KR07/KR08 e cartões existentes DX100-O01/PAR-O01/PAR-O02. **DRAFT — NÃO PRONTA PARA BUILD OU GATE HUMANO**. A proposta precisa fechar os pontos da seção10 e passar por revisão técnica e revisão explícita humana antes de código. Não cria carteira, denominador ou recibo de paridade.
+
+## 1. Problema, resultado e precedência
+
+O kernel atual controla identidade, cancelamento e orçamento por turno. Esses controles não demonstram uma reserva transacional compartilhada por futuros descendentes. O resultado requerido é um pai criar um filho pelo mesmo runtime governado, enviar entrada, observar seu resultado e encerrar a subárvore, com identidade/linhagem verificáveis e limites compartilhados. Dois spawns concorrentes devem respeitar a mesma reserva; um filho não pode ampliar o grant do pai nem reutilizar sua aprovação.
+
+Reusar kernel, autoridade de execução, sessão, journal, aprovação, modelo e sandbox canônicos. O supervisor é infraestrutura; não importa o Assistente de Plantão nem executa um Codex externo como substituto do núcleo. A direção ADR010 e os gates dos consumidores permanecem próprios.
+
+As [dez fontes pinadas](../04_audit/evidence/CODEX-INCORPORATION-20261101/supervisor-contract/source-inputs.json) distinguem código CVG de inspiração no fork Codex. Em `agent/api.rs`, o aceite de spawn e a publicação do receipt são fronteiras distintas; entrada aceita não significa leitura pelo modelo. Em `agent/control/execution.rs`, o limiter local conta subagentesV2 e separa a consulta de capacidade do incremento; não é uma reserva atômica de todo trabalho. Esta proposta requer reserva atômica e contabilização de raiz e descendentes. Isso é uma decisão proposta CVG, não alegação de equivalência literal já aceita.
+
+O runtime nativo0239 foi definido inicialmente para raiz simples. Sua aprovação não autoriza esta extensão. A referência funcional continua `8d9f6466ff0294785d56f55b1fe363d132fe4133`; inspecionar o fork `a0981298` não muda a referência ou concede crédito para variantesMAv1/MAv2.
+
+## 2. Fronteiras e superfícies propostas
+
+Os nomes desta seção são **TARGETS**, não exports encontrados:
+
+| Componente                                  | Responsabilidade                                                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `packages/harness/src/agents/supervisor.ts` | Coordenar operações completas usando portas canônicas injetadas pelo host                                          |
+| `packages/harness/src/agents/contracts.ts`  | Contratos de dados, receipts, observação e erros do supervisor                                                     |
+| `packages/contracts/src/agent-tree.ts`      | Domínio neutro de linhagem, limites, reservas e accounting                                                         |
+| Adapter em `packages/persistence`           | Persistência transacional da árvore; integração com a mesma autoridade nativa, sem segundo execution store         |
+| Composição confiável dos hosts              | Autenticar, derivar grant e budgets, fornecer kernel/ports/autoridade qualificados                                 |
+| Adapters de ferramentas                     | Projeções `agent.spawn/send/interrupt/wait/resume/close/list`; mesmas verificações de autoridade que a API interna |
+
+Uma instância `createAgentSupervisor` recebe os ports confiáveis e devolve o serviço. Nenhum método recebe pool, schema, tools executáveis, policy, approval, principal ou grant construídos do JSON de cliente. O harness não importa persistência, SDK, API ou produto. Ports ausentes recusam composição; isso não satisfaz o aceite positivo.
+
+O `SupervisorCaller` é uma capability opaca emitida pela composição a partir da execução e do vínculo autenticado atuais. Copiar IDs, serializar o objeto ou informar um epoch no payload não a recria. Em outro processo, o host autentica e rederiva sua própria capability; o store revalida os fatos duráveis. O formato e o helper exatos dessa integração são dependência abertaSC-L01.
+
+## 3. Identidade, ownership e grants
+
+S01. Toda árvore pertence a um tenant. Cada nó tem IDs gerados pelo host, raiz, pai imediato imutável, profundidade e sessão canônica. Raiz não tem pai. Um nó tem um único pai; não existem reparenting, ciclos ou reutilização de ID fechado. Metadata enviada pelo usuário não estabelece parentesco.
+
+S02. O caller opera seus filhos diretos; operações recursivas percorrem somente a subárvore autorizada. ID conhecido de outro tenant, árvore, pai ou caso não autoriza acesso. Leitura alheia e ausência têm a mesma recusa opaca. Operações sobre self/raiz precisam de uma via explícita do host autenticado; um filho não ganha controle do root por conhecer seu ID.
+
+S03. O grant efetivo do filho é a interseção entre o grant atual do pai, o perfil filho aprovado e a política institucional. IDs de presets selecionam dados autorizados do host; não injetam implementação, modelo, sandbox ou budget. Preset não aprovado e interseção indefinida recusam antes de reserva/dispatch. A proposta0256 conserva seu gate próprio.
+
+S04. A interseção abrange ferramentas e versões, escopos de recurso/caso, filesystem, rede, efeitos e limites. Não aplicar apenas uma comparação de nomes. Uma capability desconhecida ou sem regra de redução não é herdada. Sandbox ausente mantém a recusa dos tools que o exigem.
+
+S05. Aprovação do pai não é approval do filho. Toda intenção sensível do filho percorre os controles canônicos e recebe seu próprio vínculo de aprovação/admissão. O supervisor não aprova, não converte texto de agente em comando institucional e não copia handles de approval ou effect authority.
+
+S06. Antes de cada modelo, tool body, WRITE, retomada e reserva, revalidar a autoridade atual da árvore e da execução. Revogação, cancelamento e fechamento de ancestral impedem novas admissões; não apagam efeitos já iniciados nem constituem rollback remoto.
+
+## 4. Operações e conhecimento do resultado
+
+| Operação proposta | Entrada de dados                                                                | Resultado e efeito                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `spawn`           | `spawnKey`, `profileId`, entrada inicial canônica, pedido de redução de limites | Receipt com child/root/parent/session IDs, digest e estado persistidos; não promete início ou conclusão       |
+| `send`            | childId, messageKey, texto canônico, modo                                       | Receipt de aceite/idempotência; consumo pelo modelo é um fato posterior                                       |
+| `interrupt`       | childId, requestKey, motivo limitado                                            | Pedido cooperativo com estado observado; terminal/effect settlement vêm da autoridade canônica                |
+| `wait`            | childIds, timeout de observação e sinal                                         | Snapshots atuais autorizados; timeout não cancela nem fecha filhos                                            |
+| `resume`          | childId conhecido                                                               | Recarrega vínculo persistido e revalida grants/estado; não é novo spawn nem replay de efeito                  |
+| `close`           | childId, requestKey                                                             | Fecha admissão da subárvore, solicita encerramento e observa cleanup; resultado limitado por quiescência real |
+| `list`            | paginação e opção de subárvore autorizada                                       | Projeção sem texto, segredos ou raciocínio; cursor ligado ao caller e ao escopo                               |
+
+Inputs são capturados, validados e congelados antes do primeiro await. Recusar getters, protótipos especiais, ciclos e campos de autoridade extras. O envelope final, limites de texto, IDs, keys, paginação, erros e tipos de cursor serão fechados no anexoSC-L03; nenhum deles será decidido silenciosamente durante BUILD.
+
+`spawnKey` e `messageKey` têm deduplicação durável no escopo tenant/árvore/pai/operação. Mesmo key e mesmo digest devolvem o receipt original; digest diferente dá conflito. Chamada repetida depois do fechamento não cria outro filho. Perda da resposta depois do dispatch é `OUTCOME_UNKNOWN`, não licença para reenviar automaticamente.
+
+Mensagens têm atribuição persistida, ordem por destinatário e modos distintos: `QUEUE_ONLY` não inicia trabalho; uma modalidade de wake só pode criar execução quando o estado e a política nativa permitem. `WAITING_APPROVAL` não é contornada por mensagem. Texto de agente é entrada não confiável e não concede grant. O modelo só o considera no ponto de entrada admitido antes da captura do próximo pedido. Registra-se consumo por messageId/checkpoint; uma queda não pode duplicá-lo.
+
+Resultado do filho é persistido antes de avisar o pai. A notificação é otimização; o pai consegue reler o fato após restart. O resultado não vira mensagem de sucesso só porque a entrega ocorreu. Distinguir aceite, publicação do receipt, execução, terminal, entrega e consumo. Não prometer exatamente uma execução de inferência ou efeito externo por causa da deduplicação da mensagem.
+
+## 5. Reserva, capacidade e accounting
+
+S07. O host fixa um `TreeLimits` versionado antes da raiz admitir trabalho: profundidade, fanout vivo, nós vivos, nós totais na vida da árvore, execuções simultâneas, chamadas de modelo/tool, tokens, custo e duração. Limites não vêm do modelo. Reduções solicitadas pelo caller só podem estreitar os valores. Unidades e domínio numérico fazem parte deSC-L03.
+
+S08. A raiz também consome capacidade de execução e budget. Todo descendente pertence ao mesmo agregado. Um limiter só de filhosV2 não satisfaz este contrato. Waiting/idle pode liberar o permit de execução quando há prova de nenhum trabalho ativo, mas mantém o nó e suas reservas pendentes. `CLOSING`/`UNCERTAIN` não libera recurso ainda possuído.
+
+S09. Antes do spawn, reservar atomicamente capacidade de nó/fanout/profundidade e a alocação delegada. Dois spawns concorrentes não podem ambos passar por uma consulta livre e exceder o mesmo limite. Aceite durável do filho, vínculo de sessão/árvore e enqueue precisam ter fronteira transacional qualificada; não compor uma sequência de chamadas públicas que finja atomicidade.
+
+S10. Delegação subdivide a reserva, sem criar saldo. A soma de gasto conhecido mais reservas pendentes precisa caber no limite da raiz e em cada envelope ancestral. A reserva delegada não é contabilizada duas vezes como gasto; o ledger distingue alocação, reserva de chamada, consumo e devolução. A regra matemática e as transações são parte deSC-L02.
+
+S11. Toda tentativa de provider, retry, fallback e compactação precisa reservar antes da chamada. O orçamento só por turno continua local; o agregado da árvore é verificado no mesmo ponto de admissão. Tool bodies também consomem seus limites. Não permitir bypass por outro host, retomada ou caminho de modelo auxiliar.
+
+S12. Accounting confirmado é idempotente por identidade da chamada/tentativa. Um segundo resultado conflitante não substitui o primeiro. Uso ausente, chamada interrompida ou efeito/commit desconhecido mantêm reserva e estado de incerteza; não se registra custo/tokens zero como medição. Devolver apenas o saldo comprovadamente não consumido.
+
+S13. Se um provider informar consumo acima da reserva, preservar o consumo real, registrar overdraw e interromper novas admissões. Não limitar o número reportado para aparentar cumprimento. A qualificação do provider e a estimativa conservadora continuam necessárias; o ledger não garante que um serviço externo respeitará um limite físico.
+
+S14. Deadline e fechamento dos ancestrais são sticky. Tempo do primário é reavaliado depois dos locks. Timeout local não prova que uma transação remota abortou. Reserva expirada não é reutilizada enquanto o resultado da chamada/commit ainda for desconhecido; reconciliação qualificada é ação separada.
+
+## 6. Persistência e concorrência
+
+O adapter persiste árvore, nós, vínculos, deduplicação, alocações/reservas, consumo e notificações necessárias à recuperação. Os nomes físicos e migrations ainda não estão reservados. Execuções, sessões, checkpoints, journal e approvals continuam pertencendo a seus stores canônicos; o adapter da árvore não cria cópias como nova fonte de verdade.
+
+Todas as transições usam tenant autenticado, fence/epoch atual e verificação de ownership. Iniciar, retomar, admitir modelo/tool, cancelar, fechar, recuperar e liquidar precisam compartilhar o helper e a mesma ordem de locks. Nenhuma transação permanece aberta durante chamada de modelo/tool, espera de consumidor ou bootstrap externo.
+
+**SC-L01 permanece aberto:** integrar a ordem global da árvore aos guards/locks/handles de sessão de0239/K03b e às transições0302. Não basta colocar um lock de raiz em um único chamador. Documentar as ordens completas, chamadas que já possuem writer/epoch, waits permitidos, revalidação e schedules de deadlock antes de aceitar o HOW. A restrição posterior do recibo17 não é revogada por esta proposta.
+
+As operações novas que exigirem idempotência/atomicidade precisam de helpers canônicos que a garantam. `createThread`0239 não promete dedup de criação: um adapter não pode atribuir essa garantia à função existente por analogia. Perda de COMMIT no spawn mantém vínculo/reserva em estado desconhecido até consulta/reconciliação autorizada, sem criação repetida ou apagamento de fatos.
+
+Dois processos disputando o mesmo filho precisam respeitar a autoridade durável. Carregar a árvore em memória não autoriza executá-la. Recuperação relê os vínculos/grants/limites atuais e só publica um agente como disponível depois da admissão válida.
+
+## 7. Cancelamento, fechamento e quiescência
+
+`interrupt` usa o mecanismo0302 com suas garantias de `unknown_effect`, incluindo WRITE iniciado sem approval reservation. Pedido não significa terminal nem revogação instantânea. A aprovação já consumida e o efeito confirmado permanecem fatos.
+
+`close` fecha primeiro a admissão da subárvore e solicita cancelamento dos trabalhos em andamento. O supervisor mantém ownership de filhos, aquisições e promises originais até assentamento observado; cleanup corre na ordem reversa de dependência. Cleanup que falha conserva a causa primária e apresenta relatório separado.
+
+Snapshots distinguem estado da execução, settlement e fase de recursos. `CLOSED` exige nenhum produtor, aquisição ou filho sob ownership e nenhuma operação em curso. Prazo de observação vencido produz snapshot pendente; recurso de liveness incerta permanece `UNCERTAIN`, com reservas retidas. Não rotular timeout, promise de corrida ou erro genérico como quiescência.
+
+A implementação real depende do owner gerenciado0222 e da disposição do contrato `originalReturns`. A primitive de cleanup já revisada não equivale ao tracker de filhos. Esta proposta não adota esse delta público nem reabre a aprovação0222; a decisão específica já foi solicitada e permanece pendente.
+
+## 8. Observabilidade e limites de dados
+
+Projeções e auditoria registram identidade, lineage, estado, causa/código, contagem, tamanho/hash de mensagens, orçamento conhecido/reservado e settlement. Lista não expõe texto de entrada, saída de tool, credenciais ou raciocínio. O destino e retenção do conteúdo persistido exigem o contrato institucional aplicável; não copiar dados reais para qualificação.
+
+Eventos novos de sessão/árvore precisam de catálogo e schema versionados, com limites de framing/buffer/replay e cursor. Não acrescentar campos aos DTOs Codex ou classes de evento sem o contrato específico. A prova de compatibilidade literal/governada de cada variante permanece separada da API CVG proposta.
+
+## 9. Critérios de qualificação
+
+Todos **NOT_RUN**. Cada caso deve usar o candidato composto, exports instalados, banco sintético e processos reais quando indicado. Drivers fornecem estímulos e observam corpos, commits e recursos; não fabricam suas respostas.
+
+| Caso | Positivo requerido                                                                   | Controle que deve reprovar                                                               |
+| ---- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| ST01 | Pai cria filho, envia entrada e recebe resultado com IDs e linhagem persistidos      | Trocar filho/tenant/pai/caso/epoch ou serializar capability não concede acesso           |
+| ST02 | Filho executa pelo mesmo kernel e pelas capacidades reduzidas                        | Tool fora da interseção, preset não aprovado ou sandbox ampliado não chegam ao corpo     |
+| ST03 | Filho exige sua própria aprovação para intenção sensível                             | Reutilizar approval/handle do pai não autoriza WRITE                                     |
+| ST04 | Dois processos disputam o último slot: apenas um aceite durável                      | Separar check e incremento ou remover fence permite oversubscription e faz o caso falhar |
+| ST05 | Raiz, netos, retries, fallback e compactação debitam o mesmo agregado                | Excluir raiz ou qualquer caminho de provider/tool faz o observador detectar gasto extra  |
+| ST06 | Falha conhecida antes de aceite devolve só reservas não consumidas                   | COMMIT ou efeito incerto não libera saldo, não vira zero e não provoca resubmit          |
+| ST07 | Entrega, consumo e checkpoint permanecem ligados após restart                        | Receipt não vira consumo; duas entregas não duplicam entrada no modelo                   |
+| ST08 | ProcessoB retoma filho registrado sem memória deA e sem repetir efeito conhecido     | Vínculo/grant/epoch antigo ou sessão incompatível impede a retomada                      |
+| ST09 | Cancelamento disputa conclusão preservando terminal e efeitos reais                  | WRITE iniciado sem reserva mantém unknown_effect; cancelled não fabrica rollback         |
+| ST10 | Close de pai encerra admissão e aguarda filhos/descendentes e promises originais     | Filho tardio, aquisição pendente, promise opaca ou prazo local não passam como CLOSED    |
+| ST11 | Accounting duplicado é idempotente; conflito/overdraw/unknown permanecem observáveis | Refund duplo, clamp de uso ou reserva reaproveitada ampliam o saldo e reprovam           |
+| ST12 | API interna, ferramentas e hosts autorizados preservam os mesmos guards              | ID-only lookup, outro caminho de host ou dados de cliente não burlam ownership/policy    |
+
+## 10. Pendências para fechar a SPEC
+
+SC-L01: contrato e ordem transacional com K03b/0239/0302, incluindo criação atômica de filho, perda de COMMIT, admissão e recuperação entre processos.
+
+SC-L02: o [anexo de accounting por árvore](0311_agent_tree_accounting.md) apresenta agora a proposta matemática de unidades, envelopes, reservas, uso parcial/final, devolução, unknown/overdraw e recuperação. Estado AUTHOR_DRAFT, revisão técnica pendente; tipos físicos, integração SC-L01 e bounds qualificados continuam sem aceite. Os doze casos AC01–AC12 permanecem NOT_RUN. Preservar o consumo reportado e não prometer limite financeiro externo sem mecanismo qualificado.
+
+SC-L03: schemas públicos fechados de entrada/saída/erros/cursor/eventos e todos os limites numéricos/bytes/tempo, com vinculação a perfis e variantes da referência. Não estreitar o domínio para obter uma suíte fácil.
+
+SC-L04: disposição do owner0222/originalReturns e proofs reais de aquisição/filhos/cleanup. Perfil e autoridade de case/native devem ser qualificados pelos seus owners; jobs0306 não é aceite do supervisor.
+
+Depois dessas definições: revisão técnica com achados dispostos, revisão humana T3 dos bytes exatos, claims específicos e BUILD; então testes positivos/negativos, T2 completo, cobertura/certificação e auditoria integrada. Nenhuma etapa deste documento concede promoção, push, release, produção ou conclusão de KR07/KR08.

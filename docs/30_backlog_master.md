@@ -1,3 +1,17 @@
+# MAIN-CONSOLIDATION-20261103 — integração solicitada
+
+- `status`: IN_PROGRESS; produção fora do escopo.
+- `last_completed_action`: onze HEADs arquivados em tags verificadas; sete branches já integradas removidas após identidade de árvore e ancestralidade. Quatro branches Codex compostas localmente; 101 regressões focadas PASS, tipos/lint e instalação sem vulnerabilidades PASS. Histórico de evidência com caminhos não portáveis preservado byte a byte como texto, com mapa de transporte.
+- `next_action`: validar contratos/build/formato, publicar candidata por PR, exigir CI integral verde, integrar e remover as quatro refs originais e a ref temporária; confirmar somente main e proteção preservada.
+- [Plano, orçamento, escopo e recuperação](08_runtime/main-consolidation-20261103.md).
+
+# PUBLICATION-20261102 — entrega documental preparada
+
+- status: READY_FOR_NEXT_STEP da publicação solicitada pelo usuário; implementação global e produção não concluídas.
+- last_completed_action: relatórios/evidências Open-ClaudeCode e folhas CI003 desta sessão reconciliados em branch isolada baseadaa2f345a3; patches de código continuam evidência, sem alterar aplicação.
+- next_action: concluir commit e push autorizado da branch `codex/openclaude-runtime-evidence-20261102`; confirmar SHA remoto e registrar resultado no GBrain.
+- [Escopo, reconciliação e limites](04_audit/evidence/SEQUENTIAL-BUILD-CODEX-20261101/publication-20261102/README.md). CI003/F01/produção continuam sob seus gates.
+
 # 29/10/2026 — terceira onda AUD0625
 
 - Branch `claude/aud0625-wave3`, local e sem push, sobre `claude/aud0625-wave2` @ `8f511551`, já com a `main` (squash do #31, `bee31e75`) via `3d6da1b6`. Depende do merge do #32 e da onda 2 (PR da onda 2 abre depois do merge do #32). Produção `NO_GO`.

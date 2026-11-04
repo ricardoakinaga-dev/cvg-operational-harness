@@ -1,0 +1,74 @@
+REVISE
+
+Task: CODEX-INCORPORATION:CLI-CONTRACT-0310. Independent, nonauthor technical SPEC review. This recovery returns findings from the existing review; no new audit round was started.
+
+References:
+S = docs/02_spec/0310_cvg_operational_cli.md; line numbers match its frozen copy under docs/04_audit/evidence/CODEX-INCORPORATION-20261101/cli-contract/spec-freeze-r1/.
+I = docs/04_audit/evidence/CODEX-INCORPORATION-20261101/cli-contract/inputs/.
+N = docs/04_audit/evidence/CODEX100-EXEC-20261017/g04/full-native-spec/contracts/native-data.md.
+
+Mandatory findings
+
+1. P1 — Bootstrap trust contract remains unresolved.
+Paths: S:13–19,127; docs/02_spec/0239_codex_native_journey.md:38–40,97–111.
+
+“Binding already qualified by the host” does not identify the bootstrap contract supplying authenticated identity, credentials, API destination, authorized profile and durable composition. Nor does it specify the trusted evidence used to establish that the API and native/session ports address the same principal, tenant and installation. Static imports and matching manifest strings do not establish this relationship.
+
+Required correction: identify the exact trusted composition entry points and their input/output contracts, credential/destination provisioning, binding verification, resource ownership and failure behavior. Define how profile/version/digest selection remains compatible with an existing session. Keep all authority outside user configuration and preserve API case authorization. A precisely specified qualified dependency may remain a prerequisite; dependency absence alone is not this finding.
+
+2. P1 — The public grammar and JSONL contract are insufficiently closed.
+Paths: S:23–39,43–60,68–92,112–123.
+
+The command table describes operations but leaves public decisions to BUILD: exact list-filter flags and conversions, page-size flags, allowed scope of request-key and observation options, defaultProfile versus required --profile, and the source/cursor behavior of resume --follow without --execution. Result and receipt payloads are not defined as discriminated schemas. Doctor’s closed failure list is unnamed. The error object initially permits only a specified field set, then adds nativeCode without defining its complete enum or phase values.
+
+Required correction: freeze the accepted grammar and per-command request/result projections for all twelve commands, including required/optional flags, defaults, types, forbidden combinations and null/omission rules. Define safe output fields rather than passing through arbitrary backend objects. Resolve configuration defaults and alias lookup deterministically. Preserve the existing offline import barrier and redacted projection. Q01/Q02/Q11/Q12 need exact expected outputs against this contract.
+
+3. P1 — Run input validation does not close the native admission boundary.
+Paths: S:50,62,66; N:19–35; docs/02_spec/0239_codex_native_journey.md:173.
+
+The CLI permits reading up to 1 MiB, but native input permits at most 65,536 UTF-8 text bytes and rejects NUL. The SPEC does not explicitly require these native checks before creating a new thread, or freeze the exact single-text NativeTurnInput projection. The transport/read cap cannot be treated as the native text allowance.
+
+Required correction: distinguish file-read and native admission limits; specify exact conversion, empty-text/NUL behavior and local error mapping. Validate the native text domain before createThread/startTurn, without truncation or reinterpretation. Add boundary and multibyte cases to Q03/Q11.
+
+4. P1 — Session-event cursor and cancellation behavior lack a compatible port mapping.
+Paths: S:53,58,66,98–104; I/packages/sdk/src/client.ts.txt:35–48,95–100; I/packages/sdk/src/protocol.ts.txt:107–115.
+
+The captured SDK session-events interface accepts afterSequence:number and returns only events. It supplies neither the opaque cursor promised by the CLI nor an AbortSignal. S also says the CLI uses the port’s opaque cursor and does not convert an opaque cursor into a number. This is an unresolved adapter contract, not evidence that native incremental events are absent.
+
+Required correction: identify the actual qualified session-event port and specify its cursor representation, validation, source/session/tenant binding, pagination and cancellation. If adapting the sequence-based port, explicitly define that projection within the permitted host boundary; do not invent SDK methods or a durable cursor store. Define resume --follow’s selected source. Specify how pending reads and blocked stdout writes are released on timeout/signal/disconnect while preserving the last completed-write cursor and leaving the independent worker alive. Q05/Q09/Q10 must exercise the real selected ports.
+
+5. P1 — State, error and idempotency translations remain incomplete.
+Paths: S:56–62,70–92; I/2a0c17ae7/docs/02_spec/0302_par_k06_live_agent.md.txt:34–44,85–110,129–139; N:81–100,178–197.
+
+The closed command-end statuses omit WAITING_USER without mapping it. The stopping behavior on WAITING_APPROVAL is unspecified. K06 wait reports “settled” for waiting states as well as terminals, so settled:true cannot establish cancellation or executionTerminal:true. The translation of DUPLICATE receipts, terminal outcomes with UNKNOWN settlement, SDK numeric errors, session error classes and K06 refusals is incomplete.
+
+The captured API cancel implementation also requires an Idempotency-Key header of 8–200 allowed characters: apps/api/src/server.ts at 2a0c17ae7:1447–1448,5801–5817. The CLI accepts request keys of 1–120 characters and does not specify that header mapping. Unknown response codes/shapes becoming INTERNAL_ERROR also needs precedence rules after a mutation may have committed.
+
+Required correction: provide exhaustive tables mapping backend fact/error plus dispatch knowledge to CLI payload, status, exit and executionTerminal. Define approval/user-wait observation behavior and cancel --wait completion. Specify required HTTP headers and compatible key validation without claiming additional backend deduplication. Lost or malformed mutation responses must preserve uncertain outcome; observation failure after a known receipt must preserve that known receipt. Preserve unknown effects, accounting and the absence of automatic retry. Cover these distinctions in Q03/Q04/Q07/Q08/Q11.
+
+6. P1 — Canonical fork and native thread eligibility are not reconciled.
+Paths: S:50–54,104,117; I/packages/contracts/src/session-persistence.ts.txt:68–92; docs/02_spec/0239_codex_native_journey.md:103,207.
+
+SessionPersistence.fork creates a canonical v1 session with inherited prefix and lineage, returning a writer handle. That does not establish the native thread metadata required by readThread/startTurn. The exact persistence source at c8be3a516, packages/persistence/src/session-persistence.ts:524–539,585–599, inserts the v1 stream/header and returns its writer. SPEC0239 explicitly forbids inferring native adoption from a v1 session lacking its native snapshot.
+
+Consequently, the fork result’s eligibility for the CLI’s inspect/resume/run paths is undecided. The same compatibility question exists for ordinary v1 sessions returned by session list.
+
+Required correction: explicitly distinguish v1-session and native-thread eligibility and define the resulting command behavior. If native fork interoperability is required, name its separately qualified canonical dependency; do not manufacture metadata, copy checkpoint/approval authority or add ad hoc storage under this CLI gate. Specify closure of the returned fork writer and preservation of commit-unknown outcomes. Preserve canonical prefix semantics rather than rejecting every source merely because it has an open suffix. Q04/Q05/Q06 must demonstrate the declared interoperability boundary.
+
+Coverage and limits
+
+I inspected the complete frozen SPEC, source-inputs, the listed SDK/session snapshots, SPEC0239, native-data and the pinned SPEC0302, plus pertinent immutable source excerpts. All twelve commands and Q01–Q12 were considered at specification level. The offline safeguards, genuine native streaming requirement, K06 authenticated HTTP boundary and full twelve-command completion requirement are sound directions; doctor/config success cannot satisfy the scope.
+
+No tests, builds, imports, services, network calls, writes, descendants, author review comments or peer reports were used. Runtime qualification was not performed. These findings establish REVISE without asserting that declared dependencies are invalid merely because they are not yet qualified.
+
+PRE/POST integrity
+
+The completed PRE and POST checks matched. Last tool-observed POST: 2026-11-02T03:54:53Z.
+
+- Frozen manifest: a83929a98caf87240f6cc5558e733e100ec5833d941c4a9f8489e1aed2325b2d
+- Frozen and current SPEC: d79e47608c3a67974e0e48ab290e2569e73a49c366bc83d6d5fd74dc9b979f3d
+- Frozen and current source-inputs: ca4de298ebd69621d1f121134bdc45fe6d951bf97197b92d65dd7882ccefa140
+
+All file-backed source-input entries matched their recorded hashes in those checks. No drift was observed. No fresh hash check was performed during recovery; subsequent unchanged pins are Parent-reported.
+
+This technical judgment grants no claim, BUILD authority, dependency qualification, promotion or production release. SPEC preparation remains T1. After mandatory corrections and technical readiness, this new public CLI still requires exact human T3 review. Existing approval0239 is neither reopened nor expanded.

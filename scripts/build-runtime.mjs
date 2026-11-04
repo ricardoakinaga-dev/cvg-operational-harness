@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { copyRuntimeNativeAssets } from './lib/runtime-native-assets.mjs'
 
 export const RUNTIME_WORKSPACES = [
   'packages/contracts',
@@ -230,6 +231,7 @@ function main() {
   for (const workspace of RUNTIME_WORKSPACES) {
     copyDirectory(path.join(workspace, 'dist'))
   }
+  copyRuntimeNativeAssets(root, contextDir, RUNTIME_WORKSPACES)
   copyDirectory('packages/persistence/migrations')
   copyFile('scripts/runtime-image-smoke.mjs')
   copyFile('scripts/runtime-healthcheck.mjs')

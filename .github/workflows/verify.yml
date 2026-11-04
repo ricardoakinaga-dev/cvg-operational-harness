@@ -18,7 +18,7 @@ jobs:
   verify:
     name: REM21 CI bar (Node 22)
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 360
     outputs:
       manifest_sha256: ${{ steps.finalize.outputs.manifest_sha256 }}
       candidate_id: ${{ steps.finalize.outputs.candidate_id }}
@@ -252,6 +252,19 @@ jobs:
           path: ${{ runner.temp }}/cvg-ci/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           include-hidden-files: true
+          retention-days: 90
+
+      - name: Upload E2E diagnostics
+        if: ${{ always() && hashFiles('test-results/**/trace.zip') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cvg-e2e-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/
+            certification/e2e-test-report.json
+            playwright-results.xml
+          if-no-files-found: error
+          include-hidden-files: false
           retention-days: 90
 
   attest:

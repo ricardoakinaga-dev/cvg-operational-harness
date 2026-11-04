@@ -41,7 +41,7 @@ export default defineConfig({
           : [['list']],
   use: {
     baseURL: process.env.BASE_URL ?? consoleOrigin,
-    trace: 'on-first-retry',
+    trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     actionTimeout: 10000,

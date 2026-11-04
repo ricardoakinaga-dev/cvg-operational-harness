@@ -1,0 +1,51 @@
+--- own-old4e0
++++ lead-current
+@@ -86,7 +86,12 @@
+   }
+   const relative = (file) => {
+     const value = path.relative(root, file).split(path.sep).join('/')
+-    if (!value || value.startsWith('../') || path.isAbsolute(value))
++    if (
++      !value ||
++      value === '..' ||
++      value.startsWith('../') ||
++      path.isAbsolute(value)
++    )
+       throw new Error('coverage_test_outside_root')
+     return value
+   }
+@@ -179,11 +184,7 @@
+     throw new Error('coverage_profile_not_admitted')
+   }
+   const temp = fs.realpathSync(path.join(runtime, 'tmp'))
+-  if (fs.realpathSync(process.env.TMPDIR || '') !== temp) {
+-    throw new Error('coverage_profile_temp_identity_changed')
+-  }
+-  const rootsBefore = new Set(fs.readdirSync(temp))
+-  let domain
++  let domain, rootsBefore
+   const report = (event) => {
+     const record = { ...event, at: Date.now() }
+     fs.appendFileSync(
+@@ -210,6 +211,10 @@
+     name: COVERAGE_POOL_NAME,
+     createPoolWorker(options) {
+       if (!domain) {
++        if (fs.realpathSync(process.env.TMPDIR || '') !== temp) {
++          throw new Error('coverage_profile_temp_identity_changed')
++        }
++        rootsBefore = new Set(fs.readdirSync(temp))
+         domain = captureSessionBaseline()
+         report({ event: 'domain_baseline', ...domain })
+       }
+@@ -228,8 +233,8 @@
+         name: COVERAGE_POOL_NAME,
+         cacheFs: base.cacheFs,
+         on: (...args) => base.on(...args),
+-        off: (...args) => base.off(...args),
+-        send: (...args) => base.send(...args),
++        off: (...args) => { if (attempted) base.off(...args) },
++        send: (...args) => { if (attempted) base.send(...args) },
+         deserialize: (...args) => base.deserialize(...args),
+         async start() {
+           if (!selected) await barrier.beforeComplement()

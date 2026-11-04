@@ -1,0 +1,86 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
+
+const root = import.meta.dirname
+const require = createRequire(import.meta.url)
+const asset = './packages/harness/native/runtime/composition-probe/opaque.node'
+const originalDlopen = process.dlopen
+let loads = 0
+process.dlopen = () => {
+  loads++
+  throw new Error('COMPOSITION_NATIVE_LOAD_BLOCKED')
+}
+let harness
+try {
+  assert.throws(() => require(asset), /COMPOSITION_NATIVE_LOAD_BLOCKED/)
+  assert.equal(loads, 1)
+  assert.equal(require.cache[require.resolve(asset)], undefined)
+  loads = 0
+  assert.equal(fileURLToPath(import.meta.resolve('@cvg/harness')), path.join(root, 'packages/harness/dist/index.js'))
+  harness = await import('@cvg/harness')
+  assert.equal(loads, 0)
+} finally {
+  process.dlopen = originalDlopen
+}
+assert.equal(typeof harness.KernelHost, 'function')
+const exports = Object.keys(harness).sort()
+const deferred = () => {
+  let resolve
+  const promise = new Promise((done) => { resolve = done })
+  return { promise, resolve }
+}
+const started = deferred()
+const finish = deferred()
+const trace = []
+const host = await harness.KernelHost.boot([{
+  name: 'synthetic.composed.resources',
+  kind: 'capability',
+  apply(ctx) {
+    ctx.effect(async () => { trace.push('D1') })
+    ctx.effect(async () => {
+      trace.push('D2:start')
+      started.resolve()
+      await finish.promise
+      trace.push('D2:end')
+    })
+  }
+}], [])
+const first = host.dispose()
+let second
+let secondSettled = false
+let beforeRelease
+let secondSettledBeforeRelease
+try {
+  await started.promise
+  second = host.dispose().then((value) => { secondSettled = true; return value })
+  await new Promise((done) => setImmediate(done))
+  beforeRelease = [...trace]
+  secondSettledBeforeRelease = secondSettled
+} finally {
+  // Always release the synthetic barrier, including on the known-bad baseline.
+  finish.resolve()
+  await Promise.all([first, second])
+}
+const after = [...trace]
+await host.dispose()
+const report = {
+  source: 'PHYSICAL_PACKAGE_PUBLIC_EXPORT',
+  rootExports: exports,
+  beforeRelease,
+  secondSettledBeforeRelease,
+  after,
+  afterRepeatedDispose: [...trace],
+  nativeRootLoadAttempts: loads,
+  actualBinaryLoads: 0,
+  assetSha256: createHash('sha256').update(fs.readFileSync(path.join(root, asset))).digest('hex')
+}
+console.log(JSON.stringify(report))
+assert.deepEqual(beforeRelease, ['D2:start'])
+assert.equal(secondSettledBeforeRelease, false)
+assert.deepEqual(after, ['D2:start', 'D2:end', 'D1'])
+assert.deepEqual(trace, after)
+console.log('PASS_COMPOSED_KERNEL_DISPOSE_AND_NATIVE_ASSET_TRANSPORT')

@@ -1,0 +1,276 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { ForksPoolWorker } from 'vitest/node'
+import {
+  assertSessionQuiescent,
+  captureSessionBaseline
+} from './coverage-process-domain.mjs'
+
+export const SELECTED_COVERAGE_FILES = Object.freeze([
+  'tests/b6-0252-annexb-block-function.test.js',
+  'tests/b6-0236-semantic-engine.test.js',
+  'tests/b6-0240-exact-metadata.test.js'
+])
+export const COVERAGE_POOL_NAME = 'cvg-b6-guarded-forks-v1'
+export const SELECTED_PROJECT = 'cvg-b6-selected'
+export const SERIAL_PROJECT = 'cvg-serial-complement'
+
+export function assertCoverageInventory(original, grouped) {
+  const expected = new Set(original)
+  const actual = new Set(grouped.map((entry) => entry.file))
+  if (
+    expected.size !== original.length ||
+    actual.size !== grouped.length ||
+    expected.size !== actual.size ||
+    [...expected].some((file) => !actual.has(file))
+  ) {
+    throw new Error('coverage_test_inventory_changed')
+  }
+  for (const entry of grouped) {
+    const project = SELECTED_COVERAGE_FILES.includes(entry.file)
+      ? SELECTED_PROJECT
+      : SERIAL_PROJECT
+    if (entry.project !== project)
+      throw new Error('coverage_test_partition_changed')
+  }
+  if (SELECTED_COVERAGE_FILES.some((file) => !actual.has(file))) {
+    throw new Error('coverage_selected_file_missing')
+  }
+  return {
+    originalFiles: expected.size,
+    selectedFiles: SELECTED_COVERAGE_FILES.length,
+    complementFiles: actual.size - SELECTED_COVERAGE_FILES.length
+  }
+}
+
+// Public createVitest/glob APIs permit admission before start(), globalSetup,
+// worker creation, collection, or test-module imports. CLI filters never arrive.
+export async function admitCoverageContext(context, root) {
+  if (context.version !== '4.1.12' || context.projects.length !== 2) {
+    throw new Error('coverage_profile_version_or_projects_changed')
+  }
+  const named = new Map(
+    context.projects.map((project) => [project.name, project])
+  )
+  if (
+    named.size !== 2 ||
+    !named.has(SELECTED_PROJECT) ||
+    !named.has(SERIAL_PROJECT)
+  ) {
+    throw new Error('coverage_profile_project_names_changed')
+  }
+  for (const project of context.projects) {
+    const config = project.config
+    const selected = project.name === SELECTED_PROJECT
+    if (
+      config.pool !== COVERAGE_POOL_NAME ||
+      config.poolRunner?.name !== COVERAGE_POOL_NAME ||
+      config.fileParallelism !== selected ||
+      config.maxWorkers !== (selected ? 2 : 1) ||
+      config.sequence.groupOrder !== (selected ? 0 : 1) ||
+      config.isolate !== true ||
+      config.testTimeout !== context.config.testTimeout ||
+      config.environment !== context.config.environment ||
+      config.browser?.enabled ||
+      config.globalSetup?.length ||
+      config.setupFiles?.length
+    ) {
+      throw new Error('coverage_effective_profile_not_admitted')
+    }
+  }
+  if (
+    !context.config.coverage?.enabled ||
+    context.config.coverage.provider !== 'v8'
+  ) {
+    throw new Error('coverage_provider_changed')
+  }
+  const relative = (file) => {
+    const value = path.relative(root, file).split(path.sep).join('/')
+    if (
+      !value ||
+      value === '..' ||
+      value.startsWith('../') ||
+      path.isAbsolute(value)
+    )
+      throw new Error('coverage_test_outside_root')
+    return value
+  }
+  const baseline = await context.getRootProject().globTestFiles()
+  const grouped = await context.globTestSpecifications()
+  return assertCoverageInventory(
+    baseline.testFiles.map(relative),
+    grouped.map((spec) => ({
+      file: relative(spec.moduleId),
+      project: spec.project.name
+    }))
+  )
+}
+
+function deferred() {
+  let resolve, reject
+  const promise = new Promise((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  promise.catch(() => {})
+  return { promise, resolve, reject }
+}
+
+// Completion promises exist before the scheduler calls stop(): task resolution
+// alone does not establish that the worker has even begun terminating.
+export function createCoverageBarrier({
+  expectedWorkers,
+  assertQuiescent,
+  report
+}) {
+  const states = []
+  const failure = deferred()
+  let fault, admission
+  const fail = (error) => {
+    fault ||=
+      error instanceof Error ? error : new Error('coverage_worker_failed')
+    failure.reject(fault)
+    report({ event: 'failure', reason: fault.message })
+  }
+  const assertHealthy = () => {
+    if (fault) throw fault
+  }
+  return {
+    fail,
+    assertHealthy,
+    register() {
+      assertHealthy()
+      if (admission || states.length >= expectedWorkers) {
+        const error = new Error('coverage_selected_worker_inventory_changed')
+        fail(error)
+        throw error
+      }
+      const state = { started: false, stopped: deferred() }
+      states.push(state)
+      return state
+    },
+    async beforeComplement() {
+      assertHealthy()
+      if (!admission) {
+        admission = (async () => {
+          if (
+            states.length !== expectedWorkers ||
+            states.some((state) => !state.started)
+          ) {
+            throw new Error('coverage_selected_worker_inventory_incomplete')
+          }
+          await Promise.race([
+            Promise.all(states.map((state) => state.stopped.promise)),
+            failure.promise
+          ])
+          assertHealthy()
+          await assertQuiescent()
+          assertHealthy()
+          report({ event: 'selected_group_quiescent', workers: states.length })
+        })().catch((error) => {
+          fail(error)
+          throw error
+        })
+      }
+      await admission
+      assertHealthy()
+    }
+  }
+}
+
+export function createCoverageGuardedPool() {
+  const runtime = process.env.CVG_COVERAGE_RUNTIME
+  if (!runtime || process.env.CVG_COVERAGE_OWNER_PID !== String(process.pid)) {
+    throw new Error('coverage_profile_not_admitted')
+  }
+  const temp = fs.realpathSync(path.join(runtime, 'tmp'))
+  if (fs.realpathSync(process.env.TMPDIR || '') !== temp) {
+    throw new Error('coverage_profile_temp_identity_changed')
+  }
+  const rootsBefore = new Set(fs.readdirSync(temp))
+  let domain
+  const report = (event) => {
+    const record = { ...event, at: Date.now() }
+    fs.appendFileSync(
+      path.join(runtime, 'events.jsonl'),
+      JSON.stringify(record) + '\n',
+      { mode: 0o600 }
+    )
+  }
+  const barrier = createCoverageBarrier({
+    expectedWorkers: SELECTED_COVERAGE_FILES.length,
+    report,
+    assertQuiescent: async () => {
+      for (let sample = 0; sample < 2; sample++) {
+        const members = assertSessionQuiescent(domain.owner, domain.baseline)
+        report({ event: 'boundary_observation', members })
+        if (fs.readdirSync(temp).some((entry) => !rootsBefore.has(entry))) {
+          throw new Error('coverage_selected_fixture_root_residue')
+        }
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+    }
+  })
+  return {
+    name: COVERAGE_POOL_NAME,
+    createPoolWorker(options) {
+      if (!domain) {
+        domain = captureSessionBaseline()
+        report({ event: 'domain_baseline', ...domain })
+      }
+      const selected = options.project.name === SELECTED_PROJECT
+      if (!selected && options.project.name !== SERIAL_PROJECT) {
+        throw new Error('coverage_unexpected_project')
+      }
+      const state = selected
+        ? barrier.register()
+        : { started: false, stopped: deferred() }
+      const base = new ForksPoolWorker(options)
+      let stopPromise,
+        stopping = false,
+        attempted = false
+      return {
+        name: COVERAGE_POOL_NAME,
+        cacheFs: base.cacheFs,
+        on: (...args) => base.on(...args),
+        off: (...args) => base.off(...args),
+        send: (...args) => base.send(...args),
+        deserialize: (...args) => base.deserialize(...args),
+        async start() {
+          if (!selected) await barrier.beforeComplement()
+          barrier.assertHealthy()
+          attempted = true
+          try {
+            await base.start()
+            state.started = true
+            base.on('error', () =>
+              barrier.fail(new Error('coverage_pool_worker_error'))
+            )
+            base.on('exit', () => {
+              if (!stopping)
+                barrier.fail(new Error('coverage_pool_worker_unexpected_exit'))
+            })
+            report({ event: 'worker_started', project: options.project.name })
+          } catch (error) {
+            barrier.fail(error)
+            throw error
+          }
+        },
+        stop() {
+          if (stopPromise) return stopPromise
+          stopping = true
+          stopPromise = (async () => {
+            if (attempted) await base.stop()
+            state.stopped.resolve()
+            report({ event: 'worker_stopped', project: options.project.name })
+          })().catch((error) => {
+            barrier.fail(error)
+            state.stopped.reject(error)
+            throw error
+          })
+          return stopPromise
+        }
+      }
+    }
+  }
+}

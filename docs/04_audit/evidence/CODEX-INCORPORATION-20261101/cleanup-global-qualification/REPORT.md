@@ -1,0 +1,9 @@
+# Campanha da fonte4f86 encerrada por substituição
+
+Estado `ABORTED_SUPERSEDED_SOURCE_NOT_CERTIFIED`. A campanha nativa da fonte `4f86d71a4b5184e3d54a2a17e5cf5c51bd23d993` concluiu formatação, typecheck, lint, build e unitários. O [JSON verificado](unit-current-verified.json) contém 10.487 testes aprovados em690 arquivos, sem falhas ou pendências; o gate unitário durou3.170,905s. Os caminhos e os casos vinculam esse resultado à candidata executada, incluindo os 16 testes originais do gateway e os 37 de cleanup. Não incluem os três testes posteriores da correção.
+
+Durante a campanha, um consumidor dos pacotes reais demonstrou uma [divergência de KR03](known-external-regression.json). A fonte sucessora `5be0ca7078ceda425a7335eca3c36243dd146ee1` corrige o defeito e passou pela revisão CODE. A campanha anterior foi encerrada deliberadamente para qualificar a fonte corrigida. Cobertura em andamento e demais gates não concluídos permanecem interrompidos, sem PASS ou certificado. Não houve falha de observação usada como motivo para reiniciar a mesma fonte.
+
+O [recibo terminal](supersede-final.json) confirma exit−15, sem timeout, após3.930,188s; pins de fonte iguais; todos os produtores e o controlador encerrados; container próprio removido após zero clientes; portas32775/35732/45732 livres e credencial temporária removida. A primeira conferência auxiliar esperava capitalização diferente na mensagem Docker de objeto ausente; o diagnóstico real e a correção de leitura estão na [errata](supersede-verifier-erratum.json). Nenhuma qualificação da aplicação foi repetida por isso.
+
+Fontes e brutos foram conservados. A sessão85574 é terminal e não deve ser retomada. A [campanha sucessora](../request-snapshot-global-qualification/task.json) tem fonte, candidata e recursos próprios; nenhum certificado ou gate global completo foi transferido automaticamente.

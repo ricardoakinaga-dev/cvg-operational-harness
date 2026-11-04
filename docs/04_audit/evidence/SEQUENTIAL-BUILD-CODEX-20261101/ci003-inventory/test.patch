@@ -1,0 +1,479 @@
+diff --git a/tests/coverage-project-inventory.test.js b/tests/coverage-project-inventory.test.js
+new file mode 100644
+index 000000000..4cef6a6a3
+--- /dev/null
++++ b/tests/coverage-project-inventory.test.js
+@@ -0,0 +1,473 @@
++import path from 'node:path'
++import { describe, expect, it, vi } from 'vitest'
++import {
++  admitCoverageContext,
++  assertCoverageInventory,
++  COVERAGE_POOL_NAME,
++  SELECTED_COVERAGE_FILES,
++  SELECTED_PROJECT,
++  SERIAL_PROJECT
++} from '../scripts/lib/coverage-guarded-pool.mjs'
++
++const EXPECTED_SELECTED = Object.freeze([
++  'tests/b6-0252-annexb-block-function.test.js',
++  'tests/b6-0236-semantic-engine.test.js',
++  'tests/b6-0240-exact-metadata.test.js'
++])
++const ROOT = path.resolve('/__cvg_inventory_fixture__/workspace')
++const extras = [
++  'tests/core-fixture.test.js',
++  'packages/example/synthetic.test.ts'
++]
++const inventory = (additional = extras) => [...EXPECTED_SELECTED, ...additional]
++const partition = (files) =>
++  files.map((file) => ({
++    file,
++    project: EXPECTED_SELECTED.includes(file)
++      ? SELECTED_PROJECT
++      : SERIAL_PROJECT
++  }))
++
++function freeze(value) {
++  if (value && typeof value === 'object') {
++    for (const item of Object.values(value)) freeze(item)
++    Object.freeze(value)
++  }
++  return value
++}
++
++function makeContext({
++  files = inventory(),
++  specs,
++  configure = () => {}
++} = {}) {
++  const specifications =
++    specs ??
++    partition(files).map((entry) => ({
++      moduleId: path.resolve(ROOT, entry.file),
++      project: { name: entry.project }
++    }))
++  const globTestFiles = vi.fn(async () => ({
++    testFiles: files.map((file) => path.resolve(ROOT, file))
++  }))
++  const context = {
++    version: '4.1.12',
++    config: {
++      testTimeout: 15000,
++      environment: 'node',
++      coverage: { enabled: true, provider: 'v8' }
++    },
++    projects: [true, false].map((selected) => ({
++      name: selected ? SELECTED_PROJECT : SERIAL_PROJECT,
++      config: {
++        pool: COVERAGE_POOL_NAME,
++        poolRunner: { name: COVERAGE_POOL_NAME },
++        fileParallelism: selected,
++        maxWorkers: selected ? 2 : 1,
++        sequence: { groupOrder: selected ? 0 : 1 },
++        isolate: true,
++        testTimeout: 15000,
++        environment: 'node',
++        browser: { enabled: false },
++        globalSetup: [],
++        setupFiles: []
++      }
++    })),
++    getRootProject: vi.fn(() => ({ globTestFiles })),
++    globTestSpecifications: vi.fn(async () => specifications),
++    start: vi.fn(() => {
++      throw new Error('unexpected_test_start')
++    }),
++    collect: vi.fn(() => {
++      throw new Error('unexpected_test_collection')
++    }),
++    importTests: vi.fn(() => {
++      throw new Error('unexpected_test_import')
++    })
++  }
++  configure(context)
++  const inputs = freeze({
++    config: context.config,
++    projects: context.projects,
++    files,
++    specifications
++  })
++  return {
++    context: Object.freeze(context),
++    globTestFiles,
++    inputs,
++    before: JSON.stringify(inputs)
++  }
++}
++
++function expectNoExecution(fixture) {
++  expect(fixture.context.start).not.toHaveBeenCalled()
++  expect(fixture.context.collect).not.toHaveBeenCalled()
++  expect(fixture.context.importTests).not.toHaveBeenCalled()
++  expect(JSON.stringify(fixture.inputs)).toBe(fixture.before)
++}
++
++describe('CI003 exact coverage inventory', () => {
++  it('fixes the selected whitelist and distinguishes the two projects', () => {
++    expect(SELECTED_COVERAGE_FILES).toEqual(EXPECTED_SELECTED)
++    expect(Object.isFrozen(SELECTED_COVERAGE_FILES)).toBe(true)
++    expect(SELECTED_PROJECT).toBe('cvg-b6-selected')
++    expect(SERIAL_PROJECT).toBe('cvg-serial-complement')
++    expect(COVERAGE_POOL_NAME).toBe('cvg-b6-guarded-forks-v1')
++  })
++
++  it.each([
++    ['selected only', []],
++    ['core', extras],
++    ['all', [...extras, 'products/synthetic/src/consumer.test.ts']],
++    ['additional future files', [...extras, 'tests/another-fixture.test.js']]
++  ])('preserves the complete %s inventory', (_label, additional) => {
++    const original = freeze(inventory(additional))
++    const grouped = freeze(partition(original).reverse())
++    const before = JSON.stringify({ original, grouped })
++    expect(assertCoverageInventory(original, grouped)).toEqual({
++      originalFiles: original.length,
++      selectedFiles: 3,
++      complementFiles: additional.length
++    })
++    expect(JSON.stringify({ original, grouped })).toBe(before)
++  })
++
++  it.each([
++    ['omitted grouped file', (files, grouped) => [files, grouped.slice(1)]],
++    ['duplicate original', (files, grouped) => [[...files, files[0]], grouped]],
++    [
++      'duplicate grouped',
++      (files, grouped) => [files, [...grouped, grouped[0]]]
++    ],
++    [
++      'substitution at same cardinality',
++      (files, grouped) => [
++        files,
++        [
++          ...grouped.slice(1),
++          { file: 'tests/substituted.test.js', project: SERIAL_PROJECT }
++        ]
++      ]
++    ],
++    [
++      'unexpected grouped file',
++      (files, grouped) => [
++        files,
++        [
++          ...grouped,
++          { file: 'tests/unexpected.test.js', project: SERIAL_PROJECT }
++        ]
++      ]
++    ]
++  ])('rejects %s without changing caller data', (_label, change) => {
++    const [original, grouped] = change(inventory(), partition(inventory()))
++    freeze(original)
++    freeze(grouped)
++    const before = JSON.stringify({ original, grouped })
++    expect(() => assertCoverageInventory(original, grouped)).toThrow(
++      'coverage_test_inventory_changed'
++    )
++    expect(JSON.stringify({ original, grouped })).toBe(before)
++  })
++
++  it.each(EXPECTED_SELECTED)(
++    'requires selected file %s even in both inputs',
++    (missing) => {
++      const original = inventory().filter((file) => file !== missing)
++      expect(() =>
++        assertCoverageInventory(original, partition(original))
++      ).toThrow('coverage_selected_file_missing')
++    }
++  )
++
++  it.each([
++    ['selected in complement', 0, SERIAL_PROJECT],
++    ['complement in selected', 3, SELECTED_PROJECT],
++    ['unknown project', 0, 'unqualified-project']
++  ])('rejects partition %s', (_label, index, project) => {
++    const original = inventory()
++    const grouped = partition(original)
++    grouped[index] = { ...grouped[index], project }
++    expect(() => assertCoverageInventory(original, grouped)).toThrow(
++      'coverage_test_partition_changed'
++    )
++  })
++
++  it('rejects an empty inventory rather than claiming selected coverage', () => {
++    expect(() => assertCoverageInventory([], [])).toThrow(
++      'coverage_selected_file_missing'
++    )
++  })
++})
++
++describe('CI003 context admission before test execution', () => {
++  it.each([
++    ['core', inventory()],
++    ['all', inventory([...extras, 'products/synthetic/src/consumer.test.ts'])]
++  ])(
++    'admits the exact %s context through both public glob APIs',
++    async (_label, files) => {
++      const fixture = makeContext({ files })
++      expect(await admitCoverageContext(fixture.context, ROOT)).toEqual({
++        originalFiles: files.length,
++        selectedFiles: 3,
++        complementFiles: files.length - 3
++      })
++      expect(fixture.context.getRootProject).toHaveBeenCalledTimes(1)
++      expect(fixture.globTestFiles).toHaveBeenCalledTimes(1)
++      expect(fixture.context.globTestSpecifications).toHaveBeenCalledTimes(1)
++      expectNoExecution(fixture)
++    }
++  )
++
++  it.each([
++    [
++      'version',
++      (ctx) => {
++        ctx.version = '4.1.11'
++      },
++      'coverage_profile_version_or_projects_changed'
++    ],
++    [
++      'missing project',
++      (ctx) => {
++        ctx.projects.pop()
++      },
++      'coverage_profile_version_or_projects_changed'
++    ],
++    [
++      'extra project',
++      (ctx) => {
++        ctx.projects.push(ctx.projects[0])
++      },
++      'coverage_profile_version_or_projects_changed'
++    ],
++    [
++      'duplicate name',
++      (ctx) => {
++        ctx.projects[1].name = SELECTED_PROJECT
++      },
++      'coverage_profile_project_names_changed'
++    ],
++    [
++      'unknown name',
++      (ctx) => {
++        ctx.projects[1].name = 'other-project'
++      },
++      'coverage_profile_project_names_changed'
++    ],
++    [
++      'selected workers',
++      (ctx) => {
++        ctx.projects[0].config.maxWorkers = 3
++      }
++    ],
++    [
++      'serial workers',
++      (ctx) => {
++        ctx.projects[1].config.maxWorkers = 2
++      }
++    ],
++    [
++      'selected parallelism',
++      (ctx) => {
++        ctx.projects[0].config.fileParallelism = false
++      }
++    ],
++    [
++      'serial parallelism',
++      (ctx) => {
++        ctx.projects[1].config.fileParallelism = true
++      }
++    ],
++    [
++      'selected order',
++      (ctx) => {
++        ctx.projects[0].config.sequence.groupOrder = 1
++      }
++    ],
++    [
++      'serial order',
++      (ctx) => {
++        ctx.projects[1].config.sequence.groupOrder = 0
++      }
++    ],
++    [
++      'selected isolation',
++      (ctx) => {
++        ctx.projects[0].config.isolate = false
++      }
++    ],
++    [
++      'serial isolation',
++      (ctx) => {
++        ctx.projects[1].config.isolate = false
++      }
++    ],
++    [
++      'selected timeout',
++      (ctx) => {
++        ctx.projects[0].config.testTimeout = 15001
++      }
++    ],
++    [
++      'serial timeout',
++      (ctx) => {
++        ctx.projects[1].config.testTimeout = 15001
++      }
++    ],
++    [
++      'selected environment',
++      (ctx) => {
++        ctx.projects[0].config.environment = 'jsdom'
++      }
++    ],
++    [
++      'serial environment',
++      (ctx) => {
++        ctx.projects[1].config.environment = 'jsdom'
++      }
++    ],
++    [
++      'builtin pool',
++      (ctx) => {
++        ctx.projects[0].config.pool = 'forks'
++      }
++    ],
++    [
++      'builtin pool runner',
++      (ctx) => {
++        ctx.projects[1].config.poolRunner.name = 'forks'
++      }
++    ],
++    [
++      'missing custom runner',
++      (ctx) => {
++        delete ctx.projects[1].config.poolRunner
++      }
++    ],
++    [
++      'selected browser',
++      (ctx) => {
++        ctx.projects[0].config.browser.enabled = true
++      }
++    ],
++    [
++      'serial browser',
++      (ctx) => {
++        ctx.projects[1].config.browser.enabled = true
++      }
++    ],
++    [
++      'selected global setup',
++      (ctx) => {
++        ctx.projects[0].config.globalSetup = ['synthetic-setup.mjs']
++      }
++    ],
++    [
++      'serial global setup',
++      (ctx) => {
++        ctx.projects[1].config.globalSetup = ['synthetic-setup.mjs']
++      }
++    ],
++    [
++      'selected setup file',
++      (ctx) => {
++        ctx.projects[0].config.setupFiles = ['synthetic-setup.mjs']
++      }
++    ],
++    [
++      'serial setup file',
++      (ctx) => {
++        ctx.projects[1].config.setupFiles = ['synthetic-setup.mjs']
++      }
++    ],
++    [
++      'coverage disabled',
++      (ctx) => {
++        ctx.config.coverage.enabled = false
++      },
++      'coverage_provider_changed'
++    ],
++    [
++      'coverage missing',
++      (ctx) => {
++        delete ctx.config.coverage
++      },
++      'coverage_provider_changed'
++    ],
++    [
++      'coverage provider',
++      (ctx) => {
++        ctx.config.coverage.provider = 'istanbul'
++      },
++      'coverage_provider_changed'
++    ]
++  ])(
++    'refuses %s before any glob or execution',
++    async (_label, configure, reason) => {
++      const fixture = makeContext({ configure })
++      await expect(admitCoverageContext(fixture.context, ROOT)).rejects.toThrow(
++        reason ?? 'coverage_effective_profile_not_admitted'
++      )
++      expect(fixture.context.getRootProject).not.toHaveBeenCalled()
++      expect(fixture.globTestFiles).not.toHaveBeenCalled()
++      expect(fixture.context.globTestSpecifications).not.toHaveBeenCalled()
++      expectNoExecution(fixture)
++    }
++  )
++
++  it.each(
++    [
++      ['outside sibling', path.resolve(ROOT, '../other/synthetic.test.js')],
++      ['root prefix sibling', `${ROOT}-other/synthetic.test.js`],
++      ['root itself', ROOT],
++      ['bare parent directory', path.dirname(ROOT)]
++    ].flatMap(([label, outside]) => [
++      [`${label} in grouped only`, outside, false],
++      [`${label} in both inventories`, outside, true]
++    ])
++  )('refuses %s before execution', async (_label, outside, both) => {
++    const files = inventory().map((file) => path.resolve(ROOT, file))
++    const specs = partition(inventory()).map((entry) => ({
++      moduleId: path.resolve(ROOT, entry.file),
++      project: { name: entry.project }
++    }))
++    specs.push({ moduleId: outside, project: { name: SERIAL_PROJECT } })
++    if (both) files.push(outside)
++    const fixture = makeContext({ files, specs })
++    await expect(admitCoverageContext(fixture.context, ROOT)).rejects.toThrow(
++      'coverage_test_outside_root'
++    )
++    expectNoExecution(fixture)
++  })
++
++  it('rejects a grouped omission with the specific inventory reason', async () => {
++    const fixture = makeContext({
++      specs: partition(inventory())
++        .slice(1)
++        .map((entry) => ({
++          moduleId: path.resolve(ROOT, entry.file),
++          project: { name: entry.project }
++        }))
++    })
++    await expect(admitCoverageContext(fixture.context, ROOT)).rejects.toThrow(
++      'coverage_test_inventory_changed'
++    )
++    expectNoExecution(fixture)
++  })
++
++  it('propagates glob failures without attempting test execution', async () => {
++    const failure = new Error('synthetic_glob_failed')
++    const fixture = makeContext({
++      configure(ctx) {
++        ctx.globTestSpecifications.mockRejectedValueOnce(failure)
++      }
++    })
++    await expect(admitCoverageContext(fixture.context, ROOT)).rejects.toBe(
++      failure
++    )
++    expectNoExecution(fixture)
++  })
++})

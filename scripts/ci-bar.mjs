@@ -29,6 +29,7 @@ import { validateRem21010ProofReport } from './rem21-010-postgres-proof-contract
 import { validateRem21011ProofReport } from './rem21-011-observability-proof-contract.mjs'
 import { validateRem21014BrowserProofReport } from './rem21-014-browser-proof-contract.mjs'
 import { validateRuntimeImageManifest } from './runtime-image-contract.mjs'
+import { ciProcessDiagnostics } from './lib/ci-process-diagnostics.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
@@ -641,8 +642,14 @@ function runGate(id) {
     maxBuffer: 128 * 1024 * 1024,
     // certify nests the complete gate catalog; keep its parent budget bounded
     // above the observed subtotal while every child retains its own deadline.
-    timeout: id === 'certify' ? 9_000_000 : 3_600_000
+    timeout:
+      id === 'certify'
+        ? 16_200_000
+        : id === 'unit' || id === 'coverage'
+          ? 5_400_000
+          : 3_600_000
   })
+  const nativeProcess = ciProcessDiagnostics(result)
   let exitCode = result.status ?? 1
   const snapshotFailures = exitCode === 0 ? snapshotGateArtifacts(id, gate) : []
   const validation =
@@ -664,6 +671,9 @@ function runGate(id) {
     `node=${state.nodeVersion}`,
     `startedAt=${startedAt}`,
     `exitCode=${exitCode}`,
+    `processExitCode=${nativeProcess.processExitCode}`,
+    `processSignal=${nativeProcess.signal ?? ''}`,
+    `processError=${JSON.stringify(nativeProcess.error)}`,
     '',
     result.stdout ?? '',
     result.stderr ?? '',
@@ -684,6 +694,7 @@ function runGate(id) {
     nodeVersion: state.nodeVersion,
     runId: state.runId,
     candidateId: state.candidateId,
+    ...nativeProcess,
     ...(validation.e2eEvidence ?? {}),
     outputFailures,
     log: normalizePath(path.relative(rootArtifactDir, logPath)),

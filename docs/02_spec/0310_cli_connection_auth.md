@@ -1,0 +1,205 @@
+# SPEC0310 — proposta de conexão autenticada da CLI
+
+Task `CODEX-INCORPORATION:CLI-CONNECTION-AUTH-PROPOSAL`. **AUTHOR_DRAFT / NÃO APROVADA / NÃO IMPLEMENTADA**. Este anexo propõe o provisionamento que falta em F1; não fecha o transporte conjunto das portas nativas, F5/K06, a revisão técnica R2 ou o gate humano T3. Nenhum endpoint, token, tabela ou comando abaixo é apresentado como existente.
+
+Os doze comandos operacionais da [SPEC0310](0310_cvg_operational_cli.md) permanecem obrigatórios. A proposta acrescenta dois comandos de apoio, `auth login` e `auth logout`, porque a credencial precisa de um ciclo de vida explícito. São uma ampliação proposta da superfície pública, sujeita ao mesmo gate; não substituem os doze comandos nem tornam doctor/config online. Seu aceite também será necessário se esta alternativa for adotada.
+
+## Decisão proposta e alternativas
+
+Na fonte pinada, o login institucional usa OIDC no navegador, cookie HttpOnly e Origin nas mutações. O SDK é uma composição em processo, sem conexão remota automática. Não existe um token bearer universal para todos os hosts. Essas observações e seus oito snapshots estão no [bootstrap R2](../04_audit/evidence/CODEX-INCORPORATION-20261101/cli-contract/BOOTSTRAP-R2.md).
+
+A [comparação com o alvo9ccb](../04_audit/evidence/CODEX-INCORPORATION-20261101/cli-connection-auth/target-auth-comparison.json) encontrou sete dessas fontes byte idênticas e uma diferença material em operator-session-hook: o alvo usa `revalidation.record.identity`; a candidata posterior usa `revalidation.identity`, ligada à revisão validada do principal. É observação estática, não reprodução de falha ou qualificação dessa correção. A ativação desta proposta exige que o owner disponha e qualifique a identidade admitida/revalidação no alvo; não se reutiliza o registro mutável como prova de autoridade nem se porta a correção silenciosamente.
+
+Proponho que o próprio serviço CVG emita uma credencial curta e opaca para a CLI após consentimento explícito de um operador autenticado pelo OIDC existente. A emissão usa a interação de device authorization para atender o terminal sem callback local ou navegador embutido. O CVG seria o emissor dessa credencial para seus próprios recursos; não se presume que o IdP institucional ofereça device grant. OIDC continua sendo a fonte de identidade humana.
+
+Copiar cookies HttpOnly do navegador exigiria um mecanismo de extração não existente e misturaria credenciais de superfícies diferentes. Reutilizar o HMAC legacy no perfil OIDC contradiz a fronteira atual. Instanciar um SDK de memória não alcança o serviço durável. Authorization code com PKCE e callback local continua sendo alternativa legítima, mas exige outro registro/redirect e lifecycle de listener; não é simultaneamente implementado nesta proposta. Não há refresh token ou renovação silenciosa.
+
+Referências primárias: [RFC8628](https://www.rfc-editor.org/rfc/rfc8628), fluxo e tratamento de polling; [RFC7009](https://www.rfc-editor.org/rfc/rfc7009), revogação. Os valores, armazenamento, composição e limites CVG a seguir são decisões propostas do projeto, não exigências desses documentos. A escolha ainda precisa de revisão de segurança/contrato e aprovação humana.
+
+```mermaid
+sequenceDiagram
+    participant C as CLI proposta
+    participant S as Serviço CVG
+    participant B as Navegador do operador
+    participant I as IdP institucional
+    C->>S: Novo pedido de pareamento sem identidade
+    S-->>C: Código público e segredo de polling
+    C-->>B: Usuário abre URL e informa código público
+    B->>I: Login institucional existente
+    I-->>B: Retorno do fluxo OIDC
+    B->>S: Cookie válido, Origin e consentimento explícito
+    C->>S: Poll com segredo do pedido
+    S-->>C: Nova credencial CVG curta e opaca
+    C->>C: Publicação no arquivo privado
+    C->>S: Operações pela composição autenticada ainda a fechar
+```
+
+## Fronteiras e invariantes
+
+1. A CLI recebe apenas um token para o serviço indicado pelo usuário. Não recebe cookie OIDC, segredo do IdP, tenant, actor, grants ou capability handle fornecidos livremente pelo cliente.
+2. O serviço deriva a identidade do consentimento OIDC. A cada operação resolve revogação, tenant, assignment e autorização atuais; o token não congela privilégios que depois foram retirados.
+3. O token identifica uma instalação/ambiente do serviço no store do servidor. Outro serviço, ambiente ou banco não aceita esse token por igualdade de IDs ou digests enviados pela CLI.
+4. A composição que autentica precisa fornecer os ports reais de sessão, client0239 e K06 ao mesmo caller. O adaptador não acessa stores diretamente, não cria executor próprio e não torna essa composição disponível apenas por anunciar capabilities.
+5. Não há promoção para privilégio administrativo, decisão de approval, dado clínico ou efeito sensível pelo login da CLI. O kernel conserva seus controles e approvals específicos.
+6. Comandos offline, help e version escolhem seu ramo antes de importar bootstrap ou ler credenciais. A autenticação nova fica em rotas próprias e não altera a aceitação de cookies/HMAC nas rotas existentes.
+
+## Origem e transporte
+
+`auth login --service-origin <origin>` recebe uma origem HTTPS absoluta, sem userinfo, path além de `/`, query ou fragmento. A serialização canônica de `URL.origin` é armazenada. Porta explícita deve ser1–65535. Certificado e hostname são validados pelo trust store do sistema; não haverá `--insecure`, CA fornecida por payload, redirect automático, fallback de origem ou import de módulo configurável. Origem de intranet escolhida explicitamente pelo operador é um destino de cliente, não URL escolhida pelo modelo.
+
+O perfil de produção não aceita HTTP, inclusive loopback. Uma eventual fixture HTTP de teste precisa de composição sintética separada, não de uma flag pública que altere esse contrato. Nenhum browser ou processo é aberto automaticamente: a CLI mostra a URL de verificação e o código público; o usuário acessa a URL no navegador que já usa o login institucional.
+
+As requisições de cliente para emissão/polling/revogação usam `application/x-www-form-urlencoded`, corpo máximo8192bytes e campos fechados. Nesses endpoints, JSON, campos repetidos, UTF8 inválido, campos extras e valores acima dos limites são recusados. O consentimento do navegador usa JSON fechado, também com cap8192bytes, cookie OIDC e Origin. Respostas têm `Cache-Control: no-store` e `Pragma: no-cache`; proxy e logs não capturam seus corpos. Erros não devolvem token, device code, user code inválido, exceção ou identidade de outro operador.
+
+Cada request de cliente tem observação máxima10s e resposta máxima16384bytes, com leitor cancelável e fechamento da promessa original. O prazo total de enrollment é600s, sem aumento por polling. Timeout não indica que emissão/revogação deixou de ocorrer. Nenhum timeout gera novo enrollment ou reenvio automático de mutação operacional.
+
+## Wire de autenticação proposto
+
+Todos os caminhos desta tabela são novos. O único client público registrado é `client_id=cvg-cli-v1`; o único scope aceito é `harness_cli`. Isso identifica a superfície, não concede acesso a todos os casos.
+
+| Operação                                  | Request fechado                                                                                      | Resposta e autoridade                                                                                                                                                                                           |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/cli/oauth/device_authorization` | `client_id`, `scope=harness_cli`                                                                     | HTTP200 com `device_code`, `user_code`, `verification_uri`, `expires_in:600`, `interval:5`. Não aceita identidade/tenant. Sem cookie ou autorização de recurso.                                                 |
+| `GET /cli/authorize`                      | Sem query de credencial                                                                              | Página do próprio serviço com login institucional. Formulário recebe o user code; não concede acesso por GET.                                                                                                   |
+| `POST /v1/cli/oauth/authorize`            | Cookie OIDC, Origin único igual ao configurado; JSON fechado `{userCode,decision:'approve'\|'deny'}` | HTTP204 após transição autorizada. CSRF e sessão seguem o contrato institucional. O principal vem da sessão, nunca do corpo.                                                                                    |
+| `POST /v1/cli/oauth/token`                | `client_id`, `grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code`                | HTTP200 com `{access_token,token_type:'Bearer',expires_in:900,scope:'harness_cli',credential_id,expires_at}` somente após consentimento. Os dois últimos campos são extensões CVG propostas. Sem refresh token. |
+| `POST /v1/cli/oauth/revoke`               | `client_id`, `token`, `token_type_hint=access_token`                                                 | HTTP200 sem corpo para token válido revogado, expirado ou desconhecido. A indistinguibilidade não atesta revogação se a resposta foi perdida.                                                                   |
+
+`device_code` tem32bytes aleatórios criptográficos em base64url sem padding,43caracteres. `user_code` tem oito símbolos uniformes do alfabeto `ABCDEFGHIJKLMNOPQRSTUVWXYZ234567`, exibidos como `AAAA-BBBB`; entrada deve corresponder exatamente a esse formato. A URI de verificação é a origem solicitada mais `/cli/authorize`, sem segredo/query. Não se publica `device_code` em stdout, URL, erro ou auditoria.
+
+O access token é `cvg_cli1_` seguido de32bytes aleatórios em base64url sem padding. A validade é900s a partir da emissão pelo relógio autoritativo do servidor. O servidor armazena SHA256 da representação ASCII completa; não persiste o segredo em claro, não o coloca em claims de sessão e não o devolve outra vez. Não há assinatura JWT ou trust em payload decodificado pela CLI.
+
+No endpoint token, HTTP400 usa exclusivamente `{error:<enum>}`. O enum é `authorization_pending`, `slow_down`, `access_denied`, `expired_token`, `invalid_grant`, `invalid_client`, `invalid_request`, `unsupported_grant_type` ou `invalid_scope`. PENDING produz authorization_pending; DENIED, access_denied; EXPIRED, expired_token; DELIVERED ou digest desconhecido, invalid_grant. Polling começa após5s; `slow_down` aumenta o intervalo vigente em5s para os requests posteriores. A CLI faz apenas um poll por vez. Falha de conexão de polling dobra o intervalo, limitado ao prazo total; não cria outro pedido. Depois de access_denied, expired_token, invalid_grant ou erro de schema/transporte persistente até o prazo, encerra e aguarda nova ação explícita.
+
+Nos endpoints de cliente, media type incorreto usa HTTP415/invalid_request, cap excedido HTTP413/invalid_request e formato/campos inválidos HTTP400/invalid_request. Recusa pelo rate limiter usa HTTP429 com `{error:'slow_down'}` e `Retry-After:60`; capacidade/store indisponível usa HTTP503 com `{error:'temporarily_unavailable'}` e `Retry-After:60`. Esses dois casos são recusa anterior à emissão; não são polling bem-sucedido nem login. A CLI não repete o pedido inicial automaticamente. O formulário de consentimento usa os erros ApiEnvelope existentes401/403/409/429/500/503 com códigos fechados do host; nenhum erro de OAuth é confundido com sucesso dessa mutação.
+
+Os endpoints públicos de emissão/polling não usam cookies. Uma chamada que tentar misturar cookie/HMAC/bearer nesses endpoints é recusada como `invalid_request`. O endpoint de consentimento usa somente o perfil OIDC com seu Origin e sua autorização de operador. Rotas de recurso da CLI, ainda a especificar integralmente, usarão apenas o token novo, rejeitando mistura de credenciais e preservando o perfil das rotas antigas.
+
+## Limites de abuso e persistência
+
+Limites propostos por instalação:20pedidos de enrollment por minuto por IP de entrada validado; cinco pedidos pendentes por identidade de cliente/IP; cem requests de emissão por minuto globalmente. O limitador usa os buckets persistidos compartilhados e a política canônica de IP/proxy, com atomicidade entre processos e contagem antes do lookup caro. Não confiar em X-Forwarded-For arbitrário. Cap global durável de1000enrollments não expirados, reservado na mesma transação de criação; excesso retorna503/Retry-After60 sem criar registro.
+
+Para polling, contar antes do lookup do device code até240requests/minuto por IP e12000/minuto por instalação; o intervalo individual de cada pedido continua sendo verificado depois. Digest inexistente também consome esses buckets. Revogação admite60requests/minuto por IP e1000/minuto por instalação, antes do lookup do token; token inexistente não permite tráfego ilimitado ao store. Esses valores são propostas de capacidade, não promessa de disponibilidade para toda distribuição de usuários/NAT. Rate-limit e recusa de capacidade não criam registros de credencial.
+
+O formulário de consentimento admite cinco tentativas de user code por minuto por operador autenticado e vinte por IP. Não informa se o código pertence a outro operador; só mostra o pedido depois de código válido. A página apresenta o nome fixo `CVG CLI`, origem e prazo e exige botão de consentimento explícito. Não admite texto livre do cliente como nome confiável da aplicação. A pessoa pode negar. A página orienta a aprovar somente o código do enrollment recém iniciado pela própria pessoa; o nome fixo não é atestação física de terminal, proteção contra phishing ou prova da origem de uma mensagem recebida. Limites não usam dados reais nas fixtures.
+
+Polls usam o digest de device code para encontrar um único pedido. O intervalo é persistido e verificado atomicamente antes de emitir; duas instâncias da API não multiplicam a frequência nem concedem dois tokens. O projeto precisa reconciliar esses buckets com o owner do rate limiter; não se implementa um bypass local de processo nem se concede a SPEC0628 por este anexo.
+
+O store novo, com migrations T3 ainda não reservadas, mantém entidades lógicas separadas:
+
+- Pedido: ID interno, hashes de device/user code, client fixo, instalação, criação, expiração, próximo poll, intervalo, estado e principal autorizado somente depois do consentimento.
+- Credencial: ID público não secreto, digest do token, principal canônico, sessão institucional de origem, instalação, criação, expiração, revogação e motivo enumerado.
+
+O estado inicial é `PENDING`; as transições são `PENDING -> APPROVED|DENIED|EXPIRED`, `APPROVED -> DELIVERED|DENIED|EXPIRED`. Não se revive um estado terminal. Aprovação/negação relêem a validade da sessão, o estado e o prazo dentro da transação, pelo relógio do banco; disputas retornam conflito sem substituir principal. O próprio operador que aprovou pode negar/revogar antes ou depois da entrega por sua sessão institucional. Outro operador não toma posse de pedido já aprovado. Limite proposto de cinco credenciais ativas por principal/instalação, reservado na emissão; excesso recusa sem revogar automaticamente uma conexão existente.
+
+O token é gerado após o poll encontrar APPROVED. Uma transação com CAS consome o pedido e insere o digest/credencial; o segredo só é devolvido depois do COMMIT confirmado. Duas polls não recebem duas credenciais. COMMIT incerto ou resposta perdida não provoca reemissão: a CLI informa enrollment não confirmado e o operador pode revogar no serviço a credencial daquele pedido. Um poll posterior de DELIVERED responde invalid_grant. O serviço não reconstrói o segredo a partir do digest.
+
+A validade da sessão institucional e a revogação são revalidadas em cada request protegido. Logout/revogação institucional bloqueia as credenciais derivadas. Tenant/instalação do consentimento não são retargetados quando o operador muda de contexto: uma incompatibilidade invalida a credencial, em vez de mover suas permissões para outro tenant. Falha do store de autoridade ou revogação recusa antes de dispatch; não usa cache positivo stale. Revogar impede novas admissões e leituras; não cancela ou reverte uma execução durável já admitida. Cancelamento de execução continua sendo uma operação separada, com suas permissões e unknown_effect. O prazo900s é teto de validade, não garantia de disponibilidade até esse instante; expiração da sessão institucional pode impedir uso antes.
+
+HTTP200 da revogação só é produzido depois de confirmar a transação que revoga a credencial conhecida ou confirma sua ausência/expiração. COMMIT perdido responde indisponibilidade quando ainda possível e não é convertido em confirmação. A resposta indistinta para token inexistente não autoriza assumir que uma mutação desconhecida foi concluída.
+
+Registros de pedido/credencial são dados de segurança e não logs de conteúdo. Expirados permanecem para reconciliação por até24h, depois um purge técnico idempotente remove os hashes/associações. Auditoria retém somente ID opaco, códigos enumerados e contagens, sem segredos, conforme a política institucional vigente; retenção institucional ainda não qualificada permanece gate, não um prazo inventado para conteúdo clínico.
+
+## Credencial local e lifecycle dos comandos de apoio
+
+`auth login --service-origin <origin>` e `auth logout` são os únicos comandos adicionais propostos. Login não aceita actor, tenant, senha, segredo, scope, callback, módulo, comando shell ou bearer no argv. Logout não aceita origem alternativa: usa a conexão instalada. Nenhum comando lê token de env, prompt, config operacional, stdin ou JSONL de outro comando. A configuração declarativa dos doze comandos mantém seu schema offline atual.
+
+No perfil POSIX proposto, a conexão é um arquivo único `cvg/connection-v1.json` sob XDG_CONFIG_HOME absoluto ou, se ausente, `.config` do home do usuário. O diretório final é de propriedade do UID efetivo e modo0700; o arquivo é regular, proprietário igual ao UID, modo0600, no máximo8192bytes. Rejeitar links simbólicos e componentes existentes graváveis por terceiros. O perfil não promete isolamento contra root ou outro processo já comprometido do mesmo UID. Plataformas sem essas garantias precisam de contrato de armazenamento próprio antes de aceitar login; doctor/config continuam offline.
+
+Schema local fechado: `{formatVersion:1,serviceOrigin,credentialId,accessToken,expiresAt}`. `credentialId` é opaco e não secreto, UUID v4, vindo de `credential_id`; `expiresAt` é ISO8601 UTC canônico, vindo de `expires_at`, informativo. O servidor permanece autoridade de tempo/validade. Esses dois campos são extensões CVG propostas da resposta token desta seção, não campos já existentes de um backend atual. `expires_in` permanece900; a CLI não usa seu relógio para ampliar a validade do servidor.
+
+Login recusa substituir uma conexão existente. Depois de token recebido, cria arquivo temporário exclusivo no diretório privado, escreve todos os bytes e fsync do arquivo. No perfil POSIX, publica por hard link exclusivo do temporário para o nome final no mesmo filesystem, recusando EEXIST; não usa rename que sobrescreva um destino concorrente. Remove o nome temporário e faz fsync do diretório antes de anunciar `AUTH_CONNECTED`. A operação não promete publicação durável se filesystem/fsync não a confirmar. Falha de publicação mantém a causa, tenta revogar apenas o token recém recebido e relata se essa revogação ficou desconhecida. Não apaga credencial de outro processo nem inicia enrollment novo automaticamente.
+
+Logout lê pelo descriptor validado e tenta a revogação por até10s. Remove somente o arquivo cuja identidade inode/dev e bytes ainda correspondam ao descriptor lido, preservando uma conexão instalada concorrentemente. Resposta HTTP200 significa pedido de revogação processado; resposta perdida deixa `remoteRevocation:'UNKNOWN'`. A remoção local é um fato separado e impede novos comandos desse cliente, sem afirmar que todas as cópias do token foram eliminadas. O operador pode revogar pelo serviço; a expiração continua900s.
+
+Login emite apenas JSONL de interação contendo URL de verificação, user code, prazo e estado, nunca device code ou token. O código público é informação de pareamento, não prova de autorização. Não reaproveitar um evento operacional como envelope de segredo. Sinal, deadline e EPIPE interrompem o polling, fecham reader e recursos de cliente e observam as promessas originais. Não usam `process.exit` para esconder handles vivos.
+
+Os comandos de apoio aceitam `--json` exclusivo por ocorrência, default JSONL, e `--help` offline exclusivo. Login exige somente `--service-origin`; logout não aceita esse flag. `--config`, `--timeout-ms`, flags de segredo, argumentos posicionais e opções repetidas são recusados. Isso não altera a gramática dos doze comandos operacionais. URLs são valores de argv separados, nunca executáveis ou texto de shell.
+
+Cada linha tem envelope fechado `{protocol:'cvg-auth-v1',command:'auth login'|'auth logout',seq,event}`; seq inicia1 e cresce por write confirmado, máximo8registros. O campo event é uma união fechada:
+
+```ts
+type AuthEvent =
+  | {
+      kind: 'authorization_required'
+      verificationUri: string
+      userCode: string
+      expiresAt: string
+    }
+  | {
+      kind: 'connected'
+      serviceOrigin: string
+      credentialId: string
+      expiresAt: string
+    }
+  | {
+      kind: 'logout'
+      localRemoved: boolean
+      remoteRevocation: 'CONFIRMED' | 'UNKNOWN' | 'NOT_CHECKED'
+    }
+  | {
+      kind: 'error'
+      code: AuthError
+      outcome: 'NOT_DISPATCHED' | 'KNOWN' | 'UNKNOWN'
+    }
+  | {
+      kind: 'end'
+      status:
+        | 'CONNECTED'
+        | 'LOGGED_OUT'
+        | 'NOT_CONNECTED'
+        | 'FAILED'
+        | 'UNKNOWN'
+        | 'INTERRUPTED'
+      exitCode: number
+    }
+type AuthError =
+  | 'INVALID_ARGUMENT'
+  | 'INVALID_CONNECTION'
+  | 'CONNECTION_EXISTS'
+  | 'NOT_CONNECTED'
+  | 'AUTH_DENIED'
+  | 'AUTH_EXPIRED'
+  | 'AUTH_INDETERMINATE'
+  | 'AUTH_UNAVAILABLE'
+  | 'CREDENTIAL_IO'
+  | 'CLEANUP_UNCONFIRMED'
+  | 'INTERRUPTED'
+```
+
+Não há output por poll. `connected` só aparece depois da publicação durável. Token potencialmente emitido sem conexão confirmada produz AUTH_INDETERMINATE/UNKNOWN; não se afirma que o serviço não emitiu nada. Login/logout confirmados usam exit0; argumento/conexão inválida ou conexão já existente exit2; conexão ausente no logout exit4/NOT_CONNECTED sem rede; negativa/expiração conhecida exit5; indisponibilidade antes de dispatch exit6; IO local/cleanup sem confirmação exit14; resultado remoto desconhecido exit16; sinal exit130. Erros em stdout não carregam texto de exceção. EPIPE pode impedir a linha end; o exit e a ausência dessa linha não são sucesso. O schema de auth é uma família pública proposta separada da saída operacional0310 e precisa de revisão T3 junto com ela.
+
+## Binding com o serviço: saldo ainda aberto
+
+O token resolve o candidato ao caller, mas não cria o transporte das portas. O host da API precisa compor uma única autoridade autenticada que entregue a sessão canônica, client0239 e controles0302 ao caller atual, com autorização de objeto e perfil no ponto de uso. Não basta retornar tenantId, sessionId, manifestDigest ou nomes de capabilities e compará-los no cliente.
+
+Antes de fechar F1, especificar os requests/responses e limites de framing/paginação/fechamento dessas operações sobre a mesma origem, provar a composição real e conferir os schemas do backend. Não existe `/v1/cli/dispatch` implementado ou aprovado por este anexo. Sessões v1, threads nativas e a ausência de binding ainda não recebem funcionalidade por retornar unsupported. F5 conserva o schema202/erros qualificado do ownerK06; não inventar o futuro envelope. K03b e o recibo17 continuam independentes.
+
+## Ativação e compatibilidade propostas
+
+A emissão fica desabilitada por default e só pode ser habilitada no serviço com perfil OIDC qualificado, migrations aprovadas, rate limiter compartilhado e transporte comum dos doze comandos efetivamente integrado. Sem essas pré-condições, os endpoints de cliente retornam503/temporarily_unavailable antes de criar pedido ou emitir credencial; isso não conta como suporte funcional. A proposta não cria opção de fallback para modo legacy ou HMAC. A CLI diante de serviço sem esse perfil recusa a conexão, sem tentar cookies, extrair token do navegador ou selecionar outro destino.
+
+O classifier de segurança deve enumerar método e path dos endpoints de cliente e dos endpoints de navegador; um prefixo amplo não autoriza rotas futuras a ignorar autenticação/CSRF. Rotas desconhecidas continuam recusadas. A desativação da emissão bloqueia novos pedidos e entregas; credenciais previamente emitidas também precisam ser recusadas pelo guard de recursos. Revogação continua disponível para limpar credenciais conhecidas, com os limites e a indistinguibilidade definidos acima. Uma mudança de instalação ou identidade não migra tokens automaticamente.
+
+Migrações e rollout pertencem ao gate T3 e aos holders de API/identidade/persistência. Reverter a flag não apaga registros de entrega incerta; sua expiração/reconciliação continua observável. A migração não altera sessões, approvals, checkpoints ou journal do runtime. Este anexo não concede deploy ou gate T4 pela existência de uma proposta de ativação.
+
+## Contraprovas e critério de pronto
+
+Todos os casos **NOT_RUN**; usar origem/IdP/PG sintéticos e pacotes reais quando BUILD for autorizado.
+
+| Caso | Positivo necessário                                                           | Contraprova necessária                                                              |
+| ---- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| AF01 | Login institucional e consentimento emitem uma credencial do operador correto | Sem cookie/Origin, outro principal ou código trocado não emitem token               |
+| AF02 | Duas instâncias respeitam os mesmos buckets/capacidade                        | Corrida no último slot, proxy forjado e spam não excedem os limites                 |
+| AF03 | Polling observa interval/slow_down e encerra no prazo                         | Poll paralelo, grant inválido e deadline não recebem nova credencial                |
+| AF04 | Dois polls disputam entrega: um único token                                   | Resposta/COMMIT perdido não reemite segredo nem duplica credencial                  |
+| AF05 | Token só funciona na instalação e perfil autorizados                          | Trocar origem, instalação, tenant/caso ou anunciar digest igual não concede acesso  |
+| AF06 | Revogação e retirada de assignment impedem nova admissão                      | Cache stale, cookie/HMAC misturado ou token expirado não chegam ao corpo            |
+| AF07 | Conexão0600 é publicada antes de AUTH_CONNECTED                               | Symlink, modo permissivo, destino concorrente e falha de fsync não produzem sucesso |
+| AF08 | Logout distingue remoção local e revogação remota                             | Resposta perdida não vira revogação confirmada e não apaga arquivo substituído      |
+| AF09 | Doctor/config/help/version não leem credencial ou inicializam rede            | Sentinelas detectam qualquer bootstrap/leitura de segredo nesses ramos              |
+| AF10 | Saídas, logs, exceptions e artefatos não contêm device/token/cookie           | Erros e pipe quebrado não vazam o segredo nem deixam polling/reader vivo            |
+| AF11 | Após auth, os doze comandos chegam aos ports da mesma composição              | ID/digest iguais ou adapter com store de memória não passam por vínculo real        |
+| AF12 | Restart preserva expiração/revogação e reconciliação do pedido                | Sessão revogada, entrega incerta e purge concorrente não revivem token/pedido       |
+
+Esta proposta só pode ser integrada à0310 como contrato fechado depois de reconciliar rate-limit/migrations/retention ownership, revisar a segurança, especificar o transporte comum e receber o gate humano T3 exato. Nenhum dos doze comandos ou destes dois auxiliares foi construído ou qualificado por esta preparação.

@@ -1,0 +1,307 @@
+diff --git a/scripts/lib/coverage-profile-options.mjs b/scripts/lib/coverage-profile-options.mjs
+new file mode 100644
+index 000000000..f9c065205
+--- /dev/null
++++ b/scripts/lib/coverage-profile-options.mjs
+@@ -0,0 +1,70 @@
++/**
++ * Admit reporting options for the fixed scheduled-coverage runner.
++ * Scheduling, scope and process environment remain owned by that runner.
++ * Output paths are forwarded literally; their destination is also runner-owned.
++ */
++export function parseScheduledCoverageOptions(argv, env) {
++  if (!Array.isArray(argv)) {
++    throw new TypeError('Coverage arguments must be an array of strings')
++  }
++  if (env === null || typeof env !== 'object' || Array.isArray(env)) {
++    throw new TypeError('Coverage environment must be an object')
++  }
++  if (Reflect.has(env, 'VITEST_MAX_WORKERS')) {
++    throw new Error('VITEST_MAX_WORKERS is not allowed for scheduled coverage')
++  }
++  for (const argument of argv) {
++    if (typeof argument !== 'string') {
++      throw new TypeError('Coverage arguments must be an array of strings')
++    }
++  }
++
++  const admitted = []
++  let hasJsonReporter = false
++  let hasOutputFile = false
++  for (let index = 0; index < argv.length; index += 1) {
++    const argument = argv[index]
++    let option
++    let value
++    if (argument === '--reporter' || argument === '--outputFile') {
++      option = argument
++      index += 1
++      if (index >= argv.length) {
++        throw new Error('Coverage reporting option requires a value')
++      }
++      value = argv[index]
++    } else if (argument.startsWith('--reporter=')) {
++      option = '--reporter'
++      value = argument.slice('--reporter='.length)
++    } else if (argument.startsWith('--outputFile=')) {
++      option = '--outputFile'
++      value = argument.slice('--outputFile='.length)
++    } else {
++      throw new Error('Unsupported scheduled coverage argument')
++    }
++
++    if (option === '--reporter') {
++      if (value !== 'default' && value !== 'json') {
++        throw new Error('Unsupported coverage reporter')
++      }
++      hasJsonReporter ||= value === 'json'
++    } else {
++      if (hasOutputFile) {
++        throw new Error('Coverage outputFile may only be specified once')
++      }
++      if (
++        value.trim().length === 0 ||
++        value.trimStart().startsWith('-') ||
++        /[\u0000-\u001f\u007f-\u009f]/u.test(value)
++      ) {
++        throw new Error('Invalid coverage output filename')
++      }
++      hasOutputFile = true
++    }
++    admitted.push(`${option}=${value}`)
++  }
++  if (hasOutputFile && !hasJsonReporter) {
++    throw new Error('Coverage outputFile requires the json reporter')
++  }
++  return admitted
++}
+diff --git a/tests/coverage-profile-options.test.js b/tests/coverage-profile-options.test.js
+new file mode 100644
+index 000000000..f683caef8
+--- /dev/null
++++ b/tests/coverage-profile-options.test.js
+@@ -0,0 +1,225 @@
++import { describe, expect, it } from 'vitest'
++import { parseScheduledCoverageOptions } from '../scripts/lib/coverage-profile-options.mjs'
++
++describe('CI003 scheduled coverage option admission', () => {
++  it('admits no options without inventing scheduling arguments', () => {
++    const argv = Object.freeze([])
++    const result = parseScheduledCoverageOptions(argv, Object.freeze({}))
++    expect(result).toEqual([])
++    expect(result).not.toBe(argv)
++  })
++
++  it.each([
++    [['--reporter', 'default'], ['--reporter=default']],
++    [['--reporter=json'], ['--reporter=json']],
++    [
++      ['--reporter=json', '--reporter', 'default', '--reporter=json'],
++      ['--reporter=json', '--reporter=default', '--reporter=json']
++    ],
++    [
++      ['--outputFile', '/tmp/synthetic report.json', '--reporter', 'json'],
++      ['--outputFile=/tmp/synthetic report.json', '--reporter=json']
++    ],
++    [
++      ['--reporter=json', '--outputFile=./relatório final=a.json'],
++      ['--reporter=json', '--outputFile=./relatório final=a.json']
++    ]
++  ])('canonicalizes admitted arguments %j', (argv, expected) => {
++    const original = [...argv]
++    const env = Object.freeze({ NODE_OPTIONS: '--synthetic-preserved' })
++    expect(parseScheduledCoverageOptions(Object.freeze(argv), env)).toEqual(
++      expected
++    )
++    expect(argv).toEqual(original)
++    expect(env.NODE_OPTIONS).toBe('--synthetic-preserved')
++  })
++
++  it.each(['', '2', '3', '0', undefined, null, false])(
++    'rejects a present VITEST_MAX_WORKERS value %j',
++    (value) => {
++      const env = Object.freeze({ VITEST_MAX_WORKERS: value })
++      expect(() => parseScheduledCoverageOptions([], env)).toThrow()
++      expect(Object.hasOwn(env, 'VITEST_MAX_WORKERS')).toBe(true)
++      expect(env.VITEST_MAX_WORKERS).toBe(value)
++    }
++  )
++
++  it('rejects inherited worker settings without reading their values', () => {
++    const env = Object.create({ VITEST_MAX_WORKERS: undefined })
++    expect(() => parseScheduledCoverageOptions([], env)).toThrow()
++    expect(Object.hasOwn(env, 'VITEST_MAX_WORKERS')).toBe(false)
++
++    const getter = Object.defineProperty({}, 'VITEST_MAX_WORKERS', {
++      get() {
++        throw new Error('synthetic getter must not run')
++      }
++    })
++    expect(() => parseScheduledCoverageOptions([], getter)).not.toThrow(
++      'synthetic getter must not run'
++    )
++    expect(() => parseScheduledCoverageOptions([], getter)).toThrow()
++  })
++
++  it('preserves unrelated environment settings on both success and failure', () => {
++    const env = Object.freeze({
++      NODE_OPTIONS: '--synthetic-identity-option',
++      CVG_TEST_SCOPE: 'core',
++      DATABASE_URL: 'synthetic://local-fixture',
++      CI: 'true',
++      CVG_SAFETY: 'required'
++    })
++    const before = { ...env }
++    expect(parseScheduledCoverageOptions(['--reporter=json'], env)).toEqual([
++      '--reporter=json'
++    ])
++    expect(() =>
++      parseScheduledCoverageOptions(['--pool=threads'], env)
++    ).toThrow()
++    expect(env).toEqual(before)
++  })
++
++  it.each([
++    '--maxWorkers=1',
++    '--maxWorkers',
++    '--minWorkers=1',
++    '--fileParallelism=false',
++    '--no-file-parallelism',
++    '--sequence.groupOrder=0',
++    '--sequence.concurrent',
++    '--isolate=false',
++    '--no-isolate',
++    '--pool=forks',
++    '--pool',
++    '--project=core',
++    '--config=other.mjs',
++    '--root=.',
++    '--scope=all',
++    '--shard=1/2',
++    '--retry=1',
++    '--coverage.enabled=false',
++    '--coverage=false',
++    '--coverage.thresholds.lines=0',
++    '--coverage.exclude=**',
++    '--coverage',
++    '--run',
++    'run',
++    'tests/selected.test.js',
++    '--',
++    '--bypass',
++    '--help',
++    '--watch',
++    '-r',
++    '--reporters=json',
++    '--output-file=x.json',
++    '--Reporter=json',
++    '--reporter json'
++  ])('rejects unsupported argument %s', (argument) => {
++    const argv = Object.freeze(['--reporter=json', argument])
++    expect(() => parseScheduledCoverageOptions(argv, {})).toThrow()
++    expect(argv).toEqual(['--reporter=json', argument])
++  })
++
++  it.each([
++    '',
++    'JSON',
++    ' json',
++    'json ',
++    'verbose',
++    'junit',
++    '=json',
++    'json,default'
++  ])('rejects unapproved reporter %j in both syntaxes', (value) => {
++    expect(() =>
++      parseScheduledCoverageOptions([`--reporter=${value}`], {})
++    ).toThrow()
++    expect(() =>
++      parseScheduledCoverageOptions(['--reporter', value], {})
++    ).toThrow()
++  })
++
++  it.each(['--reporter', '--outputFile'])(
++    'rejects missing value for %s',
++    (option) => {
++      expect(() => parseScheduledCoverageOptions([option], {})).toThrow()
++    }
++  )
++
++  it.each([
++    '',
++    ' ',
++    '\t',
++    '-file.json',
++    '  --config=other.mjs',
++    'x\n.json',
++    'x\r.json',
++    'x\0.json',
++    'x\x1b.json',
++    'x\x7f.json',
++    'x\x85.json'
++  ])('rejects unsafe output filename %j in both syntaxes', (value) => {
++    expect(() =>
++      parseScheduledCoverageOptions(
++        ['--reporter=json', `--outputFile=${value}`],
++        {}
++      )
++    ).toThrow()
++    expect(() =>
++      parseScheduledCoverageOptions(
++        ['--reporter=json', '--outputFile', value],
++        {}
++      )
++    ).toThrow()
++  })
++
++  it('requires json reporter for outputFile in either position', () => {
++    for (const argv of [
++      ['--outputFile=x.json'],
++      ['--reporter=default', '--outputFile', 'x.json']
++    ]) {
++      expect(() => parseScheduledCoverageOptions(argv, {})).toThrow()
++    }
++  })
++
++  it('rejects duplicate output options across all admitted syntaxes', () => {
++    for (const argv of [
++      ['--outputFile=a.json', '--outputFile=b.json'],
++      ['--outputFile', 'a.json', '--outputFile=b.json'],
++      ['--outputFile=a.json', '--outputFile', 'b.json'],
++      ['--outputFile', 'a.json', '--outputFile', 'b.json']
++    ]) {
++      expect(() =>
++        parseScheduledCoverageOptions(['--reporter=json', ...argv], {})
++      ).toThrow()
++    }
++  })
++
++  it.each([null, {}, 'x', [undefined], [1], new Array(1)])(
++    'rejects malformed argv %j',
++    (argv) => {
++      expect(() => parseScheduledCoverageOptions(argv, {})).toThrow(TypeError)
++    }
++  )
++
++  it.each([null, undefined, 'x', 1, []])('rejects malformed env %j', (env) => {
++    expect(() => parseScheduledCoverageOptions([], env)).toThrow(TypeError)
++  })
++
++  it('does not reflect rejected argv or environment values in errors', () => {
++    const secret = 'synthetic-secret-marker-23915'
++    for (const [argv, env] of [
++      [[`--config=${secret}`], {}],
++      [[`--reporter=${secret}`], {}],
++      [['--outputFile', `-${secret}`], {}],
++      [[], { VITEST_MAX_WORKERS: secret }]
++    ]) {
++      let caught
++      try {
++        parseScheduledCoverageOptions(argv, env)
++      } catch (error) {
++        caught = error
++      }
++      expect(caught).toBeInstanceOf(Error)
++      expect(String(caught)).not.toContain(secret)
++    }
++  })
++})

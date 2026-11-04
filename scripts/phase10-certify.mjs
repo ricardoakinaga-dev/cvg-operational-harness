@@ -99,7 +99,8 @@ function run(entry, { runId, candidateId }) {
     cwd: root,
     shell: true,
     encoding: 'utf8',
-    timeout: 3_600_000,
+    timeout:
+      entry.id === 'unit' || entry.id === 'coverage' ? 5_400_000 : 3_600_000,
     maxBuffer: 128 * 1024 * 1024,
     env: environment
   })
