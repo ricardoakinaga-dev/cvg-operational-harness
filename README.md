@@ -4,19 +4,25 @@ CVG Operational Harness is a governed runtime foundation for reusable
 operational AI agents across the CVG ecosystem. The Esmeralda V2 secretary is
 the legacy product being isolated under `legacy/`.
 
-## Estado atual — 29/10/2026 — índice do programa
+## Estado atual — 04/11/2026
 
-Em 29/10/2026 a `main` está em `aa6afc49` (PR #32, onda 1 AUD0625), com o #31
-(base Debian 13, `bee31e75`) e o #29 (console OIDC, `8429019b`) já mesclados. A
-onda 2 está no PR #33 (cabeça `c4a474c6`, CI em curso); a onda 3, com a 0262
-inteira, o F13 (0283), a 0282, a 0281, a 0271 e o F18 fatia 1, está integrada na
-branch `claude/aud0625-wave3` e abre depois do #33. A produção continua `NO_GO`.
+A `main` está em `362dc043c` (PR #40, com os 11 checks verdes). Todas as ondas
+AUD0625 (1–7, PRs #29–#38) e a consolidação das branches Codex estão
+mescladas; `main` é a única branch remota e as pontas antigas ficam em tags
+`archive/consolidation-20261103/*`. A produção continua `NO_GO`.
 
-O **índice conciliado** (o que está mesclado, em PR, revisado, aceito ou pendente,
-com o próximo responsável, e os achados F01–F20 da auditoria 0625 com estado e SHA)
-é o [índice corrente AUD0625](docs/08_runtime/aud0625_current_index.md). O que é
-do Ricardo e do hospital (servidor U10, IdP U09, piloto U23) não é executado por
-agente. As seções abaixo são histórico preservado.
+- Auditoria vigente: [0626](docs/04_audit/0626_repository_audit_2026-11-04.md)
+  (nota 76/100; sucede a [0625](docs/04_audit/0625_repository_score_audit_2026-10-28.md)).
+- Pendências principais: sandbox `PROCESS` na imagem de produção, prova positiva
+  do `boundary:products` (HISO-005), divisão de `apps/api/src/server.ts` e
+  arquivamento de evidência pesada fora do Git.
+- Estado, log e backlog vigentes: [`99_runtime_state.md`](docs/99_runtime_state.md),
+  [`20_master_execution_log.md`](docs/20_master_execution_log.md),
+  [`30_backlog_master.md`](docs/30_backlog_master.md). O histórico anterior está
+  arquivado em [`docs/08_runtime/archive/`](docs/08_runtime/archive/).
+- O [índice AUD0625](docs/08_runtime/aud0625_current_index.md) é histórico de 29/10.
+
+As seções abaixo são histórico preservado.
 
 ## Histórico — estado em 28/10/2026 — harness e consumidor
 
