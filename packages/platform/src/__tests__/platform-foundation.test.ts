@@ -1165,7 +1165,10 @@ describe('Test Lab dry-run', () => {
       })
     })
 
-    expect(trace.knowledge).toEqual({ status: 'approved_source_missing' })
+    expect(trace.knowledge).toEqual({
+      status: 'approved_source_missing',
+      reason: 'binding_mismatch'
+    })
     expect(trace.response.mode).toBe('handoff')
     expect(trace.response.text).not.toContain('Resposta que não pertence')
   })
