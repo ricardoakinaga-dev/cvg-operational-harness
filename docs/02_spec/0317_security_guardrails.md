@@ -1,7 +1,7 @@
 # SPEC 0317 — Identidade do solicitante e guardas de segurança
 
-Status: `PROPOSED_FOR_HUMAN_T3_REVIEW`. Trilha **T3**. Data: 05/11/2026.
-Task: `SPEC-GUARDRAILS-20261105`. Preparação documental concluída; BUILD não autorizado.
+Status: `APPROVED_FOR_BUILD` para G1–G5 como proposta e G6 com HMAC próprio (decisão do usuário em 05/11/2026, `FIX-ALL-20261105`). Trilha **T3**. Data: 05/11/2026.
+Task: `SPEC-GUARDRAILS-20261105`. BUILD autorizado por essa decisão; produção segue `NO_GO`.
 
 ## 1. Escopo, autoridade e evidência
 
