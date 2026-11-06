@@ -46,6 +46,7 @@ function record(
     idempotencyKey: `${CANARY}-key`,
     requestHash: `${CANARY}-hash`,
     request: { canary: CANARY } as never,
+    submittedBy: { kind: 'unknown' },
     state,
     attempt: 1,
     leaseOwner: `${CANARY}-worker`,

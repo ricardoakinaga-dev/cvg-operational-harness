@@ -387,6 +387,11 @@ describeWithPostgres('AAA-41 capability boundary PostgreSQL durability', () => {
     try {
       const submittedA = await store.submit({
         tenantId: tenantA,
+        submittedBy: {
+          kind: 'human',
+          id: 'human.submitter.synthetic',
+          tenantId: tenantA
+        },
         idempotencyKey: `phase4-worker-a-${Date.now()}`,
         capabilityFingerprint: fingerprint,
         runtime: runtime(tenantA, operationKey, fingerprint)
@@ -460,6 +465,11 @@ describeWithPostgres('AAA-41 capability boundary PostgreSQL durability', () => {
     try {
       const submitted = await store.submit({
         tenantId: tenantA,
+        submittedBy: {
+          kind: 'human',
+          id: 'human.submitter.synthetic',
+          tenantId: tenantA
+        },
         idempotencyKey: `phase4-approval-${Date.now()}`,
         capabilityFingerprint: fingerprint,
         runtime: runtime(tenantA, operationKey, fingerprint)

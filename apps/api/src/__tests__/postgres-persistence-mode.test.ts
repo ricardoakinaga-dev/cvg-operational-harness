@@ -361,7 +361,8 @@ describe('api PostgreSQL persistence mode', () => {
       '0030_api_creation_receipts',
       '0031_channel_effect_retry_not_before',
       '0033_complete_tool_result_journal',
-      '0035_runtime_approval_origin'
+      '0035_runtime_approval_origin',
+      '0039_requester_principal'
     ] as const
     const rows: Array<{
       version: string
