@@ -17,6 +17,7 @@ import {
   createExamDownloadTool,
   createExamUploadTool
 } from '../index.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 const context: ToolExecutionContext = {
   tenantId: 'tenant-exam' as never,
@@ -53,6 +54,7 @@ afterEach(() => {
 
 function baseOptions(root: string) {
   return {
+    realCapabilityGuard: realChannelGuard,
     effectJournal: new InMemoryChannelEffectJournal(),
     workspaceRoot: root,
     urlGuard: { allowedHosts: ALLOWED },

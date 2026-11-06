@@ -3,6 +3,10 @@ import { ChatwootChannelAdapter } from '../adapters/chatwoot.ts'
 import { EvolutionChannelAdapter } from '../adapters/evolution.ts'
 import { ControlledFakeChannelAdapter } from '../adapters/fake.ts'
 import { ChannelGateway } from '../gateway.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const CONTEXT = {
@@ -27,6 +31,7 @@ describe('Chatwoot adapter edges', () => {
     fetchImpl: (input: string, init: RequestInit) => Promise<Response>
   ) {
     return new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -59,6 +64,7 @@ describe('Chatwoot adapter edges', () => {
       async () => new Response('x'.repeat(100), { status: 200 })
     )
     const small = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -125,6 +131,7 @@ describe('Chatwoot adapter edges', () => {
 describe('Evolution and gateway edges', () => {
   it('maps Evolution network failures and provider rejections', async () => {
     const network = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -139,6 +146,7 @@ describe('Evolution and gateway edges', () => {
     })
 
     const rejected = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -154,8 +162,12 @@ describe('Evolution and gateway edges', () => {
 
   it('validates gateway outbound routing and emits rejection events', async () => {
     const events: string[] = []
-    const disabledEvolution = new EvolutionChannelAdapter({ enabled: false })
+    const disabledEvolution = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
+      enabled: false
+    })
     const gateway = new ChannelGateway({
+      composition: realComposition,
       outboundAdapters: [disabledEvolution],
       onEvent: (event) => events.push(event.type)
     })
@@ -167,7 +179,10 @@ describe('Evolution and gateway edges', () => {
     ).rejects.toMatchObject({ code: 'channel_disabled' })
     expect(events).toContain('channel.outbound.rejected')
 
-    const internalOnly = new ChannelGateway({ outboundAdapters: [] })
+    const internalOnly = new ChannelGateway({
+      composition: realComposition,
+      outboundAdapters: []
+    })
     await expect(
       internalOnly.dispatch(OUTBOUND, { takeoverActive: false })
     ).rejects.toMatchObject({ code: 'channel_unknown' })
@@ -175,6 +190,7 @@ describe('Evolution and gateway edges', () => {
 
   it('rejects inbound payloads that adapters cannot normalize', () => {
     const gateway = new ChannelGateway({
+      composition: realComposition,
       inboundAdapters: [new ControlledFakeChannelAdapter()]
     })
     expect(() =>

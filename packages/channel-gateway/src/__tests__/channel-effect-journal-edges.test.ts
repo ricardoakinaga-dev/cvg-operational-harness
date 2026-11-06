@@ -19,6 +19,7 @@ import {
   type ChannelEffectIdentity
 } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000000c1'
 const CORRELATION = 'corr_00000000-0000-4000-8000-0000000000c1'
@@ -169,6 +170,7 @@ describe('channel effect journal edges', () => {
 
     const adapter = new SimpleAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -213,6 +215,7 @@ describe('channel effect journal edges', () => {
 
     const adapter = new SimpleAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -243,6 +246,7 @@ describe('channel effect journal edges', () => {
 
     const adapter = new SimpleAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -310,11 +314,13 @@ describe('channel effect journal edges', () => {
     const adapterA = new GatedAdapter()
     const adapterB = new SimpleAdapter()
     const gatewayA = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterA],
       effectJournal: journal,
       waitTimeoutMs: 30
     })
     const gatewayB = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterB],
       effectJournal: journal,
       waitTimeoutMs: 30
@@ -344,6 +350,7 @@ describe('channel effect journal edges', () => {
     const adapter = new BrokenAdapter()
     const journal = new InMemoryChannelEffectJournal()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })

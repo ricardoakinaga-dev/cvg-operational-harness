@@ -9,6 +9,10 @@ import {
 import { CHANNEL_OPERATION_KIND } from '../effect-journal.ts'
 import { InMemoryChannelEffectJournal } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 // AUD0625 F12 / SPEC 0268 (approved for local T3 BUILD): an error after the
 // request left the gateway keeps the operation UNCERTAIN and never resends it.
@@ -41,6 +45,7 @@ const builders: Record<string, (respond: FakeFetch) => Subject> = {
   evolution(respond) {
     let attempts = 0
     const adapter = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -56,6 +61,7 @@ const builders: Record<string, (respond: FakeFetch) => Subject> = {
   chatwoot(respond) {
     let attempts = 0
     const adapter = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -74,6 +80,7 @@ async function dispatchTwice(name: string, respond: FakeFetch) {
   const subject = builders[name]!(respond)
   const journal = new InMemoryChannelEffectJournal()
   const gateway = new ChannelGateway({
+    composition: realComposition,
     outboundAdapters: [subject.adapter],
     effectJournal: journal
   })

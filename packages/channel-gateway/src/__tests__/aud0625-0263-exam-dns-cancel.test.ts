@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ToolExecutionContext } from '@cvg/harness-contracts'
 import { InMemoryChannelEffectJournal, createExamUploadTool } from '../index.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -28,6 +29,7 @@ describe('SPEC 0263 D13: exam upload cancelled during the preliminary DNS', () =
     const journal = new InMemoryChannelEffectJournal()
     const fetchImpl = vi.fn(async () => new Response('ok', { status: 200 }))
     const tool = createExamUploadTool({
+      realCapabilityGuard: realChannelGuard,
       effectJournal: journal,
       workspaceRoot: root,
       urlGuard: { allowedHosts: ['exams.example.com'] },

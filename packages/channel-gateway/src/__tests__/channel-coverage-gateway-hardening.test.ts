@@ -24,6 +24,7 @@ import {
   type ChannelEffectTransition
 } from '../effect-journal.ts'
 import { ChannelGateway, type ChannelEvent } from '../gateway.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000103'
 const CORRELATION = 'corr_00000000-0000-4000-8000-000000000103'
@@ -185,7 +186,10 @@ async function seedGatewayRecord(
 describe('gateway construction and inbound hardening', () => {
   it('runs with the default clock and no event hook', async () => {
     const adapter = new GateAdapter()
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
     const result = await gateway.dispatch(message(), { takeoverActive: false })
     expect(result.accepted).toBe(true)
     expect(adapter.sent).toHaveLength(1)
@@ -201,6 +205,7 @@ describe('gateway construction and inbound hardening', () => {
     }
     const events: ChannelEvent[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       inboundAdapters: [broken],
       onEvent: (event) => events.push(event)
     })
@@ -235,6 +240,7 @@ describe('gateway replay and uncertainty hardening', () => {
     })
     const adapter = new GateAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: new FileChannelEffectJournal({ directory })
     })
@@ -250,6 +256,7 @@ describe('gateway replay and uncertainty hardening', () => {
     })
     const events: ChannelEvent[] = []
     const uncertainGateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [new GateAdapter()],
       effectJournal: new FileChannelEffectJournal({ directory }),
       onEvent: (event) => events.push(event)
@@ -268,6 +275,7 @@ describe('gateway replay and uncertainty hardening', () => {
       errorCode: null
     })
     const nullCodeGateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [new GateAdapter()],
       effectJournal: new FileChannelEffectJournal({ directory })
     })
@@ -282,6 +290,7 @@ describe('gateway replay and uncertainty hardening', () => {
     const adapter = new GateAdapter()
     const events: ChannelEvent[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal,
       onEvent: (event) => events.push(event)
@@ -302,6 +311,7 @@ describe('gateway replay and uncertainty hardening', () => {
     const adapter = new GateAdapter()
     const events: ChannelEvent[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal,
       onEvent: (event) => events.push(event)
@@ -326,6 +336,7 @@ describe('gateway replay and uncertainty hardening', () => {
     const adapter = new GateAdapter()
     adapter.gate = gate
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal,
       leaseMs: 40,
@@ -347,6 +358,7 @@ describe('gateway replay and uncertainty hardening', () => {
     journal.claimThrows = true
     const adapter = new GateAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -363,6 +375,7 @@ describe('gateway failure mapping hardening', () => {
     const adapter = new GateAdapter()
     adapter.error = new ChannelError('provider_rejected', 'nope', false)
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -384,6 +397,7 @@ describe('gateway failure mapping hardening', () => {
     const adapter = new GateAdapter()
     adapter.error = new ChannelError('send_failed', 'outage', true)
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -398,6 +412,7 @@ describe('gateway failure mapping hardening', () => {
     const adapter = new GateAdapter()
     adapter.error = new Error('socket destroyed')
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })

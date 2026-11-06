@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { ChatwootChannelAdapter } from '../adapters/chatwoot.ts'
 import { EvolutionChannelAdapter } from '../adapters/evolution.ts'
 import { fetchWithResolvedAddress } from '../adapters/ssrf-node.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 /**
  * SPEC0248 §3.5 (AUD-0621 F21, core): Evolution and Chatwoot pass their
@@ -35,6 +36,7 @@ type Fetch = (input: string, init: RequestInit) => Promise<Response>
 const kinds = {
   evolution: (options: Record<string, unknown>) =>
     new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -44,6 +46,7 @@ const kinds = {
     }),
   chatwoot: (options: Record<string, unknown>) =>
     new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],

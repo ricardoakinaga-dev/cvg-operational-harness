@@ -5,6 +5,7 @@ import type {
   CapabilityRegistration,
   ModelGateway,
   RuntimeInput,
+  ToolDefinition,
   ToolExecutionContext
 } from '@cvg/harness-contracts'
 import {
@@ -14,6 +15,7 @@ import {
   InMemoryEffectJournal
 } from '../index.ts'
 import * as publicApi from '../index.ts'
+import { withoutForbiddenTools } from '../capability-boundary.ts'
 import {
   InMemoryApprovalEngine,
   RecordingAuditSink,
@@ -156,9 +158,34 @@ function createPublicHarness(
   return { harness, effectJournal, ...ports }
 }
 
+describe('SPEC 0317 G4 forbidden tool categories', () => {
+  it('leaves compatibility registries unable to resolve them', () => {
+    const tool = (id: string) => ({ id, version: 'v1' }) as ToolDefinition
+    const registry = withoutForbiddenTools({
+      list: () => [tool('payment.charge'), tool('safe.read')],
+      resolve: (id) => tool(id)
+    })
+    expect(registry.list().map(({ id }) => id)).toEqual(['safe.read'])
+    expect(registry.resolve('payment.charge')).toBeUndefined()
+    expect(registry.resolve('prontuario.update')).toBeUndefined()
+    expect(registry.resolve('safe.read')?.id).toBe('safe.read')
+  })
+})
+
 describe('AAA-41 generic capability boundary', () => {
   it('keeps descriptors detached from implementations and registry snapshots immutable', () => {
     const base = createCapabilityRegistry()
+    // SPEC 0317 G4 §3: no composition registers a forbidden category.
+    for (const id of ['payment.charge', 'prontuario.update']) {
+      expect(() =>
+        createCapabilityRegistry([
+          {
+            descriptor: { ...registration().descriptor, id },
+            implementation: registration().implementation
+          } as never
+        ])
+      ).toThrow('forbidden by the program')
+    }
     const registry = base.register(registration())
     const extended = registry.register(
       registration({ id: 'synthetic.capability.second' })

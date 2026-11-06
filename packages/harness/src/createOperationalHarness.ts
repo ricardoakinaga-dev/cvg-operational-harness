@@ -14,7 +14,10 @@ import type {
   CapabilityRegistry,
   ToolRegistry
 } from '@cvg/harness-contracts'
-import { createCapabilityToolRegistry } from './capability-boundary.ts'
+import {
+  createCapabilityToolRegistry,
+  withoutForbiddenTools
+} from './capability-boundary.ts'
 import {
   createJournaledToolRegistry,
   type EffectJournal,
@@ -210,14 +213,15 @@ function resolveTools(
       'Operational harness composition accepts capabilities or tools, not both'
     )
   }
-  const registry = options.capabilities
+  const composed = options.capabilities
     ? createCapabilityToolRegistry(options.capabilities)
     : options.tools
-  if (!registry) {
+  if (!composed) {
     throw new Error(
       'Operational harness composition requires an explicit capability or tool registry'
     )
   }
+  const registry = withoutForbiddenTools(composed)
   if (!options.effectJournal) return registry
   return createJournaledToolRegistry(registry, options.effectJournal, {
     ...options.effectJournalOptions,

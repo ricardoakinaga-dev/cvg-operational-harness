@@ -10,6 +10,10 @@ import {
   InMemoryChannelEffectJournal
 } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 // AUD0625 follow-up of the 0268/0269 review (P2): a 2xx whose body is over the
 // ceiling means the destination accepted the send, so the journal must keep it
@@ -49,11 +53,13 @@ function adapterFor(
   const adapter =
     name === 'evolution'
       ? new EvolutionChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           ...common,
           baseUrl: 'https://evolution.example.com',
           instance: 'cvg'
         })
       : new ChatwootChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           ...common,
           baseUrl: 'https://chatwoot.example.com',
           accountId: '1'
@@ -65,6 +71,7 @@ async function dispatchTwice(name: string, respond: () => Promise<Response>) {
   const subject = adapterFor(name, respond)
   const journal = new InMemoryChannelEffectJournal()
   const gateway = new ChannelGateway({
+    composition: realComposition,
     outboundAdapters: [subject.adapter],
     effectJournal: journal
   })

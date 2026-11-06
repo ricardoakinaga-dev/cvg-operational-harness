@@ -11,7 +11,8 @@ import {
   canonicalizeJson,
   CanonicalJsonError
 } from '../canonical.ts'
-import { parseEnv, realWorldActionsDisabled } from '../env.ts'
+import { parseEnv } from '../env.ts'
+import { createRealCapabilityGuards } from '../real-capabilities.ts'
 import {
   assertSafeOutboundUrl,
   evaluateOutboundUrl,
@@ -120,13 +121,16 @@ describe('production environment hardening branches', () => {
   })
 
   it('keeps real-world actions disabled when no flag is enabled', () => {
-    expect(realWorldActionsDisabled(parseEnv(productionEnv))).toBe(true)
-    expect(
-      realWorldActionsDisabled({
-        ...parseEnv(productionEnv),
-        ENABLE_REAL_RAG: true
-      })
-    ).toBe(false)
+    const closed = createRealCapabilityGuards({ env: parseEnv(productionEnv) })
+    expect(closed.channels.open).toBe(false)
+    expect(closed.rag.open).toBe(false)
+    const flagged = createRealCapabilityGuards({
+      env: { ...parseEnv(productionEnv), ENABLE_REAL_RAG: true }
+    })
+    expect(flagged.rag).toMatchObject({
+      open: false,
+      reason: 'authorization_missing'
+    })
   })
 })
 
