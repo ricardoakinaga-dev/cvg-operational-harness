@@ -42,7 +42,7 @@ export function registerApprovalsRoutes(ctx: RouteContext): void {
     const correlationId = createCorrelationId()
     try {
       const identity = requireAuthenticatedMutations
-        ? requireIdentity(request.headers, 'approval:view')
+        ? requireIdentity(request.headers, 'approval:create')
         : null
       const tenantId = identity
         ? resolveDataPlaneTenant(request.headers, identity)

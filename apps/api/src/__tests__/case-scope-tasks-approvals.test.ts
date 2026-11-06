@@ -337,6 +337,13 @@ interface WaitingExecution {
  * Execution in WAITING_APPROVAL created directly in the store (no case
  * link). Callers link it explicitly when the scenario needs a case.
  */
+// SPEC 0317 G1: an approval needs a known author, distinct from whoever decides.
+const SYNTHETIC_REQUESTER = {
+  kind: 'human',
+  id: 'human.submitter.synthetic',
+  tenantId: TENANT
+} as const
+
 async function waitingExecution(
   store: OperationalExecutionStore,
   authority: ApprovalAuthority,
@@ -348,6 +355,7 @@ async function waitingExecution(
   const accepted = await store.submit({
     tenantId: TENANT,
     idempotencyKey: `spec0251-exec-${randomUUID()}`,
+    submittedBy: SYNTHETIC_REQUESTER,
     runtime: input
   })
   const claimed = await store.claimNext(TENANT, 'worker-spec0251')
@@ -371,6 +379,7 @@ async function waitingExecution(
     correlationId: input.correlationId,
     operationKey: `operation.spec0251.${randomUUID()}`,
     executionRef: accepted.record.id,
+    requestedBy: SYNTHETIC_REQUESTER,
     singleUse: true,
     reason: 'synthetic SPEC0251 approval',
     proposalPayload: { synthetic: true }
@@ -711,8 +720,7 @@ describe('SPEC0251 S3 — case-scoped mutations (memory)', () => {
     for (const [headers, sessionId] of [
       [APPROVER_A, w.x.sessionId],
       [SUPERVISOR, w.y.sessionId],
-      [SUPERVISOR, w.rootless.sessionId],
-      [ADMIN, w.y.sessionId]
+      [SUPERVISOR, w.rootless.sessionId]
     ] as const) {
       const created = await post(
         w.app,
@@ -724,6 +732,15 @@ describe('SPEC0251 S3 — case-scoped mutations (memory)', () => {
       expect(created.json().data.status).toBe('pending')
       expect(created.headers['cache-control']).toBe('no-store')
     }
+    // SPEC 0317 G5: Admin holds view, not create; the decided matrix replaces
+    // the case-wide creation SPEC0251 recorded while view authorized it.
+    const adminDenied = await post(
+      w.app,
+      '/v1/approvals',
+      ADMIN,
+      approvalPayload(w.y.sessionId)
+    )
+    expect(adminDenied.statusCode).toBe(403)
   })
 
   it('POST /v1/approvals/:id/decision: approved, rejected and assumed require the case; Supervisor tenant-wide', async () => {
@@ -1090,7 +1107,7 @@ describe('SPEC0251 S6 — principal policy and fail-closed composition (memory)'
       },
       {
         name: 'POST /v1/approvals',
-        permitted: everyone,
+        permitted: ['Operator', 'Approver', 'Supervisor'],
         run: (headers) =>
           post(app, '/v1/approvals', headers, approvalPayload(x.sessionId))
       },
@@ -1218,7 +1235,7 @@ describe('SPEC0251 S6 — principal policy and fail-closed composition (memory)'
       },
       {
         name: 'POST /v1/approvals',
-        permitted: everyone,
+        permitted: ['Operator', 'Approver', 'Supervisor'],
         run: (headers) =>
           post(app, '/v1/approvals', headers, approvalPayload(x.sessionId))
       },

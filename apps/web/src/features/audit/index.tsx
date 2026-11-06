@@ -47,6 +47,7 @@ export interface AuditPanelProps {
   evidenceError?: string | null
   evidenceIsLoading?: boolean
   canReviewEvidence?: boolean
+  canRequestEvidenceExport?: boolean
   evidenceExportMessage?: string | null
   isRequestingEvidenceExport?: boolean
   onNextEvidencePage?: () => void
@@ -78,6 +79,7 @@ export function AuditPanel({
   evidenceError = null,
   evidenceIsLoading = false,
   canReviewEvidence = false,
+  canRequestEvidenceExport = false,
   evidenceExportMessage = null,
   isRequestingEvidenceExport = false,
   onNextEvidencePage,
@@ -211,14 +213,16 @@ export function AuditPanel({
                 >
                   Proxima
                 </button>
-                <button
-                  aria-label="Solicitar export controlado"
-                  disabled={isRequestingEvidenceExport}
-                  onClick={onRequestEvidenceExport}
-                  type="button"
-                >
-                  Solicitar export
-                </button>
+                {canRequestEvidenceExport ? (
+                  <button
+                    aria-label="Solicitar export controlado"
+                    disabled={isRequestingEvidenceExport}
+                    onClick={onRequestEvidenceExport}
+                    type="button"
+                  >
+                    Solicitar export
+                  </button>
+                ) : null}
               </div>
             </div>
             {evidenceExportMessage ? (
