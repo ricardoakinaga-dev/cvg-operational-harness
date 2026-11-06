@@ -1,4 +1,5 @@
 import {
+  classifyForbiddenCapability,
   createCorrelationId,
   RoleSchema,
   sanitizeAuditEvidencePayload,
@@ -89,6 +90,7 @@ export type CapabilityToolBlockReason =
   | 'tool_output_validator_missing'
   | 'invalid_tool_context'
   | 'plugin_permission_not_declared'
+  | 'forbidden_capability_category'
 
 export type CapabilityToolResolution =
   | {
@@ -765,6 +767,20 @@ export class CapabilityGateway {
     const handler = plugin.handlers[toolName]
     if (!tool || typeof handler !== 'function') {
       return { status: 'blocked', reason: 'tool_not_registered' as const }
+    }
+    // SPEC 0317 G4 §3: absolute block, whatever the flags or the policy say.
+    if (
+      classifyForbiddenCapability([
+        plugin.manifest.name,
+        tool.name,
+        tool.permission,
+        ...plugin.manifest.capabilities
+      ])
+    ) {
+      return {
+        status: 'blocked',
+        reason: 'forbidden_capability_category' as const
+      }
     }
     const inputValidator = plugin.inputValidators?.[toolName]
     if (!inputValidator) {

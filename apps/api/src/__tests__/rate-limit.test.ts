@@ -134,4 +134,36 @@ describe('in-memory API rate limiter', () => {
       error: { code: 'rate_limited' }
     })
   })
+
+  // CodeQL js/missing-rate-limiting does not model this hook. The limit is
+  // real and runs before the handler; these requests prove it for #27, #40
+  // and the handlers of #28-#32, now in routes/register-*.ts.
+  it.each([
+    ['GET', '/v1/sessions/session-a/events/stream'],
+    ['POST', '/v1/journeys/tasks'],
+    ['POST', '/v1/tasks'],
+    ['PATCH', '/v1/tasks/task-a/status'],
+    ['POST', '/v1/approvals'],
+    ['POST', '/v1/approvals/approval-a/decision'],
+    ['POST', '/v1/executions/execution-a/approvals/approval-a/decision'],
+    ['POST', '/v1/admin/agents/agent-a/versions/version-a/publish'],
+    ['POST', '/v1/admin/agents/agent-a/rollback']
+  ] as const)('limits %s %s before its handler runs', async (method, url) => {
+    const keys: string[] = []
+    const app = buildServer({
+      rateLimiter: {
+        check: (key) => {
+          keys.push(key)
+          return { allowed: false, retryAfterSeconds: 7 }
+        }
+      },
+      sessionEventStreams: { events: {} as never }
+    })
+    const response = await app.inject({ method, url })
+    await app.close()
+
+    expect(response.statusCode).toBe(429)
+    expect(response.headers['retry-after']).toBe('7')
+    expect(keys).toEqual([expect.stringMatching(/^ip:/)])
+  })
 })

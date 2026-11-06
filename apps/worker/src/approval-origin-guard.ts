@@ -5,8 +5,8 @@ import {
 
 /** SPEC 0291: additive migration that adds the immutable origin of a runtime approval. */
 export const APPROVAL_ORIGIN_MIGRATION = '0035_runtime_approval_origin'
-const GUARD_FUNCTION = 'cvg_runtime_approvals_origin_immutable'
-const GUARD_TRIGGER = 'runtime_approvals_origin_immutable'
+/** SPEC 0317 G1: additive migration that adds the immutable requester. */
+export const REQUESTER_PRINCIPAL_MIGRATION = '0039_requester_principal'
 // pg_trigger.tgtype: ROW (1) + BEFORE (2) + UPDATE (16), and nothing else
 const BEFORE_UPDATE_FOR_EACH_ROW = 1 + 2 + 16
 
@@ -34,6 +34,55 @@ export async function assertApprovalOriginGuard(
     'SELECT origin_conversation_id, origin_session_id FROM runtime_approvals WHERE tenant_id = $1 LIMIT 0',
     [tenantId]
   )
+  await assertImmutabilityTrigger(client, {
+    table: 'runtime_approvals',
+    trigger: 'runtime_approvals_origin_immutable',
+    guardFunction: 'cvg_runtime_approvals_origin_immutable',
+    migration: APPROVAL_ORIGIN_MIGRATION
+  })
+}
+
+/**
+ * SPEC 0317 G1, the same standard for the author of an execution and of its approval: without
+ * these guards the author could change after the fact, so the operational worker refuses to
+ * start. The client must already be inside the tenant context.
+ */
+export async function assertRequesterPrincipalGuard(
+  client: PostgresQueryable,
+  tenantId: string
+): Promise<void> {
+  await client.query(
+    'SELECT requested_by_kind, requested_by_id, requested_by_tenant_id, requester_binding FROM runtime_approvals WHERE tenant_id = $1 LIMIT 0',
+    [tenantId]
+  )
+  await client.query(
+    'SELECT submitted_by_kind, submitted_by_id, submitted_by_tenant_id FROM operational_executions WHERE tenant_id = $1 LIMIT 0',
+    [tenantId]
+  )
+  await assertImmutabilityTrigger(client, {
+    table: 'runtime_approvals',
+    trigger: 'runtime_approvals_requested_by_immutable',
+    guardFunction: 'cvg_runtime_approvals_requested_by_immutable',
+    migration: REQUESTER_PRINCIPAL_MIGRATION
+  })
+  await assertImmutabilityTrigger(client, {
+    table: 'operational_executions',
+    trigger: 'operational_executions_submitted_by_immutable',
+    guardFunction: 'cvg_operational_executions_submitted_by_immutable',
+    migration: REQUESTER_PRINCIPAL_MIGRATION
+  })
+}
+
+async function assertImmutabilityTrigger(
+  client: PostgresQueryable,
+  guardSpec: {
+    readonly table: string
+    readonly trigger: string
+    readonly guardFunction: string
+    readonly migration: string
+  }
+): Promise<void> {
+  const { table, trigger, guardFunction, migration: migrationName } = guardSpec
   const guard = await client.query<{
     enabled: string
     type: number
@@ -51,10 +100,10 @@ export async function assertApprovalOriginGuard(
             pg_get_functiondef(p.oid) AS definition
        FROM pg_trigger t
        JOIN pg_proc p ON p.oid = t.tgfoid
-      WHERE t.tgrelid = to_regclass(format('%I.%I', current_schema(), 'runtime_approvals'))
+      WHERE t.tgrelid = to_regclass(format('%I.%I', current_schema(), $2::text))
         AND t.tgname = $1
         AND NOT t.tgisinternal`,
-    [GUARD_TRIGGER]
+    [trigger, table]
   )
   const row = guard.rows[0]
   if (
@@ -71,12 +120,12 @@ export async function assertApprovalOriginGuard(
     row.config[0] !== 'search_path=pg_catalog, pg_temp'
   )
     throw new Error(
-      `Approval origin guard is missing or altered (${APPROVAL_ORIGIN_MIGRATION})`
+      `Approval origin guard is missing or altered (${migrationName})`
     )
-  const migration = await readPostgresMigrationSql(APPROVAL_ORIGIN_MIGRATION)
-  const start = migration.indexOf(`FUNCTION ${GUARD_FUNCTION}(`)
+  const migration = await readPostgresMigrationSql(migrationName)
+  const start = migration.indexOf(`FUNCTION ${guardFunction}(`)
   if (start < 0 || bodyOf(row.definition) !== bodyOf(migration.slice(start)))
     throw new Error(
-      `Approval origin guard is missing or altered (${APPROVAL_ORIGIN_MIGRATION})`
+      `Approval origin guard is missing or altered (${migrationName})`
     )
 }

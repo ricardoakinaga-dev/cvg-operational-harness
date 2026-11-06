@@ -1,5 +1,5 @@
 import { Client, Pool } from 'pg'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL
 
@@ -57,6 +57,13 @@ describe.skipIf(!TEST_DATABASE_URL)('chaos: PostgreSQL resilience', () => {
         'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()'
       )
       await admin.end()
+      // pg_terminate_backend returns before each socket sees the FATAL, so an
+      // idle client can still be handed out here. Eviction must happen first;
+      // only then is the first query required to succeed, without any retry.
+      await vi.waitFor(() => expect(pool.totalCount).toBe(0), {
+        timeout: 5_000,
+        interval: 10
+      })
       const recovered = await pool.query<{ answer: number }>(
         'SELECT 42 AS answer'
       )

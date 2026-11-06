@@ -58,6 +58,11 @@ export interface ReconciliationApproval {
   readonly payloadHash: string
   readonly operationKey?: string
   readonly correlationId: string
+  readonly requestedBy?: {
+    readonly kind: 'human' | 'system'
+    readonly id: string
+    readonly tenantId: string
+  }
 }
 
 export interface ReconciliationExecution {
@@ -206,6 +211,7 @@ export async function reconcileApprovalDecision(
         payloadHash: approval.payloadHash,
         commandKey,
         operationKey: approval.operationKey ?? null,
+        requestedBy: approval.requestedBy ?? { kind: 'unknown' },
         // SPEC 0272: marks an event written by the recovery path (the API
         // writes previousState/nextState; recovery does not know them).
         recovered: true,

@@ -35,6 +35,7 @@ import {
   computeReleaseCandidateEvidenceDigest,
   parseReleaseCandidateGateResults,
   sanitizeTestSuiteRunTraces,
+  sanitizePersistedTrace,
   sanitizeTraceForPersistence,
   type AgentConfig,
   type AgentCreateInput,
@@ -1815,7 +1816,9 @@ function mapTestSuite(row: TestSuiteRow): TestSuiteRecord {
     versionId: row.version_id as TestSuiteRecord['versionId'],
     version: row.version,
     cases: Array.isArray(row.cases)
-      ? row.cases.map((testCase) => sanitizeTestCase(testCase as TestLabCase))
+      ? row.cases.map((testCase) =>
+          sanitizeTestCase(withoutLegacyKnowledge(testCase))
+        )
       : [],
     previousSuiteId: row.previous_suite_id
       ? TestSuiteIdSchema.parse(row.previous_suite_id)
@@ -1830,16 +1833,19 @@ function mapTestSuiteRun(
   row: TestSuiteRunRow,
   expectedTenantId: string
 ): TestSuiteRunRecord {
-  const normalized = sanitizeTestSuiteRunTraces({
-    tenantId: TenantIdSchema.parse(row.tenant_id),
-    id: TestSuiteRunIdSchema.parse(row.id),
-    suiteId: TestSuiteIdSchema.parse(row.suite_id),
-    agentId: AgentIdSchema.parse(row.agent_id),
-    variants: row.result?.variants,
-    passed: row.result?.passed,
-    createdBy: row.created_by,
-    createdAt: new Date(row.created_at)
-  })
+  const normalized = sanitizeTestSuiteRunTraces(
+    {
+      tenantId: TenantIdSchema.parse(row.tenant_id),
+      id: TestSuiteRunIdSchema.parse(row.id),
+      suiteId: TestSuiteIdSchema.parse(row.suite_id),
+      agentId: AgentIdSchema.parse(row.agent_id),
+      variants: row.result?.variants,
+      passed: row.result?.passed,
+      createdBy: row.created_by,
+      createdAt: new Date(row.created_at)
+    },
+    sanitizePersistedTrace
+  )
   const checked = {
     ...normalized,
     variants: normalized.variants.map((variant) => ({
@@ -1894,7 +1900,7 @@ function assertReadTraceTenant(
     createdAt?: unknown
   }
 ): TestRunTrace {
-  const trace = sanitizeTraceForPersistence(rawTrace)
+  const trace = sanitizePersistedTrace(rawTrace)
   if (
     trace.tenantId !== expectedTenantId ||
     (rowReferences?.tenantId !== undefined &&
@@ -2058,16 +2064,20 @@ function sanitizeTestCase(rawCase: TestLabCase): TestLabCase {
   return {
     ...testCase,
     message: redactSensitiveText(testCase.message),
-    history: testCase.history.map((item) => redactSensitiveText(item)),
-    ...(testCase.approvedKnowledge
-      ? {
-          approvedKnowledge: {
-            ...testCase.approvedKnowledge,
-            answer: redactSensitiveText(testCase.approvedKnowledge.answer)
-          }
-        }
-      : {})
+    history: testCase.history.map((item) => redactSensitiveText(item))
   }
+}
+
+/**
+ * SPEC 0317 G3: suites stored before the fixture left the contract may still
+ * carry client-chosen knowledge. It is dropped on read and never reaches a run.
+ */
+function withoutLegacyKnowledge(rawCase: unknown): TestLabCase {
+  const testCase = {
+    ...(rawCase as TestLabCase & { approvedKnowledge?: unknown })
+  }
+  delete testCase.approvedKnowledge
+  return testCase
 }
 
 function cloneTestSuiteRun(run: TestSuiteRunRecord): TestSuiteRunRecord {

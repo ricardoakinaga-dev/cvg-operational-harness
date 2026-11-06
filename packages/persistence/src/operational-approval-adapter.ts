@@ -115,7 +115,10 @@ export class DurableApprovalEngineAdapter implements ApprovalEngine {
           : {}),
         singleUse: true,
         reason: input.summary,
-        proposalPayload: payload
+        proposalPayload: payload,
+        ...(input.requestedBy !== undefined
+          ? { requestedBy: input.requestedBy }
+          : {})
       })
       const pending =
         created.status === 'REQUESTED'
@@ -162,6 +165,7 @@ export class DurableApprovalEngineAdapter implements ApprovalEngine {
       record.policyVersion !== input.policyVersion ||
       (input.input.executionRef !== undefined &&
         record.executionRef !== input.input.executionRef) ||
+      !sameRequester(record.requestedBy, input.input.requestedBy) ||
       !approvalMatchesAction(record, {
         action: input.action,
         resource: input.resource,
@@ -197,6 +201,14 @@ export class DurableApprovalEngineAdapter implements ApprovalEngine {
       })
     ) {
       throw new Error('Approval binding no longer matches the execution.')
+    }
+    // SPEC 0317 G1: last stop before the effect. An approval decided before
+    // the requester was recorded has no trusted origin and stays unusable.
+    if (
+      record.requestedBy === undefined ||
+      record.requestedBy.id === record.approverId
+    ) {
+      throw new Error('Approval has no trusted separate requester.')
     }
     const reservation = await this.authority.reserve({
       tenantId: request.tenantId,
@@ -320,6 +332,17 @@ export class DurableApprovalEngineAdapter implements ApprovalEngine {
     }
     return { status: 'DENIED', approvalId, reason }
   }
+}
+
+function sameRequester(
+  left: ApprovalRecord['requestedBy'],
+  right: ApprovalRequest['requestedBy']
+): boolean {
+  return (
+    left?.kind === right?.kind &&
+    left?.id === right?.id &&
+    left?.tenantId === right?.tenantId
+  )
 }
 
 function isApprovalBindingUniqueViolation(error: unknown): boolean {

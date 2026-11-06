@@ -5,6 +5,7 @@ import {
   CanonicalOutboundMessageSchema,
   type CanonicalOutboundMessageInput
 } from '../contracts.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000000a1'
 const CORRELATION = 'corr_00000000-0000-4000-8000-0000000000a1'
@@ -28,7 +29,10 @@ function outbound(overrides: Partial<CanonicalOutboundMessageInput> = {}) {
 describe('AUD-20260912-F04 regression: concurrent outbound dispatch', () => {
   it('Promise.all of two identical dispatches produces exactly one provider send', async () => {
     const adapter = new ControlledFakeChannelAdapter({ clock: () => NOW })
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
 
     const [first, second] = await Promise.all([
       gateway.dispatch(outbound(), { takeoverActive: false }),
@@ -41,7 +45,10 @@ describe('AUD-20260912-F04 regression: concurrent outbound dispatch', () => {
 
   it('rejects a reused idempotency key carrying a different payload', async () => {
     const adapter = new ControlledFakeChannelAdapter({ clock: () => NOW })
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
 
     await gateway.dispatch(outbound(), { takeoverActive: false })
     await expect(

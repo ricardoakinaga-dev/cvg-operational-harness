@@ -125,6 +125,14 @@ function canReviewAuditEvidence(role: OperatorRole): boolean {
   return role === 'Supervisor' || role === 'Admin'
 }
 
+/**
+ * SPEC 0317 G5: asking for an export review also needs `approval:create`, which
+ * Admin does not hold, although Admin keeps reviewing the evidence.
+ */
+function canRequestAuditEvidenceExport(role: OperatorRole): boolean {
+  return role === 'Supervisor'
+}
+
 const auditEvidenceLimit = 10
 /** SPEC0250 §3.6 — bounded queues: pending approvals and active tasks. */
 const queuePageSize = 25
@@ -1044,7 +1052,7 @@ export function App({
     const identity = currentOperatorIdentity()
     if (!identity || !isCurrentViewScope(scope)) return
     if (!selectedSessionId) return
-    if (!canReviewAuditEvidence(identity.role)) return
+    if (!canRequestAuditEvidenceExport(identity.role)) return
 
     // SPEC 0257 §7: one logical operation per tenant/operator/session/action.
     // Block a second click while a request is in flight.
@@ -1525,6 +1533,10 @@ export function App({
           evidenceError={auditEvidence.error}
           evidenceIsLoading={auditEvidence.isLoading}
           canReviewEvidence={canReviewEvidence}
+          canRequestEvidenceExport={
+            identityReady &&
+            canRequestAuditEvidenceExport(currentIdentity?.role ?? 'Operator')
+          }
           evidenceExportMessage={auditEvidenceExportMessage}
           isRequestingEvidenceExport={isRequestingAuditEvidenceExport}
           checkpoint={auditEvidenceCheckpoint.data}

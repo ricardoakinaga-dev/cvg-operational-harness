@@ -7,6 +7,7 @@ import { loadShiftConfig } from '../config.ts'
 import { allowlistedFetch } from '../egress.ts'
 import { sandboxOrganizer } from '../sandbox/services.ts'
 import { ShiftStore } from '../store.ts'
+import { syntheticWebhook } from '../sandbox/webhook.ts'
 import { DispatchError } from '../transport-limits.ts'
 import { WahaClient, type WhatsAppClient } from '../whatsapp.ts'
 import {
@@ -26,13 +27,11 @@ import {
 // codes inbox_stalled and job_deadline_exceeded (SPEC 0179 sections 6 and
 // 8.2-8.3). Synthetic data only.
 
-const SECRET = 'segredo-sintetico-de-teste-123456'
-
 function env(overrides: Record<string, string> = {}) {
   return {
     SHIFT_PROVIDER: 'waha',
     SHIFT_MEMBERS: `${ANA}=Dra Ana;${GESTOR}=Gestor*`,
-    SHIFT_WEBHOOK_SECRET: SECRET,
+    ...syntheticWebhook().env,
     SHIFT_DATA_DIR: tempDir('residual'),
     SHIFT_PORT: '0',
     SHIFT_HOST: '127.0.0.1',

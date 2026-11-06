@@ -37,6 +37,7 @@ vi.mock('node:fs', async (importOriginal) => {
 })
 
 import { InMemoryChannelEffectJournal, createExamUploadTool } from '../index.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -62,6 +63,7 @@ function layout() {
 }
 function uploader(root: string, sent: string[]) {
   return createExamUploadTool({
+    realCapabilityGuard: realChannelGuard,
     effectJournal: new InMemoryChannelEffectJournal(),
     workspaceRoot: root,
     urlGuard: { allowedHosts: ['exams.example.com'] },

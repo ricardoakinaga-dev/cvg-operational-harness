@@ -1,21 +1,30 @@
-import { timingSafeEqual } from 'node:crypto'
 import {
   createServer,
   type IncomingMessage,
   type Server,
   type ServerResponse
 } from 'node:http'
-import type { ShiftAssistant } from './assistant.ts'
+import type { ShiftAssistant, ShiftLogger } from './assistant.ts'
 import type { ShiftStore } from './store.ts'
 import { LIMITS } from './transport-limits.ts'
+import {
+  bodySha256,
+  checkEnvelope,
+  verifyWebhookBody,
+  type WebhookAuth,
+  type WebhookRefusal
+} from './webhook-auth.ts'
 import type { WhatsAppClient } from './whatsapp.ts'
 
 export interface ShiftServerOptions {
   assistant: ShiftAssistant
   store: ShiftStore
   whatsapp: WhatsAppClient
-  webhookSecret: string
+  webhookAuth: WebhookAuth
+  /** Trusted clock of the webhook window; request headers never set it. */
   clock?: () => Date
+  /** Receives refusal codes only: no URL, header, body or key material. */
+  logger?: ShiftLogger
   /** Webhooks may carry inline media (Evolution `webhook_base64`). */
   maxBodyBytes?: number
   /** Deadline to receive a whole webhook body (default 10 s). */
@@ -26,21 +35,14 @@ export interface ShiftServerOptions {
 const MAX_CONNECTIONS = 16
 const MAX_BODY_READS = 4
 
-function secretMatches(expected: string, received: unknown): boolean {
-  if (typeof received !== 'string') return false
-  const a = Buffer.from(expected)
-  const b = Buffer.from(received)
-  return a.length === b.length && timingSafeEqual(a, b)
-}
-
 class BodyTooLargeError extends Error {}
 class BodyTimeoutError extends Error {}
 
-async function readJson(
+async function readBody(
   request: IncomingMessage,
   limit: number,
   timeoutMs: number
-): Promise<unknown> {
+): Promise<Buffer> {
   const declared = Number(request.headers['content-length'])
   if (Number.isFinite(declared) && declared > limit) {
     throw new BodyTooLargeError()
@@ -66,9 +68,11 @@ async function readJson(
     clearTimeout(timer)
   }
   if (timedOut) throw new BodyTimeoutError()
-  return JSON.parse(
-    new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
-  )
+  return Buffer.concat(chunks)
+}
+
+function parseJson(body: Buffer): unknown {
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
 }
 
 function send(
@@ -91,8 +95,19 @@ export function buildShiftServer(options: ShiftServerOptions): Server {
   const clock = options.clock ?? (() => new Date())
   const limit = options.maxBodyBytes ?? 25 * 1024 * 1024
   const bodyTimeoutMs = options.bodyTimeoutMs ?? 10_000
-  const webhookPath = `/webhooks/${options.whatsapp.provider}`
+  const provider = options.whatsapp.provider
+  const webhookPath = `/webhooks/${provider}`
   let reading = 0
+
+  const refuse = (
+    request: IncomingMessage,
+    response: ServerResponse,
+    reason: WebhookRefusal
+  ): void => {
+    options.logger?.info('shift.webhook.refused', { provider, reason })
+    if (!request.destroyed) request.resume()
+    send(response, 401, { error: 'unauthorized' }, { connection: 'close' })
+  }
 
   const server = createServer((request, response) => {
     void (async () => {
@@ -117,7 +132,7 @@ export function buildShiftServer(options: ShiftServerOptions): Server {
         if (url.pathname === '/health') {
           send(response, health.ready ? 200 : 503, {
             ok: health.ready,
-            provider: options.whatsapp.provider,
+            provider,
             paused: options.store.paused,
             ...health
           })
@@ -128,12 +143,20 @@ export function buildShiftServer(options: ShiftServerOptions): Server {
         send(response, 404, { error: 'not_found' })
         return
       }
-      const provided =
-        request.headers['x-cvg-webhook-secret'] ??
-        url.searchParams.get('secret')
-      if (!secretMatches(options.webhookSecret, provided)) {
-        request.resume()
-        send(response, 401, { error: 'unauthorized' })
+      // The contract has no query: a credential in a URL is refused, never
+      // read, and the URL goes nowhere near a log.
+      if (url.search !== '') {
+        refuse(request, response, 'query_refused')
+        return
+      }
+      const checked = checkEnvelope(
+        request.headers,
+        options.webhookAuth,
+        provider,
+        clock().getTime()
+      )
+      if ('refusal' in checked) {
+        refuse(request, response, checked.refusal)
         return
       }
       if (reading >= MAX_BODY_READS) {
@@ -141,17 +164,17 @@ export function buildShiftServer(options: ShiftServerOptions): Server {
         send(response, 503, { error: 'busy' }, { 'retry-after': '30' })
         return
       }
-      let payload: unknown
+      let body: Buffer
       reading += 1
       try {
-        payload = await readJson(request, limit, bodyTimeoutMs)
+        body = await readBody(request, limit, bodyTimeoutMs)
       } catch (error) {
         const [status, code] =
           error instanceof BodyTooLargeError
             ? [413, 'too_large']
             : error instanceof BodyTimeoutError
               ? [408, 'request_timeout']
-              : [400, 'invalid_json']
+              : [400, 'invalid_body']
         if (!request.destroyed) request.resume()
         if (!response.headersSent && !response.destroyed) {
           send(response, status, { error: code }, { connection: 'close' })
@@ -160,10 +183,44 @@ export function buildShiftServer(options: ShiftServerOptions): Server {
       } finally {
         reading -= 1
       }
-      const message = options.whatsapp.parseWebhook(
-        payload,
-        clock().toISOString()
-      )
+      // From here to the admission nothing awaits: concurrent deliveries of
+      // one ID run one after the other, and the first reservation decides.
+      if (!verifyWebhookBody(checked.envelope, provider, body)) {
+        refuse(request, response, 'signature_invalid')
+        return
+      }
+      const now = clock().toISOString()
+      let reservation: ReturnType<ShiftStore['reserveWebhookDelivery']>
+      try {
+        reservation = options.store.reserveWebhookDelivery(
+          {
+            provider,
+            tenant: checked.envelope.tenant,
+            deliveryId: checked.envelope.deliveryId,
+            bodySha256: bodySha256(body)
+          },
+          now
+        )
+      } catch {
+        send(response, 503, { error: 'storage_unavailable' })
+        return
+      }
+      if (reservation === 'conflict') {
+        options.logger?.info('shift.webhook.conflict', { provider })
+        send(response, 409, { error: 'delivery_conflict' })
+        return
+      }
+      // A replay continues on purpose: a crash or a 503 may have come between
+      // the reservation and the admission, and admit() is idempotent by
+      // message ID, so a retry completes the first delivery or converges.
+      let payload: unknown
+      try {
+        payload = parseJson(body)
+      } catch {
+        send(response, 400, { error: 'invalid_json' })
+        return
+      }
+      const message = options.whatsapp.parseWebhook(payload, now)
       if (!message) {
         send(response, 200, { accepted: false })
         return

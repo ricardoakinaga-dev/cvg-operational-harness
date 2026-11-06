@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { composeShiftApp, type ShiftApp } from '../compose.ts'
 import { loadShiftConfig } from '../config.ts'
 import { allowlistedFetch } from '../egress.ts'
+import { syntheticWebhook, webhookAuthOf } from '../sandbox/webhook.ts'
 import { buildShiftServer } from '../server.ts'
 import { WhisperTranscriber } from '../transcriber.ts'
 import { EvolutionClient, WahaClient } from '../whatsapp.ts'
@@ -22,7 +23,7 @@ import { ANA, GESTOR, setup, tempDir, wahaPayload } from './support/harness.ts'
 // channel/Whisper call, pause outside the network queue, readiness that
 // reflects progress and a bounded shutdown. SPEC 0179 section 8.
 
-const SECRET = 'segredo-sintetico-de-teste-123456'
+const signer = syntheticWebhook()
 const MiB = 1024 * 1024
 const servers: Server[] = []
 
@@ -303,20 +304,20 @@ describe('F21: pause, job deadline and readiness do not wait on the network', ()
       assistant: env.assistant,
       store: env.store,
       whatsapp: env.waha.client,
-      webhookSecret: SECRET
+      webhookAuth: webhookAuthOf(signer),
+      clock: env.now
     })
     servers.push(server)
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-    const post = (payload: unknown) =>
-      fetch(`${base}/webhooks/waha`, {
+    const post = (payload: unknown) => {
+      const body = JSON.stringify(payload)
+      return fetch(`${base}/webhooks/waha`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-cvg-webhook-secret': SECRET
-        },
-        body: JSON.stringify(payload)
+        headers: signer.headers(body, env.now()),
+        body
       })
+    }
 
     expect((await fetch(`${base}/health/live`)).status).toBe(200)
     const ready = await fetch(`${base}/health/ready`)
@@ -382,7 +383,7 @@ describe('F21: composition schedules without overlap and stops in bounded time',
     return loadShiftConfig({
       SHIFT_PROVIDER: 'waha',
       SHIFT_MEMBERS: `${ANA}=Dra Ana;${GESTOR}=Gestor*`,
-      SHIFT_WEBHOOK_SECRET: SECRET,
+      ...signer.env,
       SHIFT_DATA_DIR: tempDir('compose'),
       SHIFT_PORT: '0',
       SHIFT_HOST: '127.0.0.1',
@@ -418,13 +419,11 @@ describe('F21: composition schedules without overlap and stops in bounded time',
       fetchImpl: () => new Promise<Response>(() => undefined)
     })
     const port = await app.start()
+    const body = JSON.stringify(wahaPayload('h1', ANA, 'ajuda'))
     const response = await fetch(`http://127.0.0.1:${port}/webhooks/waha`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-cvg-webhook-secret': SECRET
-      },
-      body: JSON.stringify(wahaPayload('h1', ANA, 'ajuda'))
+      headers: signer.headers(body, new Date()),
+      body
     })
     expect(response.status).toBe(200)
     const started = Date.now()

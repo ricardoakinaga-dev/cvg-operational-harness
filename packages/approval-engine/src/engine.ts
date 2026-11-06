@@ -6,8 +6,10 @@ import {
   EffectEvidenceSchema,
   approvalMatchesAction,
   computeApprovalPayloadHash,
+  computeRequesterBinding,
   type ApprovalRecord,
   type ApprovalDecisionInput,
+  type ApprovalRequester,
   type ApprovalRequestInput,
   type ApprovalReservation,
   type ApprovalReserveInput,
@@ -32,6 +34,7 @@ export const ApprovalErrorCodes = {
   uncertain: 'uncertain',
   invalid_proof: 'invalid_proof',
   self_approval_denied: 'self_approval_denied',
+  requester_unknown: 'requester_unknown',
   not_authorized: 'not_authorized',
   invalid_request: 'invalid_request'
 } as const
@@ -81,7 +84,6 @@ export interface ApprovalEngineOptions {
   idFactory?: () => string
   defaultExpiryMs?: number
   reservationTtlMs?: number
-  allowSelfApproval?: boolean
   onEvent?: (event: ApprovalEvent) => void
 }
 
@@ -112,6 +114,54 @@ function isExpirable(record: ApprovalRecord): boolean {
   )
 }
 
+/** The author recorded on the execution; `unknown` keeps it from authorizing. */
+export type ExecutionRequesterOrigin =
+  | ApprovalRequester
+  | { readonly kind: 'unknown' }
+
+/**
+ * SPEC 0317 G1: compares the two durable records of a runtime decision before
+ * anything mutates, in the atomic PostgreSQL unit and in the memory fallback.
+ *
+ * - Unknown origin never approves; a rejection stays available, so a pending
+ *   approval can still be closed and recreated or handed off.
+ * - Records that disagree, or a binding that does not recompute, are the same
+ *   not found as any other broken execution/approval binding.
+ * - The requester cannot approve, whatever the role. Rejecting stays allowed.
+ */
+export function assertRequesterDecision(input: {
+  readonly submittedBy: ExecutionRequesterOrigin
+  readonly approval: ApprovalRecord
+  readonly verdict: 'APPROVED' | 'REJECTED'
+  readonly actorId: string
+}): void {
+  const { submittedBy, approval, verdict, actorId } = input
+  const requester = approval.requestedBy
+  if (submittedBy.kind === 'unknown' || requester === undefined) {
+    if (verdict === 'REJECTED') return
+    throw new ApprovalError(
+      'requester_unknown',
+      'Approval has no trusted requester: reject it and recreate it, or hand it off'
+    )
+  }
+  if (
+    requester.kind !== submittedBy.kind ||
+    requester.id !== submittedBy.id ||
+    requester.tenantId !== submittedBy.tenantId ||
+    requester.tenantId !== approval.tenantId ||
+    approval.requesterBinding !==
+      computeRequesterBinding({ ...approval, requestedBy: requester })
+  ) {
+    throw new ApprovalError('not_found', 'Approval not found')
+  }
+  if (verdict === 'APPROVED' && requester.id === actorId) {
+    throw new ApprovalError(
+      'self_approval_denied',
+      'The requester of an execution cannot approve it'
+    )
+  }
+}
+
 const DEFAULT_EXPIRY_MS = 15 * 60 * 1000
 const DEFAULT_RESERVATION_TTL_MS = 60 * 1000
 const MAX_RESERVATION_HISTORY = 64
@@ -131,7 +181,6 @@ export class ApprovalEngine {
   readonly #idFactory: () => string
   readonly #defaultExpiryMs: number
   readonly #reservationTtlMs: number
-  readonly #allowSelfApproval: boolean
   readonly #onEvent?: (event: ApprovalEvent) => void
 
   constructor(options: ApprovalEngineOptions = {}) {
@@ -141,7 +190,6 @@ export class ApprovalEngine {
     this.#defaultExpiryMs = options.defaultExpiryMs ?? DEFAULT_EXPIRY_MS
     this.#reservationTtlMs =
       options.reservationTtlMs ?? DEFAULT_RESERVATION_TTL_MS
-    this.#allowSelfApproval = options.allowSelfApproval ?? false
     if (options.onEvent) this.#onEvent = options.onEvent
   }
 
@@ -154,8 +202,17 @@ export class ApprovalEngine {
       )
     }
     const request = parsed.data
+    if (
+      request.requestedBy !== undefined &&
+      request.requestedBy.tenantId !== request.tenantId
+    ) {
+      throw new ApprovalError(
+        'invalid_request',
+        'Approval requester belongs to another tenant'
+      )
+    }
     const now = this.#clock()
-    const record: ApprovalRecord = {
+    const proposed: ApprovalRecord = {
       approvalId: this.#idFactory(),
       tenantId: request.tenantId,
       operatorId: request.operatorId,
@@ -215,6 +272,17 @@ export class ApprovalEngine {
           }
         : {})
     }
+    const record: ApprovalRecord =
+      request.requestedBy !== undefined
+        ? {
+            ...proposed,
+            requestedBy: { ...request.requestedBy },
+            requesterBinding: computeRequesterBinding({
+              ...proposed,
+              requestedBy: request.requestedBy
+            })
+          }
+        : proposed
     this.#store.insert(record)
     this.#emit({
       type: 'approval.requested',
@@ -268,13 +336,20 @@ export class ApprovalEngine {
   ): ApprovalRecord {
     const input = ApprovalDecisionInputSchema.parse(rawInput)
     const record = this.#require(tenantId, approvalId)
+    // SPEC 0317 G1: no option turns this off, and it precedes every other path.
+    if (record.requestedBy?.id === input.approverId) {
+      throw new ApprovalError(
+        'self_approval_denied',
+        'The requester of an execution cannot approve it'
+      )
+    }
     // AUD19-003: identical repeats converge (retry after a crash between the
     // decision and its effects). Checked before expiry so a decided record
     // never blocks convergence; divergent repeats fail closed below.
     const replay = this.#replayDecision(record, 'APPROVED', input)
     if (replay) return replay
     this.#assertNotExpired(record)
-    if (!this.#allowSelfApproval && record.operatorId === input.approverId) {
+    if (record.operatorId === input.approverId) {
       throw new ApprovalError(
         'self_approval_denied',
         'The requesting operator cannot approve their own action'
@@ -1357,6 +1432,9 @@ function cloneRecord(record: ApprovalRecord): ApprovalRecord {
   return {
     ...record,
     resource: { ...record.resource },
+    ...(record.requestedBy !== undefined
+      ? { requestedBy: { ...record.requestedBy } }
+      : {}),
     ...(record.proposalPayload !== undefined
       ? { proposalPayload: cloneValue(record.proposalPayload) }
       : {}),

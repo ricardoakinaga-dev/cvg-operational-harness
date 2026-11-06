@@ -27,7 +27,7 @@ import {
 const { node: DEFAULT_NODE, npm: DEFAULT_NPM } = pinnedToolchainLocation()
 const AUXILIARY_PINS = Object.freeze({
   '/usr/bin/git':
-    '2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668',
+    'eb54b535467e0975c1284d4c4d08eea779aeb248a5d34b02e2ee171382e22201',
   '/usr/bin/tar':
     '3ee2c3c0b4dd9aacebfd2f0fbae44bad36348203acff78a44888dd58c05f811c',
   '/usr/bin/strace':

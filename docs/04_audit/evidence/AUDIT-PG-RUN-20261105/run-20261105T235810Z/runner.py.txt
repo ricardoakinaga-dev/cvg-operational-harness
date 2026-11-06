@@ -1,0 +1,106 @@
+from pathlib import Path
+import os, subprocess, json, time, datetime, shutil
+
+base = Path('/tmp/cvg-codex-20261105')
+repo = base / 'repo'
+stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+run_id = 'cvg-codex-audit-pg-20261105-' + stamp
+out = base / run_id
+out.mkdir()
+(base / 'latest-run.txt').write_text(str(out) + '\n')
+node_bin = base / 'node-pinned/node-v22.23.2-linux-x64/bin'
+env = dict(os.environ, PATH=str(node_bin) + ':' + os.environ['PATH'],
+           CI_ARTIFACT_DIR=str(out / 'ci-bar'), CI_RUN_ID=run_id,
+           PHASE4A_DISPOSABLE_PG='1', CVG_TEST_SCOPE='core')
+container = run_id
+rows = []
+
+def save():
+    (out / 'results.json').write_text(json.dumps({
+        'runId': run_id, 'commit': 'd394d71a4f8e1cfb031aeca1b3442132e8a6a833',
+        'checkout': str(repo), 'output': str(out), 'rows': rows
+    }, indent=2) + '\n')
+
+def run(name, args, *, check=False):
+    print('START', name, flush=True)
+    started = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    tick = time.monotonic()
+    log = out / (name + '.log')
+    with log.open('w') as stream:
+        result = subprocess.run(args, cwd=repo, env=env, stdout=stream, stderr=subprocess.STDOUT)
+    row = {'gate': name, 'command': args, 'exitCode': result.returncode,
+           'durationSeconds': round(time.monotonic() - tick, 3),
+           'startedAt': started, 'log': str(log)}
+    rows.append(row)
+    save()
+    print('END', name, result.returncode, row['durationSeconds'], flush=True)
+    if check and result.returncode:
+        raise RuntimeError(name + ' failed; see ' + str(log))
+    return result.returncode
+
+def text(args):
+    return subprocess.check_output(args, cwd=repo, env=env, text=True).strip()
+
+probe = repo / 'guardrails-repro.mts'
+if probe.exists():
+    shutil.move(probe, base / 'guardrails-repro.mts')
+
+created = False
+try:
+    run('runtime', ['node', '--version'], check=True)
+    assert text(['node', '--version']) == 'v22.23.2'
+    assert text(['git', 'rev-parse', 'HEAD']) == 'd394d71a4f8e1cfb031aeca1b3442132e8a6a833'
+    run('docker-version', ['docker', 'version'], check=True)
+    run('install', ['npm', 'ci'], check=True)
+    run('postgres-pull', ['docker', 'pull', 'postgres:16-alpine'], check=True)
+    run('postgres-start', ['docker', 'run', '--detach', '--name', container,
+        '--label', 'cvg.audit.task=AUDIT-PG-RUN-20261105',
+        '--env', 'POSTGRES_DB=cvg_test', '--env', 'POSTGRES_USER=postgres',
+        '--env', 'POSTGRES_PASSWORD=postgres', '--publish', '127.0.0.1::5432',
+        'postgres:16-alpine'], check=True)
+    created = True
+    port = text(['docker', 'inspect', '--format', '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}', container])
+    assert port != '5432'
+    for _ in range(120):
+        ready = subprocess.run(['docker', 'exec', container, 'pg_isready', '-U', 'postgres', '-d', 'cvg_test'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if ready.returncode == 0:
+            break
+        time.sleep(0.25)
+    else:
+        raise RuntimeError('Own disposable PostgreSQL did not become ready')
+    env['TEST_DATABASE_URL'] = f'postgres://postgres:postgres@127.0.0.1:{port}/cvg_test'
+    metadata = {'container': container, 'port': int(port),
+                'databaseUrl': env['TEST_DATABASE_URL'], 'postgresVersion': text(['docker', 'exec', container, 'postgres', '--version']),
+                'imageId': text(['docker', 'inspect', '--format', '{{.Image}}', container]),
+                'repoDigests': json.loads(text(['docker', 'image', 'inspect', '--format', '{{json .RepoDigests}}', 'postgres:16-alpine'])),
+                'nodeVersion': text(['node', '--version']), 'npmVersion': text(['npm', '--version'])}
+    (out / 'environment.json').write_text(json.dumps(metadata, indent=2) + '\n')
+    print('POSTGRES_READY', metadata['postgresVersion'], 'port', port, flush=True)
+    run('ci-bar-init', ['node', 'scripts/ci-bar.mjs', 'init'], check=True)
+    run('postgres', ['npm', 'run', 'test:postgres', '--', '--reporter=default', '--reporter=json', '--outputFile=certification/postgres-test-report.json'])
+    report = repo / 'certification/postgres-test-report.json'
+    if report.exists(): shutil.copyfile(report, out / 'postgres-tests.json')
+    run('postgres-proof', ['npm', 'run', 'test:postgres:proof'])
+    proof = repo / 'certification/rem21-010-postgres-proof.json'
+    if proof.exists(): shutil.copyfile(proof, out / 'postgres-proof.json')
+    run('phase4a', ['npm', 'run', 'test:phase4a', '--', '--reporter=json', '--outputFile=' + str(out / 'phase4a-tests.json')])
+    rows.append({'gate': 'postgres-baseline', 'command':['npm','run','postgres:baseline'],
+                 'status':'NOT_APPLICABLE','exitCode':None,'durationSeconds':None,
+                 'reason':'New disposable database, no legacy schema to adopt; explicit legacy-baseline approval not fabricated'})
+    save()
+    run('image', ['node', 'scripts/ci-bar.mjs', 'gate', 'image'])
+    image = repo / 'certification/runtime-image.json'
+    if image.exists(): shutil.copyfile(image, out / 'runtime-image.json')
+except Exception as error:
+    (out / 'runner-error.log').write_text(repr(error) + '\n')
+    print('RUNNER_ERROR', repr(error), flush=True)
+finally:
+    if created:
+        run('postgres-server-log', ['docker', 'logs', container])
+        run('postgres-remove', ['docker', 'rm', '--force', '--volumes', container])
+    image_tag = 'cvg-operational-harness:ci-' + run_id
+    inspect = subprocess.run(['docker','image','inspect',image_tag],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    if inspect.returncode == 0:
+        run('image-remove', ['docker','image','rm',image_tag])
+    save()
+    print('RESULTS', out / 'results.json', flush=True)

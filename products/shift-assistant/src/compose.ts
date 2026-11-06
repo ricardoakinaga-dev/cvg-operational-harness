@@ -64,7 +64,7 @@ export function composeShiftApp(
   config: ShiftConfig,
   options: ComposeOptions = {}
 ): ShiftApp {
-  const { env, members } = config
+  const { env, members, webhook } = config
   assertTestOrganizer(options.organizer)
   const store = new ShiftStore(env.SHIFT_DATA_DIR)
   const guarded = (origins: string[]) =>
@@ -150,7 +150,8 @@ export function composeShiftApp(
     assistant,
     store,
     whatsapp,
-    webhookSecret: env.SHIFT_WEBHOOK_SECRET,
+    webhookAuth: webhook,
+    ...(options.logger ? { logger: options.logger } : {}),
     ...(options.clock ? { clock: options.clock } : {})
   })
 

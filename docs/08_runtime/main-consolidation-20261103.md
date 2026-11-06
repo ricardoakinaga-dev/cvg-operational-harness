@@ -1,6 +1,6 @@
 # Consolidação das branches — 03/11/2026
 
-Status: IN_PROGRESS. Pedido do usuário: integrar as branches e manter somente main.
+Status: COMPLETED em 04/11/2026 — PR #40 mesclado em `362dc043c` com 11 checks SUCCESS; somente `main` no remoto. Pedido do usuário: integrar as branches e manter somente main.
 
 ## Preservação e integração
 

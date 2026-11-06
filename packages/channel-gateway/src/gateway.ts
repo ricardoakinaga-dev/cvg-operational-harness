@@ -4,6 +4,7 @@ import {
   CanonicalOutboundMessageSchema,
   type CanonicalEnvelope,
   type CanonicalEnvelopeInput,
+  type CanonicalOutboundMessage,
   type CanonicalOutboundMessageInput,
   type InboundChannelAdapter,
   type InboundNormalizeContext,
@@ -23,6 +24,11 @@ import {
 } from './effect-journal.ts'
 import { MAX_RETRY_AFTER_MS } from './adapters/bounded-body.ts'
 import { InboundDeduplicator } from './idempotency.ts'
+import {
+  assertChannelGuardOpen,
+  validateChannelComposition,
+  type ChannelGatewayComposition
+} from './real-composition.ts'
 
 export type ChannelEventType =
   | 'channel.inbound.accepted'
@@ -44,6 +50,11 @@ export interface ChannelEvent {
 }
 
 export interface ChannelGatewayOptions {
+  /**
+   * SPEC 0317 G4: who classified these adapters. Required as soon as one
+   * adapter is composed; adapters never declare themselves synthetic.
+   */
+  composition?: ChannelGatewayComposition
   inboundAdapters?: InboundChannelAdapter[]
   outboundAdapters?: OutboundChannelAdapter[]
   deduplicator?: InboundDeduplicator
@@ -76,6 +87,7 @@ export const DEFAULT_CHANNEL_LEASE_MS = 30_000
  * restarts never produce a second confirmed send for the same operation.
  */
 export class ChannelGateway {
+  readonly #composition: ChannelGatewayComposition | undefined
   readonly #inbound = new Map<string, InboundChannelAdapter>()
   readonly #outbound = new Map<string, OutboundChannelAdapter>()
   readonly #deduplicator: InboundDeduplicator
@@ -89,6 +101,10 @@ export class ChannelGateway {
   readonly #onEvent?: (event: ChannelEvent) => void
 
   constructor(options: ChannelGatewayOptions = {}) {
+    this.#composition = validateChannelComposition(options.composition, [
+      ...(options.inboundAdapters ?? []),
+      ...(options.outboundAdapters ?? [])
+    ])
     for (const adapter of options.inboundAdapters ?? []) {
       this.#inbound.set(adapter.channel, adapter)
     }
@@ -114,6 +130,20 @@ export class ChannelGateway {
     raw: unknown,
     context: InboundNormalizeContext
   ): IngestResult {
+    if (this.#composition?.kind === 'real') {
+      try {
+        assertChannelGuardOpen(this.#composition.guard)
+      } catch (error) {
+        this.#emit({
+          type: 'channel.inbound.rejected',
+          channel,
+          tenantId: context.tenantId,
+          correlationId: context.correlationId,
+          code: 'real_capability_blocked'
+        })
+        throw error
+      }
+    }
     const adapter = this.#inbound.get(channel)
     if (!adapter) {
       throw new ChannelError(
@@ -200,6 +230,7 @@ export class ChannelGateway {
         `Channel ${outbound.channel} is disabled`
       )
     }
+    await this.#authorizeRealDispatch(outbound)
 
     const identity: ChannelEffectIdentity = {
       tenantId: outbound.tenantId,
@@ -464,6 +495,34 @@ export class ChannelGateway {
       'Channel operation is still in progress',
       true
     )
+  }
+
+  /** SPEC 0317 G4: before the journal, so a refusal leaves no reservation. */
+  async #authorizeRealDispatch(
+    outbound: CanonicalOutboundMessage
+  ): Promise<void> {
+    if (this.#composition?.kind !== 'real') return
+    let refusal: string | null = null
+    try {
+      assertChannelGuardOpen(this.#composition.guard)
+      const allowed = await this.#composition.authorizeDispatch(outbound)
+      if (allowed !== true) refusal = 'dispatch_not_authorized'
+    } catch (error) {
+      refusal =
+        error instanceof ChannelError
+          ? error.message
+          : 'dispatch_authorization_failed'
+    }
+    if (refusal === null) return
+    this.#emit({
+      type: 'channel.outbound.blocked',
+      channel: outbound.channel,
+      tenantId: outbound.tenantId,
+      correlationId: outbound.correlationId,
+      messageId: outbound.messageId,
+      code: 'real_capability_blocked'
+    })
+    throw new ChannelError('real_capability_blocked', refusal)
   }
 
   #emit(event: ChannelEvent): void {

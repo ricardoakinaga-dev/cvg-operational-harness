@@ -25,9 +25,15 @@
  * `sha256Before` records historical provenance only; it is not a checksum of
  * the current destination, which may legitimately change after extraction.
  *
+ * Sparse clones (SPEC 0314): with CVG_SPARSE_EVIDENCE=1 a target under
+ * docs/04_audit/evidence/ that is missing on disk is accepted only when Git
+ * tracks it (the clone left it out on purpose) and is listed as
+ * `sparseUnmaterialized`. Without the variable the check stays strict, as in CI.
+ *
  * Usage: node scripts/check-doc-links.mjs [roots...]
  * Exit 0 when no broken internal link exists in the scanned roots.
  */
+import { execFileSync } from 'node:child_process'
 import {
   existsSync,
   lstatSync,
@@ -167,6 +173,36 @@ if (existsSync(policyPath)) {
   }
 }
 
+const sparseEvidence = process.env.CVG_SPARSE_EVIDENCE === '1'
+const sparseUnmaterialized = []
+const evidencePrefix = 'docs/04_audit/evidence/'
+let trackedEvidence = null
+function isTrackedEvidence(path) {
+  if (!path.startsWith(evidencePrefix)) return false
+  if (trackedEvidence === null) {
+    // Tracked files plus every ancestor directory, so directory links work.
+    trackedEvidence = new Set()
+    const listed = execFileSync(
+      'git',
+      ['ls-files', '-z', '--', evidencePrefix],
+      {
+        encoding: 'utf8',
+        maxBuffer: 1 << 28
+      }
+    )
+    for (const file of listed.split('\0')) {
+      if (!file) continue
+      let current = file
+      while (current.length > evidencePrefix.length) {
+        if (trackedEvidence.has(current)) break
+        trackedEvidence.add(current)
+        current = current.slice(0, current.lastIndexOf('/'))
+      }
+    }
+  }
+  return trackedEvidence.has(path)
+}
+
 function relativeFile(file) {
   return relative(process.cwd(), file).split(sep).join('/')
 }
@@ -248,8 +284,9 @@ try {
       staleMovedTargets.push({ old: entry.old, new: entry.new })
     }
     if (
-      !existsSync(resolve(entry.new)) ||
-      !statSync(resolve(entry.new)).isFile()
+      (!existsSync(resolve(entry.new)) ||
+        !statSync(resolve(entry.new)).isFile()) &&
+      !(sparseEvidence && isTrackedEvidence(entry.new))
     ) {
       missingMovedTargets.push({ old: entry.old, new: entry.new })
     }
@@ -351,12 +388,17 @@ for (const root of roots) {
       const decoded = decodeURIComponent(parsed.path)
       const absolute = resolve(dirname(file), decoded)
       if (!existsSync(absolute)) {
+        if (sparseEvidence && isTrackedEvidence(relativeFile(absolute))) {
+          sparseUnmaterialized.push({ file, target })
+          continue
+        }
         const moved = movedTargetsByOld.get(relativeFile(absolute))
         if (moved) {
           if (
             !pathEntryExists(absolute) &&
-            existsSync(resolve(moved.new)) &&
-            statSync(resolve(moved.new)).isFile()
+            ((existsSync(resolve(moved.new)) &&
+              statSync(resolve(moved.new)).isFile()) ||
+              (sparseEvidence && isTrackedEvidence(moved.new)))
           ) {
             resolvedMovedTargets.push({
               file,
@@ -396,7 +438,8 @@ console.log(
       staleMovedTargets,
       missingMovedTargets,
       nonPortableAbsolute,
-      unallowlistedNonPortableAbsolute
+      unallowlistedNonPortableAbsolute,
+      ...(sparseEvidence ? { sparseUnmaterialized } : {})
     },
     null,
     2

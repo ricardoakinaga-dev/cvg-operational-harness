@@ -1228,7 +1228,9 @@ describe.skipIf(!url)('PAR-S01 slice 3: adapter, create, open, read', () => {
           )
         await waitFor(async () => (await count()) === 0)
         const kept = await pool.acquire({ timeoutMs: 3000 })
-        expect(await count()).toBe(1)
+        // An abandoned connect can still land after the count reached 0; it
+        // has to close on its own, leaving exactly the connection in use.
+        await waitFor(async () => (await count()) === 1)
         await kept.release()
       } finally {
         await admin.query(`DROP ROLE IF EXISTS ${late}`)

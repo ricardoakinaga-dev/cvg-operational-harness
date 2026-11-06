@@ -7,6 +7,7 @@ import {
   InMemoryChannelEffectJournal
 } from '@cvg/channel-gateway'
 import { createLocalSandboxGate } from '@cvg/sandbox'
+import { realChannelGuard } from '../../../channel-gateway/src/__tests__/fixtures/channel-composition.ts'
 import { createOperationalHarness } from '../createOperationalHarness.ts'
 import {
   InMemoryApprovalEngine,
@@ -29,6 +30,7 @@ function fixture(approved: boolean, sandbox: boolean) {
   const fetchImpl = vi.fn(async () => new Response('synthetic exam'))
   const journal = new InMemoryChannelEffectJournal()
   const tool = createExamDownloadTool({
+    realCapabilityGuard: realChannelGuard,
     workspaceRoot: root,
     effectJournal: journal,
     urlGuard: { allowedHosts: ['exams.example.com'] },

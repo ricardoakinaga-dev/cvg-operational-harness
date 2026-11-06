@@ -14,6 +14,10 @@ import {
   InMemoryChannelEffectJournal
 } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 // Decision recorded by the orchestrator (review G2): a redirect (3xx) with an
 // oversized body is a definitive FAILED, consistent with a plain 302 today: a
@@ -54,11 +58,13 @@ function adapterFor(
   const adapter =
     name === 'evolution'
       ? new EvolutionChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           ...common,
           baseUrl: 'https://evolution.example.com',
           instance: 'cvg'
         })
       : new ChatwootChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           ...common,
           baseUrl: 'https://chatwoot.example.com',
           accountId: '1'
@@ -70,6 +76,7 @@ async function dispatchTwice(name: string, status: number) {
   const subject = adapterFor(name, status)
   const journal = new InMemoryChannelEffectJournal()
   const gateway = new ChannelGateway({
+    composition: realComposition,
     outboundAdapters: [subject.adapter],
     effectJournal: journal
   })

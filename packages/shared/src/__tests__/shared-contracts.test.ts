@@ -11,7 +11,7 @@ import {
   ok,
   parseEnv,
   parseOperatorIdentity,
-  realWorldActionsDisabled,
+  createRealCapabilityGuards,
   requirePermission,
   redactSensitiveText,
   sanitizeAuditEvidencePayload,
@@ -142,7 +142,9 @@ describe('shared contracts', () => {
       POSTGRES_RLS_ENFORCEMENT: 'false'
     } as NodeJS.ProcessEnv)
 
-    expect(realWorldActionsDisabled(env)).toBe(true)
+    const guards = createRealCapabilityGuards({ env })
+    expect(guards.channels.open).toBe(false)
+    expect(guards.rag.open).toBe(false)
     expect(() =>
       parseEnv({
         NODE_ENV: 'production',

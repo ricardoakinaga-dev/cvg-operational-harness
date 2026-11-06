@@ -4,6 +4,7 @@ import type { Role } from './enums.ts'
 const permissionsByRole: Record<Role, string[]> = {
   Operator: [
     'approval:view',
+    'approval:create',
     'approval:execute',
     'audit:view_limited',
     'conversation:view_assigned',
@@ -14,6 +15,7 @@ const permissionsByRole: Record<Role, string[]> = {
   ],
   Approver: [
     'approval:view',
+    'approval:create',
     'approval:decide',
     'audit:view_limited',
     'conversation:view_assigned',
@@ -22,6 +24,7 @@ const permissionsByRole: Record<Role, string[]> = {
   ],
   Supervisor: [
     'approval:view',
+    'approval:create',
     'approval:decide',
     'audit:view_full',
     'conversation:view_assigned',

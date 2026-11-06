@@ -1,6 +1,11 @@
 import { z } from 'zod'
 import { parseMembers, type Member } from './domain.ts'
 import { isInternalServiceUrl } from './egress.ts'
+import {
+  isWebhookName,
+  parseWebhookKeys,
+  type WebhookAuth
+} from './webhook-auth.ts'
 
 /** A deadline in milliseconds, accepted only within [1 s, `max`]. */
 function ms(max: number) {
@@ -11,7 +16,15 @@ const EnvSchema = z
   .object({
     SHIFT_PROVIDER: z.enum(['waha', 'evolution']),
     SHIFT_MEMBERS: z.string().min(1),
-    SHIFT_WEBHOOK_SECRET: z.string().min(24),
+    /** Retired static secret: its presence refuses the start, no fallback. */
+    SHIFT_WEBHOOK_SECRET: z.never().optional(),
+    /**
+     * `real` is refused in this build: it needs the dedicated signing ingress
+     * of docs/webhook-assinado.md, which does not exist yet.
+     */
+    SHIFT_CHANNEL_MODE: z.enum(['synthetic', 'real']),
+    SHIFT_WEBHOOK_TENANT: z.string().refine(isWebhookName),
+    SHIFT_WEBHOOK_KEYS: z.string().min(1),
     SHIFT_DATA_DIR: z.string().min(1),
     SHIFT_PORT: z.coerce.number().int().min(0).max(65535).default(3400),
     SHIFT_HOST: z.string().default('0.0.0.0'),
@@ -52,6 +65,13 @@ const EnvSchema = z
     LLM_MODEL: z.string().min(1)
   })
   .superRefine((env, ctx) => {
+    if (env.SHIFT_CHANNEL_MODE === 'real') {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'CHANNEL_REAL_BLOCKED: a real channel requires the signed ingress composition'
+      })
+    }
     if (!isInternalServiceUrl(env.WHISPER_URL)) {
       // Value never echoed: only the field name reaches the error.
       ctx.addIssue({
@@ -86,6 +106,7 @@ export type ShiftEnv = z.infer<typeof EnvSchema>
 export interface ShiftConfig {
   env: ShiftEnv
   members: Member[]
+  webhook: WebhookAuth
 }
 
 /** Fails closed on any missing or malformed setting; values are never logged. */
@@ -103,5 +124,22 @@ export function loadShiftConfig(
   }
   const members = parseMembers(parsed.data.SHIFT_MEMBERS)
   if (members.length === 0) throw new Error('SHIFT_MEMBERS has no members')
-  return { env: parsed.data, members }
+  const { SHIFT_PROVIDER: provider, SHIFT_WEBHOOK_TENANT: tenant } = parsed.data
+  const keyring = parseWebhookKeys(parsed.data.SHIFT_WEBHOOK_KEYS)
+  if ('error' in keyring) {
+    throw new Error(`Invalid shift assistant configuration: ${keyring.error}`)
+  }
+  const served = keyring.keys.some(
+    (key) => key.provider === provider && key.tenant === tenant && !key.revoked
+  )
+  if (!served) {
+    throw new Error(
+      'Invalid shift assistant configuration: SHIFT_WEBHOOK_KEYS has no live key for this provider and tenant'
+    )
+  }
+  return {
+    env: parsed.data,
+    members,
+    webhook: { tenant, keys: keyring.keys }
+  }
 }

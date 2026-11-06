@@ -16,6 +16,7 @@ import {
 } from '../domain.ts'
 import { allowlistedFetch, EgressDeniedError } from '../egress.ts'
 import { ModelOrganizer, unverifiedNumbers } from '../organizer.ts'
+import { syntheticWebhook, webhookAuthOf } from '../sandbox/webhook.ts'
 import { buildShiftServer } from '../server.ts'
 import { ShiftStore } from '../store.ts'
 import { WhisperTranscriber } from '../transcriber.ts'
@@ -422,13 +423,14 @@ describe('ShiftAssistant', () => {
 })
 
 describe('server, egress and configuration', () => {
-  it('rejects a wrong webhook secret and accepts a member message', async () => {
+  it('rejects a static or query secret and accepts a signed member message', async () => {
     const env = setup()
+    const signer = syntheticWebhook()
     const server = buildShiftServer({
       assistant: env.assistant,
       store: env.store,
       whatsapp: env.waha.client,
-      webhookSecret: SECRET,
+      webhookAuth: webhookAuthOf(signer),
       maxBodyBytes: 4096
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -443,6 +445,8 @@ describe('server, egress and configuration', () => {
         headers: { 'content-type': 'application/json', ...headers },
         body: typeof body === 'string' ? body : JSON.stringify(body)
       })
+    const signed = (body: string) =>
+      post('/webhooks/waha', body, signer.headers(body, new Date()))
     try {
       const denied = await post(
         '/webhooks/waha',
@@ -452,21 +456,20 @@ describe('server, egress and configuration', () => {
         }
       )
       expect(denied.status).toBe(401)
-      const accepted = await post(
+      const query = await post(
         `/webhooks/waha?secret=${SECRET}`,
-        wahaPayload('s2', ANA, 'oi')
+        wahaPayload('s1', ANA, 'oi')
+      )
+      expect(query.status).toBe(401)
+      expect(env.store.hasMessage('s1')).toBe(false)
+      const accepted = await signed(
+        JSON.stringify(wahaPayload('s2', ANA, 'oi'))
       )
       expect(await accepted.json()).toEqual({ accepted: true })
       await env.assistant.idle()
-      expect(
-        (await post(`/webhooks/waha?secret=${SECRET}`, '{nope')).status
-      ).toBe(400)
-      expect(
-        (await post(`/webhooks/waha?secret=${SECRET}`, 'x'.repeat(5000))).status
-      ).toBe(413)
-      expect(
-        (await post(`/webhooks/evolution?secret=${SECRET}`, {})).status
-      ).toBe(404)
+      expect((await signed('{nope')).status).toBe(400)
+      expect((await signed('x'.repeat(5000))).status).toBe(413)
+      expect((await post('/webhooks/evolution', {})).status).toBe(404)
       const health = await fetch(`${base}/health`)
       expect(await health.json()).toMatchObject({
         ok: true,
@@ -498,7 +501,7 @@ describe('server, egress and configuration', () => {
     const config = loadShiftConfig({
       SHIFT_PROVIDER: 'waha',
       SHIFT_MEMBERS: `${ANA}=Dra Ana;${GESTOR}=Gestor*`,
-      SHIFT_WEBHOOK_SECRET: SECRET,
+      ...syntheticWebhook().env,
       SHIFT_DATA_DIR: '/tmp/shift',
       WAHA_URL: WAHA,
       WAHA_API_KEY: 'k',

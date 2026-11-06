@@ -1,3 +1,4 @@
+import { classifyForbiddenCapability } from '@cvg/shared'
 import type {
   AgentConfig,
   PlatformDecision,
@@ -38,7 +39,10 @@ export function evaluatePlatformPolicy(
     )
   }
 
-  if (hardBlockedPatterns.some((pattern) => pattern.test(input.action))) {
+  if (
+    hardBlockedPatterns.some((pattern) => pattern.test(input.action)) ||
+    classifyForbiddenCapability([input.action])
+  ) {
     return result(
       'blocked',
       'hard_safety',

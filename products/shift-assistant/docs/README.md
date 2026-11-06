@@ -6,6 +6,7 @@ núcleo, contratos públicos e backlog na raiz do repositório.
 - [Contrato e decisões do produto](spec.md).
 - [Backlog canônico PISO](backlog.md).
 - [Correspondência AP–PISO–HISO](requisitos-ap.md).
+- [Webhook assinado e bloqueio do canal real](webhook-assinado.md).
 - [Operação e recuperação local](operacao-local.md).
 - [Backup, restore e monitor externo](operations.md).
 - [Guia preparado para homologação](guia-plantonista.md).

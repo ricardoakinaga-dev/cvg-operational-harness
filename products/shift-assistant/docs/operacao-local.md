@@ -33,7 +33,9 @@ sem shell nem gerenciador de pacotes, como `10001:10001`, rootfs somente leitura
 Ele entra só na rede interna `cvg-shift-backend`, com endereço fixo `10.254.177.4`
 (sem rota para fora e sem porta
 publicada no host): WAHA/Evolution e Whisper precisam ser ligados a essa rede e
-os endereços do `.env` usam os nomes deles nela. Para outro arranjo, o filtro do
+os endereços do `.env` usam os nomes deles nela. O webhook só aceita o
+[envelope assinado](webhook-assinado.md); sem o ingresso descrito lá, o canal
+real fica bloqueado. Para outro arranjo, o filtro do
 host é `deploy/egress-policy.example.nft`, aplicado pelo operador do host.
 Provas locais da imagem real: `node scripts/image-contract.mjs <imagem>` e
 `node scripts/infra-egress-proof.mjs <imagem> <imagem-receptora-com-node>`.

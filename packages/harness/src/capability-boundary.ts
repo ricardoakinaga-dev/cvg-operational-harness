@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { classifyForbiddenCapability } from '@cvg/harness-contracts'
 import type {
   CapabilityDescriptor,
   CapabilityImplementation,
@@ -293,8 +294,16 @@ function normalizeRegistration(value: unknown): StoredRegistration {
       )
     }
     const registration = value as Record<string, unknown>
+    const descriptor = normalizeDescriptor(registration.descriptor)
+    // SPEC 0317 G4 §3: forbidden by the program, whatever the flags say.
+    if (classifyForbiddenCapability([descriptor.id])) {
+      throw new CapabilityRegistryError(
+        'invalid_descriptor',
+        'Capability category is forbidden by the program'
+      )
+    }
     return {
-      descriptor: normalizeDescriptor(registration.descriptor),
+      descriptor,
       implementation: normalizeImplementation(registration.implementation)
     }
   } catch (error) {
@@ -303,6 +312,23 @@ function normalizeRegistration(value: unknown): StoredRegistration {
       'invalid_descriptor',
       'Capability registration contains unsupported data'
     )
+  }
+}
+
+/**
+ * SPEC 0317 G4 §3: compatibility registries skip the capability registration,
+ * so the forbidden categories stop here: unresolvable, hence never dispatched.
+ */
+export function withoutForbiddenTools(registry: ToolRegistry): ToolRegistry {
+  return {
+    list: () =>
+      registry
+        .list()
+        .filter((tool) => classifyForbiddenCapability([tool.id]) === null),
+    resolve: (toolId, version) =>
+      classifyForbiddenCapability([toolId]) === null
+        ? registry.resolve(toolId, version)
+        : undefined
   }
 }
 

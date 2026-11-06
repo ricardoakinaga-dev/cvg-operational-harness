@@ -3,6 +3,7 @@ import {
   ApprovalEngine,
   ApprovalError,
   ApprovalDecisionActorTypeSchema,
+  ApprovalRequesterSchema,
   ApprovalStatusSchema,
   InMemoryApprovalStore,
   type ApprovalAuthority,
@@ -99,6 +100,10 @@ export interface RuntimeApprovalRow extends QueryResultRow {
   operation_key: string | null
   origin_conversation_id: string | null
   origin_session_id: string | null
+  requested_by_kind: string
+  requested_by_id: string | null
+  requested_by_tenant_id: string | null
+  requester_binding: string | null
   revision: number | string
   created_at: Date | string
   updated_at: Date | string
@@ -120,8 +125,9 @@ const runtimeApprovalColumns = `
   used_reservation_ids, reserved_at, executing_at, released_at, failed_at,
   uncertain_at, confirmed_at, confirmation_evidence_ref, proposal_id,
   proposal_hash, capability, data_classification, proposal_payload,
-  operation_key, origin_conversation_id, origin_session_id, revision,
-  created_at, updated_at`
+  operation_key, origin_conversation_id, origin_session_id,
+  requested_by_kind, requested_by_id, requested_by_tenant_id,
+  requester_binding, revision, created_at, updated_at`
 
 /**
  * Single source of truth for the mutation column order. `recordValues` must
@@ -176,7 +182,11 @@ const persistedColumns = [
   'proposal_payload',
   'operation_key',
   'origin_conversation_id',
-  'origin_session_id'
+  'origin_session_id',
+  'requested_by_kind',
+  'requested_by_id',
+  'requested_by_tenant_id',
+  'requester_binding'
 ] as const
 
 const insertColumns = [
@@ -339,6 +349,16 @@ export function mapRuntimeApprovalRow(row: RuntimeApprovalRow): ApprovalRecord {
               : {})
           }
         }
+      : {}),
+    ...(row.requested_by_kind !== 'unknown'
+      ? {
+          requestedBy: ApprovalRequesterSchema.parse({
+            kind: row.requested_by_kind,
+            id: row.requested_by_id,
+            tenantId: row.requested_by_tenant_id
+          }),
+          requesterBinding: row.requester_binding as string
+        }
       : {})
   }
 }
@@ -394,7 +414,11 @@ function recordValues(record: ApprovalRecord): unknown[] {
       : JSON.stringify(record.proposalPayload),
     record.operationKey ?? null,
     record.origin?.conversationId ?? null,
-    record.origin?.sessionId ?? null
+    record.origin?.sessionId ?? null,
+    record.requestedBy?.kind ?? 'unknown',
+    record.requestedBy?.id ?? null,
+    record.requestedBy?.tenantId ?? null,
+    record.requesterBinding ?? null
   ]
 }
 

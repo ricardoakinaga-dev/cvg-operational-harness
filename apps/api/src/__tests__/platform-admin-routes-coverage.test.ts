@@ -7,6 +7,7 @@ import {
 } from '@cvg/platform'
 import { describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000811'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000812'
@@ -322,7 +323,10 @@ describe('platform admin routes coverage', () => {
   it('clones test suites, lists runs and rejects invalid limits and missing suites', async () => {
     const platform = new InMemoryControlPlaneStore()
     const { agent, version } = await seedAgent(platform)
-    const app = buildServer({ platform })
+    const app = buildServer({
+      platform,
+      testLab: createSyntheticTestLabComposition()
+    })
 
     const suiteResponse = await app.inject({
       method: 'POST',
@@ -638,12 +642,7 @@ describe('platform admin routes coverage', () => {
       headers: operatorHeaders,
       payload: {
         message: 'Olá',
-        history: [],
-        approvedKnowledge: {
-          version: 'coverage-v1',
-          answer: 'Resposta fictícia.',
-          source: 'controlled://coverage/knowledge'
-        }
+        history: []
       }
     })
 
