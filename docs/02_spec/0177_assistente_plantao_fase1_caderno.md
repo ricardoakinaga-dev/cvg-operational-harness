@@ -15,8 +15,10 @@ pendências com lembrete. Sem integração com o HIS nesta fase.
 
 ## Fluxo
 
-1. WAHA ou Evolution chama `POST /webhooks/waha` ou `POST /webhooks/evolution`
-   com o segredo compartilhado (`x-cvg-webhook-secret` ou `?secret=`).
+1. Um ingresso assinante chama `POST /webhooks/waha` ou
+   `POST /webhooks/evolution` com o
+   [envelope HMAC](../../products/shift-assistant/docs/webhook-assinado.md), sem
+   segredo na URL. Sem esse ingresso, WAHA e Evolution não entregam mensagens.
 2. Só mensagens diretas de números cadastrados (`SHIFT_MEMBERS`) são aceitas;
    grupos, mensagens próprias e números desconhecidos são ignorados (o
    desconhecido é registrado sem conteúdo).
