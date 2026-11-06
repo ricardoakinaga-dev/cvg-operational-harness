@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { syntheticWebhook, webhookAuthOf } from '../sandbox/webhook.ts'
 import {
   existsSync,
   readdirSync,
@@ -1018,7 +1019,7 @@ describe('PISO-008: external monitor alerts with one episode id and a durable qu
       assistant: env.assistant,
       store: env.store,
       whatsapp: env.waha.client,
-      webhookSecret: 'segredo-sintetico-de-teste-123456'
+      webhookAuth: webhookAuthOf(syntheticWebhook())
     })
     servers.push(server)
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -1068,7 +1069,7 @@ describe('PISO-008: external monitor alerts with one episode id and a durable qu
       assistant: restarted.assistant,
       store: restarted.store,
       whatsapp: restarted.waha.client,
-      webhookSecret: 'segredo-sintetico-de-teste-123456'
+      webhookAuth: webhookAuthOf(syntheticWebhook())
     })
     servers.push(server)
     await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
@@ -1123,7 +1124,7 @@ describe('PISO-008/PISO-006: the real process stops on SIGTERM in bounded time',
       whisperCalls += 1
       request.resume() // never answers
     })
-    const secret = 'segredo-sintetico-de-teste-123456'
+    const signer = syntheticWebhook()
     const child = spawn(
       process.execPath,
       ['--import', 'tsx', 'products/shift-assistant/src/main.ts'],
@@ -1134,7 +1135,7 @@ describe('PISO-008/PISO-006: the real process stops on SIGTERM in bounded time',
           NODE_ENV: 'production',
           SHIFT_PROVIDER: 'waha',
           SHIFT_MEMBERS: `${ANA}=Dra Ana;${GESTOR}=Gestor*`,
-          SHIFT_WEBHOOK_SECRET: secret,
+          ...signer.env,
           SHIFT_DATA_DIR: dataDir,
           SHIFT_PORT: '0',
           SHIFT_HOST: '127.0.0.1',
@@ -1165,21 +1166,19 @@ describe('PISO-008/PISO-006: the real process stops on SIGTERM in bounded time',
       }
       await until(() => /"shift\.started"/.test(stdout), 20_000)
       const port = Number(/"port":(\d+)/.exec(stdout)![1])
+      const body = JSON.stringify(
+        wahaPayload('a1', ANA, '', {
+          hasMedia: true,
+          media: {
+            url: `${waha.url}/api/files/a1.ogg`,
+            mimetype: 'audio/ogg'
+          }
+        })
+      )
       const audio = await fetch(`http://127.0.0.1:${port}/webhooks/waha`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-cvg-webhook-secret': secret
-        },
-        body: JSON.stringify(
-          wahaPayload('a1', ANA, '', {
-            hasMedia: true,
-            media: {
-              url: `${waha.url}/api/files/a1.ogg`,
-              mimetype: 'audio/ogg'
-            }
-          })
-        )
+        headers: signer.headers(body, new Date()),
+        body
       })
       expect(audio.status).toBe(200)
       // The reminder send starts at the first tick (10 s) and hangs.

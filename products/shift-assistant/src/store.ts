@@ -22,7 +22,8 @@ import {
   type Note,
   type ProcessingStage,
   type ShiftEvent,
-  type Task
+  type Task,
+  type WebhookDelivery
 } from './domain.ts'
 import { isCompletePresentation, type PreviewState } from './preview-receipt.ts'
 
@@ -138,6 +139,12 @@ export interface StoreProjection {
     reminderRetryAt?: string
     reminderSendFailed?: boolean
   }>
+  /** Absent with no reservation, so older backups still compare equal. */
+  webhookDeliveries?: Array<{
+    ref: string
+    bodySha256: string
+    reservedAt: string
+  }>
 }
 
 const MANIFEST = 'journal.json'
@@ -189,6 +196,14 @@ function syncDirectory(path: string): void {
   }
 }
 
+function deliveryKey(delivery: WebhookDelivery): string {
+  return JSON.stringify([
+    delivery.provider,
+    delivery.tenant,
+    delivery.deliveryId
+  ])
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -222,6 +237,10 @@ export class ShiftStore {
   readonly #notes = new Map<string, Note>()
   readonly #previews = new Map<string, PreviewState>()
   readonly #tasks = new Map<number, Task>()
+  readonly #deliveries = new Map<
+    string,
+    { bodySha256: string; reservedAt: string }
+  >()
   #paused = false
 
   /** `dataDir` undefined keeps everything in memory (tests). */
@@ -549,8 +568,35 @@ export class ShiftStore {
             ? { reminderRetryAt: task.reminderRetryAt }
             : {}),
           ...(task.reminderSendFailed ? { reminderSendFailed: true } : {})
-        }))
+        })),
+      ...(this.#deliveries.size > 0
+        ? {
+            webhookDeliveries: [...this.#deliveries].map(([key, value]) => ({
+              ref: opaque(key),
+              ...value
+            }))
+          }
+        : {})
     }
+  }
+
+  /**
+   * Durably reserves a signed delivery before anything else happens to it.
+   * The reservation lives in the journal, so a restart replays it and it is
+   * never forgotten or expired. `replayed` is the same ID with the same body;
+   * `conflict` is the same ID with another body, which changes nothing. Throws
+   * `STORAGE_UNAVAILABLE` when it could not be made durable.
+   */
+  reserveWebhookDelivery(
+    delivery: WebhookDelivery,
+    at: string
+  ): 'reserved' | 'replayed' | 'conflict' {
+    const known = this.#deliveries.get(deliveryKey(delivery))
+    if (known) {
+      return known.bodySha256 === delivery.bodySha256 ? 'replayed' : 'conflict'
+    }
+    this.append({ type: 'webhook_delivery_reserved', at, ...delivery })
+    return 'reserved'
   }
 
   /** Never reused, even after a restart or with gaps in the history. */
@@ -796,6 +842,12 @@ export class ShiftStore {
     switch (event.type) {
       case 'message_received':
         this.#messages.set(event.message.messageId, event.message)
+        return
+      case 'webhook_delivery_reserved':
+        this.#deliveries.set(deliveryKey(event), {
+          bodySha256: event.bodySha256,
+          reservedAt: event.at
+        })
         return
       case 'message_processed':
         this.#processed.add(event.messageId)

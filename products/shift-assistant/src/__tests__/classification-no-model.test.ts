@@ -20,6 +20,7 @@ import {
   startSandboxServices,
   type SandboxServices
 } from '../sandbox/services.ts'
+import { syntheticWebhook } from '../sandbox/webhook.ts'
 
 // AUD-0621 F24 (D009 under B3): shift notes are CLINICAL and NO_MODEL stays in
 // force. Organisation goes through the public model gateway, which denies it
@@ -27,7 +28,6 @@ import {
 
 const ANA = '5511900000001'
 const GESTOR = '5511900000009'
-const SECRET = 'segredo-sintetico-de-teste-123456'
 const CLINICAL_NOTE =
   'Paciente sintético Thor, leito 3, vomitou duas vezes; ligar pro tutor 16h'
 const NOW = new Date('2026-10-01T17:00:00.000Z')
@@ -148,10 +148,11 @@ describe('F24: production composition keeps the model out of shift notes', () =>
 
   it('stores the note as a raw document and makes zero model requests', async () => {
     services = await startSandboxServices()
+    const signer = syntheticWebhook()
     const config = loadShiftConfig({
       SHIFT_PROVIDER: 'waha',
       SHIFT_MEMBERS: `${ANA}=Dra Ana;${GESTOR}=Gestor*`,
-      SHIFT_WEBHOOK_SECRET: SECRET,
+      ...signer.env,
       SHIFT_DATA_DIR: mkdtempSync(join(tmpdir(), 'shift-no-model-')),
       SHIFT_PORT: '0',
       SHIFT_HOST: '127.0.0.1',
@@ -165,21 +166,19 @@ describe('F24: production composition keeps the model out of shift notes', () =>
     })
     app = composeShiftApp(config, { clock: () => NOW })
     const port = await app.start()
+    const body = JSON.stringify({
+      event: 'message',
+      payload: {
+        id: 'n1',
+        from: `${ANA}@c.us`,
+        fromMe: false,
+        body: CLINICAL_NOTE
+      }
+    })
     const response = await fetch(`http://127.0.0.1:${port}/webhooks/waha`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-cvg-webhook-secret': SECRET
-      },
-      body: JSON.stringify({
-        event: 'message',
-        payload: {
-          id: 'n1',
-          from: `${ANA}@c.us`,
-          fromMe: false,
-          body: CLINICAL_NOTE
-        }
-      })
+      headers: signer.headers(body, NOW),
+      body
     })
     expect(await response.json()).toEqual({ accepted: true })
     await app.assistant.idle()

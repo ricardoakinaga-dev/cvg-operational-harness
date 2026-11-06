@@ -21,7 +21,7 @@
 // resolved receipt. Synthetic data only; nothing leaves loopback.
 // Exit 0 PASS, 1 FAIL, 2 usage or tool unavailable.
 import { spawn } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes } from 'node:crypto'
 import {
   appendFileSync,
   existsSync,
@@ -100,7 +100,9 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms))
 const ANA = '5511900000001'
 const GESTOR = '5511900000009'
-const SECRET = 'segredo-sintetico-da-prova-de-alerta'
+const WEBHOOK_TENANT = 'synthetic-proof'
+const WEBHOOK_KEY_ID = 'proof-key-1'
+const WEBHOOK_KEY = randomBytes(32)
 const TASKS = 10
 
 const dirs = {
@@ -280,24 +282,31 @@ async function get(url) {
     return undefined
   }
 }
+function signedHeaders(body) {
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const deliveryId = `proof-${randomBytes(8).toString('hex')}`
+  const signature = createHmac('sha256', WEBHOOK_KEY)
+    .update(
+      `cvg-shift-webhook-v1\nwaha\n${WEBHOOK_TENANT}\n${WEBHOOK_KEY_ID}\n${timestamp}\n${deliveryId}\n`
+    )
+    .update(body)
+    .digest('hex')
+  return {
+    'content-type': 'application/json',
+    'x-cvg-webhook-tenant': WEBHOOK_TENANT,
+    'x-cvg-webhook-key-id': WEBHOOK_KEY_ID,
+    'x-cvg-webhook-timestamp': timestamp,
+    'x-cvg-webhook-delivery-id': deliveryId,
+    'x-cvg-webhook-signature': `v1=${signature}`
+  }
+}
 async function post(text, from = ANA, extra = {}) {
+  const body = JSON.stringify(
+    wahaPayload(`proof-${randomBytes(4).toString('hex')}`, from, text, extra)
+  )
   const response = await fetch(
     `http://127.0.0.1:${ASSISTANT_PORT}/webhooks/waha`,
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-cvg-webhook-secret': SECRET
-      },
-      body: JSON.stringify(
-        wahaPayload(
-          `proof-${randomBytes(4).toString('hex')}`,
-          from,
-          text,
-          extra
-        )
-      )
-    }
+    { method: 'POST', headers: signedHeaders(body), body }
   )
   return response.status
 }
@@ -310,7 +319,18 @@ const assistantEnv = {
   NODE_ENV: 'production',
   SHIFT_PROVIDER: 'waha',
   SHIFT_MEMBERS: `${ANA}=Plantonista Sintetica;${GESTOR}=Gestor Sintetico*`,
-  SHIFT_WEBHOOK_SECRET: SECRET,
+  SHIFT_CHANNEL_MODE: 'synthetic',
+  SHIFT_WEBHOOK_TENANT: WEBHOOK_TENANT,
+  SHIFT_WEBHOOK_KEYS: JSON.stringify([
+    {
+      provider: 'waha',
+      tenant: WEBHOOK_TENANT,
+      keyId: WEBHOOK_KEY_ID,
+      secret: WEBHOOK_KEY.toString('base64url'),
+      notBefore: '2020-01-01T00:00:00Z',
+      notAfter: '2100-01-01T00:00:00Z'
+    }
+  ]),
   SHIFT_DATA_DIR: dirs.data,
   SHIFT_PORT: String(ASSISTANT_PORT),
   SHIFT_HOST: '127.0.0.1',
