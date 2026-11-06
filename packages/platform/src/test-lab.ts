@@ -1,6 +1,7 @@
 import { DomainError, redactSensitiveText } from '@cvg/shared'
 import {
   assessConversationSafety,
+  mentionsMedication,
   normalizeSafetyText,
   type SafetyAssessment
 } from './safety-assessment.ts'
@@ -547,7 +548,8 @@ function classifyForDryRun(message: string): {
   if (
     /dipirona|ibuprofeno|paracetamol|medicamento|medica[cç][aã]o|rem[eé]dio|antibi[oó]tico|medication|medicine|drug/.test(
       text
-    )
+    ) ||
+    mentionsMedication(text)
   ) {
     return { name: 'medication_advice', confidence: 0.99 }
   }

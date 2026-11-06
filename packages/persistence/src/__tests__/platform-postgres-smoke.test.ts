@@ -137,6 +137,10 @@ describe('Postgres platform control plane smoke', () => {
           versionId: published.id,
           input: { message: 'email ana@example.com', historySize: 0 },
           intent: { name: 'unknown', confidence: 0.2 },
+          risk: {
+            level: 'low' as const,
+            reason: 'controlled_low_risk_request'
+          },
           policy: [],
           knowledge: { status: 'not_requested' as const },
           tools: [],

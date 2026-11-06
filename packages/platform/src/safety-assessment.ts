@@ -9,8 +9,25 @@ export function normalizeSafetyText(value: string): string {
   return value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
 }
 
-const medication =
-  /\b(?:dipirona|ibuprofeno|paracetamol|medicamento\w*|medicacao|remedio\w*|antibiotico\w*|medication|medicine|drug)\b/u
+const drugNames = [
+  'acetaminophen|acido\\s+acetilsalicilico|albendazol|amoxicilina|amoxicillin',
+  'analgesico\\w*|anlodipino|antialergico\\w*|anti-?\\s?inflamatorio\\w*',
+  'antitermico\\w*|aspirina|azitromicina|buscopan|carprofeno|cefalexina',
+  'cetirizina|cetoprofeno|ciprofloxacino|clavulanato|clonazepam|codeina',
+  'dexametasona|diazepam|diclofenaco|dipirona|dorflex|doxiciclina',
+  'enrofloxacina|fenbendazol|fluoxetina|furosemida|gabapentina|ibuprofen',
+  'ibuprofeno|insulina|ivermectina|levotiroxina|lidocaina|loratadina',
+  'losartana|meloxicam|metformina|metoclopramida|metronidazol|morfina',
+  'naproxeno|nimesulida|novalgina|omeprazol|ondansetrona|paracetamol',
+  'penicilina|praziquantel|prednisolona|prednisona|ranitidina|sertralina',
+  'sinvastatina|tramadol|tylenol|vermifugo\\w*'
+].join('|')
+const drugFamilies =
+  '[a-z]{3,}(?:cilina|micina|ciclina|floxacino|floxacina|prazol|profeno|azepam|azolam|sartana|statina|setrona|barbital)'
+/** Normalized medication vocabulary shared by input risk and the output boundary. */
+export const MEDICATION_VOCABULARY = `(?:${drugNames}|${drugFamilies}|medicamento\\w*|medicac(?:ao|oes)|remedio\\w*|antibiotic\\w*|medications?|medicines?|drugs?)`
+
+const medication = new RegExp(`\\b${MEDICATION_VOCABULARY}\\b`, 'u')
 const symptoms =
   /\b(?:vomit\w*|sangue|sangra\w*|dor|dores|convuls\w*|desmai\w*)\b/gu
 
@@ -75,6 +92,10 @@ function isExplicitlyDenied(prefix: string): boolean {
   if (/\b(?:e|ou)\b/u.test(after)) return false
   // Keep the scope short so an unrelated affirmative clause is not hidden.
   return after.split(/\s+/u).length <= 5
+}
+
+export function mentionsMedication(value: string): boolean {
+  return medication.test(normalizeSafetyText(value))
 }
 
 export function assessConversationSafety(

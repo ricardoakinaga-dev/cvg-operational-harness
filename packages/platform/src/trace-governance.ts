@@ -17,6 +17,7 @@ import {
 import {
   CONTROLLED_SAFE_OUTPUTS,
   enforceControlledOutput,
+  resolveEffectiveRisk,
   type ControlledOutputDecision,
   type ControlledOutputMode,
   type ControlledOutputReason,
@@ -290,7 +291,10 @@ export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
   const output = enforceControlledOutput({
     text: canonical.response.text,
     mode: canonical.response.mode,
-    riskLevel: canonical.risk?.level ?? 'low'
+    riskLevel: resolveEffectiveRisk(
+      canonical.risk?.level,
+      canonical.input.message
+    )
   })
   if (output.decision === 'rewritten') throw invalidTrace()
 
