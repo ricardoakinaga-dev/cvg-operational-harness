@@ -206,6 +206,10 @@ async function toWaitingApproval(
     correlationId: 'correlation_case_scope_pg',
     operationKey: `operation.spec0251.pg.${randomUUID()}`,
     executionRef: executionId,
+    // SPEC 0317 G1: the worker carries the author of the execution.
+    ...(claimed!.record.submittedBy.kind !== 'unknown'
+      ? { requestedBy: claimed!.record.submittedBy }
+      : {}),
     singleUse: true,
     reason: 'synthetic SPEC0251 approval',
     proposalPayload: { synthetic: true }
@@ -230,6 +234,7 @@ async function unlinkedWaitingExecution(
   const accepted = await server.operationalExecution.submit({
     tenantId,
     idempotencyKey: `spec0251-pg-exec-${randomUUID()}`,
+    submittedBy: { kind: 'human', id: 'human.submitter.synthetic', tenantId },
     runtime: runtime(
       tenantId,
       `conv_none_${randomUUID()}`,
@@ -1267,9 +1272,13 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
     try {
       await runPostgresMigrations(client, {
         schemaName: legacySchema,
-        // SPEC 0291: the runtime approval store writes the origin columns, so the schema
-        // needs the additive 0035 on top of 0000–0027 (it does not depend on 0029).
-        migrations: [...LEGACY_BEFORE_0029, '0035_runtime_approval_origin']
+        // SPEC 0291 and SPEC 0317 G1: the stores write the origin and requester columns, so the
+        // schema needs the additive 0035 and 0039 on top of 0000–0027 (neither depends on 0029).
+        migrations: [
+          ...LEGACY_BEFORE_0029,
+          '0035_runtime_approval_origin',
+          '0039_requester_principal'
+        ]
       })
       const id = randomUUID()
       const conversationId = `conv_legacy28_${id}`
@@ -1319,6 +1328,11 @@ describePg('SPEC0251 PostgreSQL case scope of tasks and approvals', () => {
         const accepted = await server.operationalExecution.submit({
           tenantId: legacyTenant,
           idempotencyKey: `spec0251-legacy28-${id}`,
+          submittedBy: {
+            kind: 'human',
+            id: 'human.submitter.synthetic',
+            tenantId: legacyTenant
+          },
           runtime: runtime(legacyTenant, conversationId, sessionId) as never
         })
         const execution = await toWaitingApproval(

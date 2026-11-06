@@ -25,6 +25,7 @@ import {
   PostgresOperationalEffectJournal,
   PostgresExecutionStepStore,
   guardPostgresPoolErrors,
+  withTenantContext,
   type PostgresPoolLike
 } from '@cvg/persistence'
 import type { ApprovalAuthority } from '@cvg/persistence'
@@ -36,6 +37,7 @@ import {
   OPERATIONAL_HARNESS_CRITICAL_TABLES,
   OPERATIONAL_HARNESS_REQUIRED_MIGRATIONS
 } from './postgres-role-preflight.ts'
+import { assertRequesterPrincipalGuard } from './approval-origin-guard.ts'
 import { createPhase2SyntheticEffectRegistry } from './phase2-synthetic-effect.ts'
 import type { SyntheticEffectObserver } from './phase2-synthetic-effect.ts'
 
@@ -330,6 +332,11 @@ export async function assertOperationalHarnessPostgresPreflight(
       criticalTables: OPERATIONAL_HARNESS_CRITICAL_TABLES,
       requiredMigrations: OPERATIONAL_HARNESS_REQUIRED_MIGRATIONS
     }
+  )
+  await withTenantContext(
+    runtime.pool as unknown as PostgresPoolLike,
+    runtime.tenantId,
+    (client) => assertRequesterPrincipalGuard(client, runtime.tenantId)
   )
 }
 

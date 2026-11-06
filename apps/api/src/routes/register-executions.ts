@@ -22,6 +22,7 @@ import {
   runAuthorizedCaseMutation,
   mapCaseMutationError
 } from '../case-authorization/case-routes.ts'
+import { assertRequesterDecision } from '@cvg/approval-engine'
 import { CaseAuthorityError, ApprovalError } from '@cvg/persistence'
 import { statusCodeForError, readIdempotencyKey } from '../server-query.ts'
 import {
@@ -366,6 +367,14 @@ export function registerExecutionsRoutes(ctx: RouteContext): void {
             ) {
               throw new DomainError('not_found', 'Approval not found')
             }
+            // SPEC 0317 G1: same check as the atomic unit, ahead of the
+            // submit below, which this path could not roll back.
+            assertRequesterDecision({
+              submittedBy: execution.submittedBy,
+              approval,
+              verdict: decision,
+              actorId: identity.operatorId
+            })
             if (
               execution.state !== 'WAITING_APPROVAL' &&
               (approval.status === 'PENDING' || approval.status === 'REQUESTED')
@@ -495,7 +504,8 @@ export function registerExecutionsRoutes(ctx: RouteContext): void {
                   nextState: resolved.state,
                   payloadHash: approval.payloadHash,
                   commandKey: persistedDecisionCommandKey,
-                  operationKey: approval.operationKey ?? null
+                  operationKey: approval.operationKey ?? null,
+                  requestedBy: approval.requestedBy ?? { kind: 'unknown' }
                 }
               },
               tenantId

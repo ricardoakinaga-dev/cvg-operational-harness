@@ -30,7 +30,13 @@ import { DurableApprovalEngineAdapter } from '../../packages/persistence/src/ope
  * aprovação precisa continuar utilizável, com uso único (I4/I9).
  */
 
-const input = phase3RuntimeInput()
+// SPEC 0317 G1: the worker hands the kernel the author of the execution.
+const requester = {
+  kind: 'human',
+  id: 'human.submitter.synthetic',
+  tenantId: phase3RuntimeInput().tenantId
+} as const
+const input = { ...phase3RuntimeInput(), submittedBy: requester }
 const callTool = {
   decisionType: 'CALL_TOOL',
   reasonCode: 'TOOL_REQUIRED',

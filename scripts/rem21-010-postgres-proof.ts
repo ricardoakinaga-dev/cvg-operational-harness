@@ -73,25 +73,35 @@ const preRollForwardMigrations = [
   '0029_case_assignment_authorization',
   '0030_api_creation_receipts',
   '0031_channel_effect_retry_not_before',
-  '0033_complete_tool_result_journal'
+  '0033_complete_tool_result_journal',
+  '0035_runtime_approval_origin'
 ]
 // The proof always rolls forward the newest migration of the default run
 // (POSTGRES_MIGRATIONS; 0028_session_events is opt-in) over a dump of the one
 // before it; keep both in step with packages/persistence/migrations.
-const rollForwardMigration = '0035_runtime_approval_origin'
+const rollForwardMigration = '0039_requester_principal'
 const preRollForwardVersion = preRollForwardMigrations.at(-1)
 // Objects the roll-forward migration adds, removed before the pre-migration
 // backup is restored over the rolled-forward schema. SPEC0176 recovers
-// production by rolling forward; this drill only restores the 0033 backup.
-// 0035 (SPEC 0291) adds two nullable columns, one CHECK and one immutability
-// trigger with its function to runtime_approvals.
+// production by rolling forward; this drill only restores the 0035 backup.
+// 0039 (SPEC 0317 G1) adds columns, one CHECK and one immutability trigger with
+// its function to operational_executions and to runtime_approvals.
 const rollForwardRollbackSql = [
-  'DROP TRIGGER IF EXISTS runtime_approvals_origin_immutable ON runtime_approvals;',
-  'DROP FUNCTION IF EXISTS cvg_runtime_approvals_origin_immutable();',
+  'DROP TRIGGER IF EXISTS operational_executions_submitted_by_immutable ON operational_executions;',
+  'DROP FUNCTION IF EXISTS cvg_operational_executions_submitted_by_immutable();',
+  'DROP TRIGGER IF EXISTS runtime_approvals_requested_by_immutable ON runtime_approvals;',
+  'DROP FUNCTION IF EXISTS cvg_runtime_approvals_requested_by_immutable();',
+  'ALTER TABLE operational_executions',
+  'DROP CONSTRAINT IF EXISTS operational_executions_submitted_by_check,',
+  'DROP COLUMN IF EXISTS submitted_by_kind,',
+  'DROP COLUMN IF EXISTS submitted_by_id,',
+  'DROP COLUMN IF EXISTS submitted_by_tenant_id;',
   'ALTER TABLE runtime_approvals',
-  'DROP CONSTRAINT IF EXISTS runtime_approvals_origin_check,',
-  'DROP COLUMN IF EXISTS origin_conversation_id,',
-  'DROP COLUMN IF EXISTS origin_session_id'
+  'DROP CONSTRAINT IF EXISTS runtime_approvals_requested_by_check,',
+  'DROP COLUMN IF EXISTS requested_by_kind,',
+  'DROP COLUMN IF EXISTS requested_by_id,',
+  'DROP COLUMN IF EXISTS requested_by_tenant_id,',
+  'DROP COLUMN IF EXISTS requester_binding'
 ].join(' ')
 
 type ManagedPostgres = {

@@ -48,7 +48,8 @@ export const OPERATIONAL_HARNESS_REQUIRED_MIGRATIONS = [
   '0017_runtime_approval_execution_binding',
   '0018_operational_execution_invariants',
   '0019_iterative_execution_steps',
-  '0024_approval_decision_causality'
+  '0024_approval_decision_causality',
+  '0039_requester_principal'
 ] as const
 
 export interface PostgresWorkerPreflightOptions {

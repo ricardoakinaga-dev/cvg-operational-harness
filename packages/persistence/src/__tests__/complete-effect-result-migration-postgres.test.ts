@@ -189,7 +189,7 @@ describe('SPEC 0225 migration 0033 — closed expansion of the effect journal', 
     expect(versions.indexOf('0033_complete_tool_result_journal')).toBe(
       versions.indexOf('0035_runtime_approval_origin') - 1
     )
-    expect(versions.at(-1)).toBe('0035_runtime_approval_origin')
+    expect(versions.at(-1)).toBe('0039_requester_principal')
   })
 
   itWithPostgres(

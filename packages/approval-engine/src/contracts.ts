@@ -48,6 +48,20 @@ export const ApprovalOriginSchema = z
   .strict()
 export type ApprovalOrigin = z.infer<typeof ApprovalOriginSchema>
 
+/**
+ * SPEC 0317 G1: the principal who asked for the execution behind an approval.
+ * Distinct from the legacy `operatorId`, which keeps naming the agent that
+ * submits the approval. Immutable once recorded; absent means unknown.
+ */
+export const ApprovalRequesterSchema = z
+  .object({
+    kind: z.enum(['human', 'system']),
+    id: z.string().trim().min(1).max(120),
+    tenantId: z.string().min(1).max(120)
+  })
+  .strict()
+export type ApprovalRequester = z.infer<typeof ApprovalRequesterSchema>
+
 export const ApprovalRequestSchema = z
   .object({
     tenantId: z.string().min(1).max(120),
@@ -78,7 +92,8 @@ export const ApprovalRequestSchema = z
     capability: z.string().min(1).max(120).optional(),
     dataClassification: z.string().min(1).max(120).optional(),
     proposalPayload: z.unknown().optional(),
-    origin: ApprovalOriginSchema.optional()
+    origin: ApprovalOriginSchema.optional(),
+    requestedBy: ApprovalRequesterSchema.optional()
   })
   .strict()
 
@@ -230,6 +245,48 @@ export interface ApprovalRecord {
   operationKey?: string
   /** SPEC 0291: set at request time, immutable, absent on records older than the SPEC. */
   origin?: ApprovalOrigin
+  /** SPEC 0317 G1: immutable; both are absent when the origin is unknown. */
+  requestedBy?: ApprovalRequester
+  requesterBinding?: string
+}
+
+/** Versioned so a future contract never revalidates this one's records. */
+export const REQUESTER_BINDING_VERSION = 1
+
+/**
+ * SPEC 0317 G1: ties the requester to one revision of one proposal of one
+ * execution. A changed proposal or principal yields another value, so a record
+ * can never be reused for a revision its requester did not submit.
+ */
+export function computeRequesterBinding(
+  record: Pick<
+    ApprovalRecord,
+    | 'tenantId'
+    | 'agentVersion'
+    | 'policyVersion'
+    | 'payloadHash'
+    | 'executionRef'
+    | 'proposalId'
+    | 'proposalHash'
+  > & { requestedBy: ApprovalRequester }
+): string {
+  const canonical = canonicalizeJson({
+    version: REQUESTER_BINDING_VERSION,
+    tenantId: record.tenantId,
+    agentVersion: record.agentVersion,
+    policyVersion: record.policyVersion,
+    payloadHash: record.payloadHash,
+    executionRef: record.executionRef ?? null,
+    proposalId: record.proposalId ?? null,
+    proposalHash: record.proposalHash ?? null,
+    requestedBy: {
+      kind: record.requestedBy.kind,
+      id: record.requestedBy.id,
+      tenantId: record.requestedBy.tenantId
+    }
+  })
+  const digest = createHash('sha256').update(canonical, 'utf8').digest('hex')
+  return `v${REQUESTER_BINDING_VERSION}:${digest}`
 }
 
 export function computeApprovalPayloadHash(input: {

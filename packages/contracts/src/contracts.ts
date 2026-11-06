@@ -182,11 +182,30 @@ export interface LongTermMemory {
   readonly retrievalOnly: true
 }
 
+/**
+ * SPEC 0317 G1: who asked for an execution. Set from the authenticated identity
+ * (`human`) or from a principal the composition declared (`system`), never from
+ * a request body. It is separate from `agent.id` and from the legacy
+ * `operatorId` of an approval.
+ */
+export interface KnownExecutionPrincipal {
+  readonly kind: 'human' | 'system'
+  readonly id: string
+  readonly tenantId: string
+}
+
+/** `unknown`: no trusted author (older records); it never authorizes an approval. */
+export type ExecutionPrincipal =
+  | KnownExecutionPrincipal
+  | { readonly kind: 'unknown' }
+
 export interface RuntimeInput {
   readonly agent: AgentProfile
   readonly tenantId: TenantId
   /** Set by the durable worker; never trusted from the public request body. */
   readonly executionId?: string
+  /** Set by the durable worker from the execution record, like `executionId`. */
+  readonly submittedBy?: ExecutionPrincipal
   /** Immutable capability composition binding supplied by the execution root. */
   readonly capabilityFingerprint?: string
   readonly conversationId: ConversationId
@@ -331,6 +350,8 @@ export interface ApprovalRequest {
   readonly correlationId: CorrelationId
   /** Durable execution identity injected by the worker before approval request. */
   readonly executionRef?: string
+  /** SPEC 0317 G1: the execution's author; absent when it is unknown. */
+  readonly requestedBy?: KnownExecutionPrincipal
   /** Optional durable-binding fields supplied by the governed runtime. */
   readonly operatorId?: string
   readonly agentVersion?: AgentVersion
