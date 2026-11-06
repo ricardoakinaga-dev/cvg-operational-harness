@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { composeShiftApp } from '../compose.ts'
 import { loadShiftConfig } from '../config.ts'
 import { startSandboxServices } from './services.ts'
+import { syntheticWebhook } from './webhook.ts'
 
 /**
  * Demonstration with no configuration: the real assistant (same composition
@@ -13,17 +14,17 @@ import { startSandboxServices } from './services.ts'
  *   npx tsx apps/worker/src/shift-assistant/sandbox/demo.ts
  */
 const ANA = '5511900000001'
-const SECRET = 'segredo-sintetico-da-demonstracao'
 
 async function main(): Promise<void> {
   const services = await startSandboxServices()
   const dataDir = mkdtempSync(join(tmpdir(), 'cvg-shift-demo-'))
   let now = new Date()
   now.setUTCHours(17, 0, 0, 0) // 14:00 in São Paulo
+  const webhook = syntheticWebhook()
   const config = loadShiftConfig({
     SHIFT_PROVIDER: 'waha',
     SHIFT_MEMBERS: `${ANA}=Dra Ana (fictícia);5511900000009=Gestor*`,
-    SHIFT_WEBHOOK_SECRET: SECRET,
+    ...webhook.env,
     SHIFT_DATA_DIR: dataDir,
     SHIFT_PORT: '0',
     SHIFT_HOST: '127.0.0.1',
@@ -47,16 +48,14 @@ async function main(): Promise<void> {
   }
   const say = async (label: string, payload: Record<string, unknown>) => {
     console.log(`\n👩‍⚕️ Dra Ana: ${label}`)
+    const body = JSON.stringify({
+      event: 'message',
+      payload: { from: `${ANA}@c.us`, fromMe: false, ...payload }
+    })
     await fetch(`http://127.0.0.1:${port}/webhooks/waha`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-cvg-webhook-secret': SECRET
-      },
-      body: JSON.stringify({
-        event: 'message',
-        payload: { from: `${ANA}@c.us`, fromMe: false, ...payload }
-      })
+      headers: webhook.headers(body, now),
+      body
     })
     await app.assistant.idle()
     flush()

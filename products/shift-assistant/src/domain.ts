@@ -163,8 +163,17 @@ export interface PreviewPresentedEvent {
 }
 
 /** Append-only events: the event log is the document of record (D4). */
+/** Replay reservation of a signed delivery; the body is kept only as a hash. */
+export interface WebhookDelivery {
+  provider: InboundMessage['provider']
+  tenant: string
+  deliveryId: string
+  bodySha256: string
+}
+
 export type ShiftEvent =
   | { type: 'message_received'; at: string; message: InboundMessage }
+  | ({ type: 'webhook_delivery_reserved'; at: string } & WebhookDelivery)
   | { type: 'message_processed'; at: string; messageId: string }
   | { type: 'note_created'; at: string; note: Note }
   | {
@@ -235,6 +244,7 @@ export const SHIFT_EVENT_TYPES: ReadonlySet<ShiftEvent['type']> = new Set<
   ShiftEvent['type']
 >([
   'message_received',
+  'webhook_delivery_reserved',
   'message_processed',
   'note_created',
   'note_confirmed',

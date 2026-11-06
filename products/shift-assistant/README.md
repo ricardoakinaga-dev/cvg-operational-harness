@@ -7,7 +7,8 @@ Contratos vigentes: [SPEC 0177](../../docs/02_spec/0177_assistente_plantao_fase1
 [barra 0368](../../docs/03_build/0368_barra_proporcional_assistente_de_plantao.md).
 
 Documentação própria: [índice](docs/README.md), [contrato](docs/spec.md),
-[backlog PISO](docs/backlog.md), [operação local](docs/operacao-local.md) e
+[backlog PISO](docs/backlog.md), [webhook assinado](docs/webhook-assinado.md),
+[operação local](docs/operacao-local.md) e
 [guia preparado para homologação](docs/guia-plantonista.md).
 
 Da raiz do monorepo:
