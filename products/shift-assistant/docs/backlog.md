@@ -1,5 +1,13 @@
 # Backlog do Assistente de Plantão
 
+## SEC-SHIFT-WEBHOOK-20261105 — Autenticidade do webhook
+
+- Estado: `PROPOSED_FOR_HUMAN_T3_REVIEW`; prioridade P1, trilha T3. Task documental `SPEC-GUARDRAILS-20261105` (Codex). Item próprio do produto, separado dos dez cartões PISO históricos; sem BUILD ou aceite de piloto.
+- Recon: servidor aceita segredo na query sem assinatura do corpo; HTTP sintético reproduziu 401 sem segredo e 200 com query para dois corpos distintos, sem admissão ou efeito externo. [SPEC 0317 §7](../../../docs/02_spec/0317_security_guardrails.md#7-g6--webhook-autenticado-do-assistente-de-plantão-p1-produto) reúne regras, evidência, negativos e critério de pronto.
+- WHAT/WHERE/HOW: retirar query secret de server/deploy/docs; autenticar bytes antes do parse/admissão com protocolo assinado do provider ou ingresso dedicado autenticado; reserva durável por ID/hash e janela de replay. Segredos fora de logs; preservar limites de transporte, ACK durável e pausa.
+- Dependência: revisão humana explícita T3 e escolha do protocolo/provider antes do BUILD; se o provider não assinar corpo, definir ingresso que bloqueie bypass. Testes exclusivamente sintéticos, sem liberar canal real. Núcleo/hosts genéricos não importam o produto.
+- Aceite: query/header estático, assinatura/corpo/tempo/tenant incorretos ou chave revogada não admitem mensagem; replay concorrente e após restart não duplica; assinatura válida tem controle positivo. Gates e release próprios do consumidor; nenhum status PISO alterado por este item.
+
 ## Autoridade documental — 17/10/2026
 
 Este arquivo continua sendo a única fonte de status dos dez cartões PISO. A

@@ -1,0 +1,82 @@
+import assert from 'node:assert/strict'
+import { once } from 'node:events'
+import { ApprovalEngine } from './packages/approval-engine/src/engine.ts'
+import { roleHasPermission } from './packages/shared/src/auth.ts'
+import { AgentConfigSchema, InMemoryControlPlaneStore, enforceControlledOutput, runTestLab } from './packages/platform/src/index.ts'
+import { buildShiftServer } from './products/shift-assistant/src/server.ts'
+import { buildServer } from './apps/api/src/server.ts'
+
+const tenantId = 'tenant_00000000-0000-4000-8000-000000000001'
+const results: Record<string, unknown> = {}
+const engine = new ApprovalEngine()
+const record = engine.request({tenantId, operatorId: 'agent.synthetic', agentId: 'agent.synthetic', agentVersion: 'v1', action: 'tool.execute', resource: {type:'tool',id:'synthetic.no-effect'}, payload:{synthetic:true}, policyVersion:'synthetic-v1', correlationId:'corr_synthetic_20261105'})
+engine.submit(tenantId, record.approvalId, record.operatorId)
+const approved = engine.approve(tenantId, record.approvalId, {approverId:'human.submitter.synthetic'})
+assert.equal(approved.status,'APPROVED')
+assert.ok(roleHasPermission('Approver','conversation:update'))
+assert.ok(roleHasPermission('Approver','approval:decide'))
+results.G1 = {level:'in-memory engine + source trace; PostgreSQL E2E NOT_RUN',requestingOperator:record.operatorId,humanSubmitter:'human.submitter.synthetic',status:approved.status}
+
+results.G2 = ['tome 2 comprimidos de amoxicilina a cada 8 horas','pague o boleto por PIX','seu horário foi confirmado'].map(text => {
+  const result = enforceControlledOutput({text,mode:'answer',riskLevel:'low'})
+  assert.equal(result.decision,'allowed')
+  return {input:text,...result}
+})
+assert.equal(enforceControlledOutput({text:'tome 2 comprimidos de amoxicilina a cada 8 horas',mode:'answer',riskLevel:'high'}).decision,'rewritten')
+
+const store = new InMemoryControlPlaneStore()
+const agent = await store.createAgent({tenantId}, {slug:'guardrails-repro',name:'Synthetic repro',description:'Synthetic only'})
+const config = AgentConfigSchema.parse({
+  persona:{name:'Synthetic',role:'assistant',tone:'calm'},greeting:'Resposta sintética.',
+  promptBlocks:[{id:'safety',kind:'safety',content:'Somente dados sintéticos.',priority:1,enabled:true}],
+  responseTemplates:{institutional_question:'Resposta padrão.'},
+  model:{provider:'fake',model:'deterministic-v1',temperature:0,maxTokens:128,timeoutMs:1000,retries:0,secretRef:'secret://synthetic/repro'},
+  policies:{version:'synthetic-v1',minConfidence:0.7,lowConfidence:'clarify',maxClarifications:2,enabledActions:['respond','institutional_question'],approvalActions:[],blockedActions:[]},
+  plugins:[],knowledge:[{source:'controlled://synthetic/source',version:'v1',enabled:true,requiresApprovedSource:true}],
+  handoff:{lowConfidenceDestination:'synthetic-reception',destinations:['synthetic-reception'],maxClarifications:2}
+})
+const version = await store.createVersion({tenantId},agent.id,config,'synthetic.admin')
+const trace = await runTestLab({store,tenantId,agentId:agent.id,versionId:version.id,message:'Qual o endereço?',history:[],approvedKnowledge:{source:'controlled://synthetic/source',version:'v1',answer:'Local sintético escolhido pelo cliente.'}})
+assert.equal(trace.knowledge.status,'answered')
+assert.equal(trace.response.text,'Local sintético escolhido pelo cliente.')
+results.G3 = {level:'in-memory laboratory',knowledge:trace.knowledge,response:trace.response}
+
+process.env.NODE_ENV = 'test'
+const app = buildServer({requireAuthenticatedMutations:true})
+try {
+  for (const [operatorId,role] of [['synthetic.operator','Operator'],['synthetic.supervisor','Supervisor']] as const) {
+    await app.caseAuthority.applyVerifiedPrincipalState({tenantId,operatorId,role,active:true,expectedRevision:0,authorityVersion:'synthetic-v1',proofRef:`synthetic-proof:${operatorId}`,identitySource:'synthetic_fixture'})
+  }
+  const inbound = await app.inject({method:'POST',url:'/v1/webhooks/channels/whatsapp/messages',payload:{externalMessageId:'guardrails-synthetic',senderRef:'synthetic-sender',body:'Atendimento sintético',receivedAt:'2026-11-05T12:00:00Z'}})
+  assert.equal(inbound.statusCode,200)
+  const {conversationId,sessionId} = inbound.json().data
+  const managerHeaders = {'x-operator-id':'synthetic.supervisor','x-operator-role':'Supervisor','x-tenant-id':tenantId}
+  const cases = await app.inject({method:'GET',url:`/v1/cases?kind=core_conversation&resourceId=${conversationId}`,headers:managerHeaders})
+  assert.equal(cases.statusCode,200)
+  const caseId = cases.json().data.items[0]?.caseId
+  assert.ok(caseId)
+  const grant = await app.inject({method:'PUT',url:`/v1/cases/${caseId}/assignments/synthetic.operator`,headers:managerHeaders,payload:{status:'ACTIVE',expectedRevision:0}})
+  assert.equal(grant.statusCode,200)
+  const created = await app.inject({method:'POST',url:'/v1/approvals',headers:{'x-operator-id':'synthetic.operator','x-operator-role':'Operator','x-tenant-id':tenantId,'idempotency-key':'synthetic-guardrails-create'},payload:{sessionId,proposedAction:'handoff_to_operator',summary:'Solicitação sintética',riskLevel:'high'}})
+  assert.equal(created.statusCode,200)
+  results.G5 = {status:created.statusCode,success:created.json().success,permissionRequiredInSource:'approval:view',role:'Operator',hasView:roleHasPermission('Operator','approval:view'),hasDecide:roleHasPermission('Operator','approval:decide'),additionalRequirement:'active case grant'}
+} finally { await app.close() }
+
+let parses = 0
+const server = buildShiftServer({assistant:{} as any,store:{} as any,whatsapp:{provider:'synthetic',parseWebhook:()=>{parses++;return null}} as any,webhookSecret:'synthetic-secret-only'})
+server.listen(0,'127.0.0.1')
+await once(server,'listening')
+try {
+  const address = server.address() as {port:number}
+  const base = `http://127.0.0.1:${address.port}/webhooks/synthetic`
+  const rejected = await fetch(base,{method:'POST',body:'{}'})
+  assert.equal(rejected.status,401)
+  const query = await fetch(`${base}?secret=synthetic-secret-only`,{method:'POST',body:'{}'})
+  assert.equal(query.status,200)
+  const firstBody = await query.json()
+  const modified = await fetch(`${base}?secret=synthetic-secret-only`,{method:'POST',body:'{"modified":true}'})
+  assert.equal(modified.status,200)
+  await modified.json()
+  results.G6 = {missingSecret:rejected.status,querySecretOnly:query.status,firstBody,modifiedUnsignedBody:modified.status,parses,note:'synthetic parser returns null; no admitted message or external effect'}
+} finally { await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve())) }
+console.log(JSON.stringify(results,null,2))
