@@ -24,6 +24,7 @@ import {
   type ChannelEffectReserveInput
 } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000000e1'
 const CORRELATION = 'corr_00000000-0000-4000-8000-0000000000e1'
@@ -493,6 +494,7 @@ describe('AAA12-C4-F01 missing vs malformed hashVersion', () => {
         })
         const adapter = new CountingAdapter()
         const gateway = new ChannelGateway({
+          composition: syntheticComposition,
           outboundAdapters: [adapter],
           effectJournal: new FileChannelEffectJournal({ directory })
         })

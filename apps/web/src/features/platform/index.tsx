@@ -504,16 +504,7 @@ export function PlatformPanel({ identity }: PlatformPanelProps) {
         identity,
         agentId: selectedAgent.id,
         versionId: version.id,
-        message: testMessage,
-        ...(form.knowledgeSource
-          ? {
-              approvedKnowledge: {
-                version: form.knowledgeVersion.trim() || 'controlled-v1',
-                answer: 'Resposta institucional fictícia.',
-                source: form.knowledgeSource
-              }
-            }
-          : {})
+        message: testMessage
       })
       runIfCurrent(scope, () => {
         setTrace(result)

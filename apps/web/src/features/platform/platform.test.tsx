@@ -290,10 +290,12 @@ describe('PlatformPanel', () => {
       ([input, init]) =>
         String(input) === '/v1/admin/test-lab/runs' && init?.method === 'POST'
     )
-    const body = JSON.parse(String(request?.[1]?.body)) as {
-      approvedKnowledge?: { version: string }
-    }
-    expect(body.approvedKnowledge?.version).toBe('knowledge-v7')
+    const body = JSON.parse(String(request?.[1]?.body)) as Record<
+      string,
+      unknown
+    >
+    // SPEC 0317 G3: the console has no authority over approved content.
+    expect(body).not.toHaveProperty('approvedKnowledge')
   })
 })
 

@@ -12,10 +12,13 @@ import type {
   AgentExecutionMode,
   HandoffPriority,
   TestRunTrace,
-  TraceSpanName,
-  ApprovedKnowledgeForTest
+  TraceSpanName
 } from './contracts.ts'
-import { ApprovedKnowledgeForTestSchema } from './contracts.ts'
+import {
+  resolveGovernedKnowledge,
+  type ApprovedKnowledgeResolver,
+  type GovernedKnowledge
+} from './knowledge-authority.ts'
 import {
   createTraceId,
   TraceIdSchema,
@@ -48,8 +51,8 @@ export interface TestLabInput {
   traceId?: TraceId
   message: string
   history: string[]
-  approvedKnowledge?: ApprovedKnowledgeForTest
   resolveApprovedKnowledge?: ApprovedKnowledgeResolver
+  knowledgeTimeoutMs?: number
   capabilityGateway?: CapabilityGateway
   actor?: AgentExecutionActor
   capabilityApproval?: CapabilityApproval
@@ -60,19 +63,6 @@ export interface TestLabInput {
   context?: { conversationId?: string; sessionId?: string }
   monotonicClock?: () => number
 }
-
-export interface ApprovedKnowledgeResolverInput {
-  tenantId: TenantId
-  question: string
-}
-
-export type ApprovedKnowledgeResolver = (
-  input: ApprovedKnowledgeResolverInput
-) =>
-  | ApprovedKnowledgeForTest
-  | null
-  | undefined
-  | Promise<ApprovedKnowledgeForTest | null | undefined>
 
 export interface ControlledTraceTiming {
   measure<T>(name: TraceSpanName, operation: () => T): T
@@ -239,18 +229,23 @@ export async function executeConfiguredAgent(
   const safety = assessConversationSafety(message, history)
   const intent = timing.measure('intent', () => classifyForDryRun(message))
   await emitPlatformEvent(executionInput, 'intent.after', intent)
-  const approvedKnowledge = await timing.measureAsync('knowledge', async () => {
-    const candidate =
-      input.resolveApprovedKnowledge && intent.name === 'institutional_question'
-        ? await input.resolveApprovedKnowledge({
+  const governedKnowledge = await timing.measureAsync(
+    'knowledge',
+    async (): Promise<GovernedKnowledge> =>
+      intent.name === 'institutional_question'
+        ? resolveGovernedKnowledge({
+            resolver: input.resolveApprovedKnowledge,
             tenantId: input.tenantId,
-            question: message
+            agentId: input.agentId,
+            versionId: input.versionId,
+            question: message,
+            bindings: config.knowledge.filter((binding) => binding.enabled),
+            ...(input.knowledgeTimeoutMs !== undefined
+              ? { timeoutMs: input.knowledgeTimeoutMs }
+              : {})
           })
-        : input.resolveApprovedKnowledge
-          ? undefined
-          : input.approvedKnowledge
-    return validateApprovedKnowledge(candidate ?? undefined)
-  })
+        : { status: 'missing' }
+  )
   const { action, policy } = timing.measure('policy', () => {
     const nextAction = actionForMessage(message, intent.name)
     const nextPolicy = evaluatePlatformPolicy({
@@ -284,7 +279,7 @@ export async function executeConfiguredAgent(
     configuredBindings: config.knowledge.length
   })
   const knowledge = timing.measure('knowledge', () =>
-    resolveKnowledge(intent.name, approvedKnowledge, config.knowledge)
+    resolveKnowledge(intent.name, governedKnowledge, config.knowledge)
   )
   await emitPlatformEvent(executionInput, 'knowledge.after', knowledge.trace)
   const handoffRequested =
@@ -526,20 +521,6 @@ function validateHistoryItem(rawItem: string): string {
   return rawItem
 }
 
-function validateApprovedKnowledge(
-  approvedKnowledge: ApprovedKnowledgeForTest | undefined
-): ApprovedKnowledgeForTest | undefined {
-  if (approvedKnowledge === undefined) return undefined
-  const parsed = ApprovedKnowledgeForTestSchema.safeParse(approvedKnowledge)
-  if (!parsed.success) {
-    throw new DomainError(
-      'validation_failed',
-      'Approved knowledge payload is invalid'
-    )
-  }
-  return parsed.data
-}
-
 function classifyForDryRun(message: string): {
   name: string
   confidence: number
@@ -584,29 +565,44 @@ function actionForMessage(message: string, intent: string): string {
 
 function resolveKnowledge(
   intent: string,
-  approvedKnowledge: ApprovedKnowledgeForTest | undefined,
+  governed: GovernedKnowledge,
   bindings: AgentConfig['knowledge']
 ): { trace: TestRunTrace['knowledge']; answer?: string } {
   if (intent !== 'institutional_question') {
     return { trace: { status: 'not_requested' } }
   }
-  if (!approvedKnowledge)
+  if (governed.status === 'missing') {
     return { trace: { status: 'approved_source_missing' } }
+  }
+  if (governed.status === 'blocked') {
+    return {
+      trace: { status: 'approved_source_missing', reason: governed.reason }
+    }
+  }
+  const { knowledge } = governed
   const binding = bindings.find(
     (candidate) =>
       candidate.enabled &&
       candidate.requiresApprovedSource &&
-      candidate.source === approvedKnowledge.source &&
-      candidate.version === approvedKnowledge.version
+      candidate.source === knowledge.source &&
+      candidate.version === knowledge.version
   )
-  if (!binding) return { trace: { status: 'approved_source_missing' } }
+  if (!binding) {
+    return {
+      trace: { status: 'approved_source_missing', reason: 'binding_mismatch' }
+    }
+  }
   return {
     trace: {
       status: 'answered',
-      source: approvedKnowledge.source,
-      version: approvedKnowledge.version
+      source: knowledge.source,
+      version: knowledge.version,
+      provenance: {
+        recordId: knowledge.provenance.recordId,
+        excerptSha256: knowledge.provenance.excerptSha256
+      }
     },
-    answer: approvedKnowledge.answer
+    answer: knowledge.answer
   }
 }
 

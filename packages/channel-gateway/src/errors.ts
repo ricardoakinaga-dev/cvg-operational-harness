@@ -16,7 +16,9 @@ export const ChannelErrorCodes = {
   hash_algorithm_mismatch: 'hash_algorithm_mismatch',
   // SPEC 0282: a 429 told us to wait / the reservation ceiling was reached.
   retry_later: 'retry_later',
-  attempts_exhausted: 'attempts_exhausted'
+  attempts_exhausted: 'attempts_exhausted',
+  // SPEC 0317 G4: guard closed or dispatch not authorized; zero I/O happened.
+  real_capability_blocked: 'real_capability_blocked'
 } as const
 
 export type ChannelErrorCode =

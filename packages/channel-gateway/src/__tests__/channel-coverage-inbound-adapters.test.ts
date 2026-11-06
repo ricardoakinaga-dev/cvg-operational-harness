@@ -11,6 +11,7 @@ import {
   CanonicalOutboundMessageSchema,
   type CanonicalOutboundMessageInput
 } from '../contracts.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000000f1'
 const CORRELATION = 'corr_00000000-0000-4000-8000-0000000000f1'
@@ -74,6 +75,7 @@ describe('Evolution adapter hardening', () => {
 
   it('constructs with the global fetch and default clock, then sends', async () => {
     const adapter = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -84,6 +86,7 @@ describe('Evolution adapter hardening', () => {
     expect(adapter.enabled).toBe(true)
 
     const withDefaultClock = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -98,6 +101,7 @@ describe('Evolution adapter hardening', () => {
 
   it('normalizes extended text without pushName and rejects response overflow', async () => {
     const adapter = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -119,6 +123,7 @@ describe('Evolution adapter hardening', () => {
     expect(envelope.sender.displayName).toBeUndefined()
 
     const overflow = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -136,6 +141,7 @@ describe('Evolution adapter hardening', () => {
 describe('Chatwoot adapter hardening', () => {
   it('covers explicit loopback HTTP and default fetch composition', () => {
     const loopback = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'http://127.0.0.1:32123',
       allowPrivateNetworks: true,
@@ -146,6 +152,7 @@ describe('Chatwoot adapter hardening', () => {
     expect(loopback.enabled).toBe(true)
 
     const withDefaultFetch = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       apiKey: 'synthetic-key',
@@ -169,6 +176,7 @@ describe('Chatwoot adapter hardening', () => {
     expect(
       () =>
         new ChatwootChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           enabled: true,
           baseUrl: 'http://169.254.169.254',
           apiKey: 'k',
@@ -179,6 +187,7 @@ describe('Chatwoot adapter hardening', () => {
 
   it('rejects incomplete payloads and falls back on an invalid timestamp', () => {
     const adapter = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -220,6 +229,7 @@ describe('Chatwoot adapter hardening', () => {
 
   it('normalizes numeric and string timestamps and the unknown sender', () => {
     const adapter = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -271,6 +281,7 @@ describe('base URL configuration (AUD-0599 linear trailing-slash helper)', () =>
       expect(
         () =>
           new ChatwootChannelAdapter({
+            realCapabilityGuard: realChannelGuard,
             enabled: true,
             ...(baseUrl !== undefined ? { baseUrl } : {}),
             apiKey: 'k',
@@ -280,6 +291,7 @@ describe('base URL configuration (AUD-0599 linear trailing-slash helper)', () =>
       expect(
         () =>
           new EvolutionChannelAdapter({
+            realCapabilityGuard: realChannelGuard,
             enabled: true,
             ...(baseUrl !== undefined ? { baseUrl } : {}),
             apiKey: 'k',
@@ -291,6 +303,7 @@ describe('base URL configuration (AUD-0599 linear trailing-slash helper)', () =>
 
   it('accepts a base URL with trailing slashes', () => {
     const chatwoot = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: ' https://chatwoot.example.com/// ',
       dnsLookup: async () => ['93.184.216.34'],
@@ -298,6 +311,7 @@ describe('base URL configuration (AUD-0599 linear trailing-slash helper)', () =>
       accountId: '1'
     })
     const evolution = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com//',
       dnsLookup: async () => ['93.184.216.34'],
@@ -312,6 +326,7 @@ describe('base URL configuration (AUD-0599 linear trailing-slash helper)', () =>
 describe('adapter send error mapping', () => {
   const chatwoot = (fetchImpl: () => Promise<Response>) =>
     new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -322,6 +337,7 @@ describe('adapter send error mapping', () => {
     })
   const evolution = (fetchImpl: () => Promise<Response>) =>
     new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -359,6 +375,7 @@ describe('adapter send error mapping', () => {
 
   it('sends over explicit loopback HTTP', async () => {
     const adapter = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'http://127.0.0.1:32123',
       allowPrivateNetworks: true,

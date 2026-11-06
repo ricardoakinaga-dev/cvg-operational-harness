@@ -18,7 +18,8 @@ import {
   fetchWithSsrfGuard,
   resolveAndGuardOutboundUrl,
   type EgressDns,
-  type EgressGuardOptions
+  type EgressGuardOptions,
+  type RealCapabilityGuard
 } from '@cvg/shared'
 import type {
   ToolDefinition,
@@ -35,6 +36,7 @@ import {
 } from './effect-journal.ts'
 import { fetchWithResolvedAddress } from './adapters/ssrf-node.ts'
 import { statusEffectOptions } from './adapters/bounded-body.ts'
+import { assertChannelGuardOpen } from './real-composition.ts'
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const TEMP_PREFIX = '.cvg-fs-tmp-'
@@ -51,6 +53,8 @@ const INPUT_SCHEMA = {
 } as const
 
 export interface ExamEgressOptions {
+  /** SPEC 0317 G4: real egress; a closed or absent guard refuses before I/O. */
+  readonly realCapabilityGuard: RealCapabilityGuard
   readonly effectJournal: ChannelEffectJournal
   readonly workspaceRoot: string
   readonly urlGuard?: EgressGuardOptions
@@ -209,6 +213,7 @@ function createExecutor(
   options: ExamEgressOptions,
   operation: 'exam.upload' | 'exam.download'
 ): ToolDefinition['execute'] {
+  assertChannelGuardOpen(options.realCapabilityGuard)
   if (!isAbsolute(options.workspaceRoot))
     throw new Error('workspaceRoot must be absolute')
   const root = realpathSync(options.workspaceRoot)
@@ -253,6 +258,11 @@ function createExecutor(
     input: unknown,
     context: ToolExecutionContext
   ): Promise<ToolResult> => {
+    try {
+      assertChannelGuardOpen(options.realCapabilityGuard)
+    } catch {
+      return rejected('real_capability_blocked')
+    }
     const parsed = parseInput(input)
     if (!parsed) return rejected('invalid exam egress input')
     const path = confinePath(root, parsed.path)

@@ -1,3 +1,4 @@
+import { KNOWLEDGE_BLOCK_REASONS } from './knowledge-authority.ts'
 import { z } from 'zod'
 import { DomainError, redactSensitiveText } from '@cvg/shared'
 import {
@@ -148,7 +149,15 @@ const TraceSchema = z
           .max(200)
           .regex(/^controlled:\/\//)
           .optional(),
-        version: ShortTraceStringSchema.optional()
+        version: ShortTraceStringSchema.optional(),
+        reason: z.enum(KNOWLEDGE_BLOCK_REASONS).optional(),
+        provenance: z
+          .object({
+            recordId: ShortTraceStringSchema,
+            excerptSha256: z.string().regex(/^[0-9a-f]{64}$/)
+          })
+          .strip()
+          .optional()
       })
       .strip(),
     tools: z

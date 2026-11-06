@@ -14,6 +14,10 @@ import {
   CanonicalOutboundMessageSchema,
   type CanonicalOutboundMessageInput
 } from '../contracts.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const NOW = new Date('2026-09-11T12:00:00.000Z')
@@ -57,6 +61,7 @@ function outbound(overrides: Partial<CanonicalOutboundMessageInput> = {}) {
 describe('channel gateway inbound', () => {
   it('normalizes a fake inbound message into the canonical envelope', () => {
     const gateway = new ChannelGateway({
+      composition: realComposition,
       inboundAdapters: [new ControlledFakeChannelAdapter({ clock: () => NOW })]
     })
     const result = gateway.ingest(
@@ -80,6 +85,7 @@ describe('channel gateway inbound', () => {
     const events: string[] = []
     const dedup = new InboundDeduplicator({ clock: () => NOW.getTime() })
     const gateway = new ChannelGateway({
+      composition: realComposition,
       inboundAdapters: [new ControlledFakeChannelAdapter({ clock: () => NOW })],
       deduplicator: dedup,
       onEvent: (event) => events.push(event.type)
@@ -106,6 +112,7 @@ describe('channel gateway inbound', () => {
 
   it('fails closed for unknown or disabled channels', () => {
     const gateway = new ChannelGateway({
+      composition: realComposition,
       inboundAdapters: [new EvolutionChannelAdapter()]
     })
     expect(() => gateway.ingest('whatsapp', {}, context)).toThrowError(
@@ -134,7 +141,10 @@ describe('channel gateway inbound', () => {
 describe('channel gateway outbound', () => {
   it('sends once and journals the effect so retries never duplicate it', async () => {
     const adapter = new ControlledFakeChannelAdapter({ clock: () => NOW })
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: realComposition,
+      outboundAdapters: [adapter]
+    })
     const first = await gateway.dispatch(outbound(), { takeoverActive: false })
     const second = await gateway.dispatch(outbound(), { takeoverActive: false })
     expect(adapter.sent).toHaveLength(1)
@@ -143,7 +153,10 @@ describe('channel gateway outbound', () => {
 
   it('blocks every automatic outbound effect during human takeover', async () => {
     const adapter = new ControlledFakeChannelAdapter()
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: realComposition,
+      outboundAdapters: [adapter]
+    })
     await expect(
       gateway.dispatch(outbound(), { takeoverActive: true })
     ).rejects.toMatchObject({ code: 'human_takeover_active' })
@@ -152,7 +165,10 @@ describe('channel gateway outbound', () => {
 
   it('retries a failed send without duplicating the successful effect', async () => {
     const adapter = new ControlledFakeChannelAdapter({ clock: () => NOW })
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: realComposition,
+      outboundAdapters: [adapter]
+    })
     adapter.failNextSend()
     await expect(
       gateway.dispatch(outbound(), { takeoverActive: false })
@@ -163,7 +179,10 @@ describe('channel gateway outbound', () => {
 
   it('validates outbound payloads before any adapter call', async () => {
     const adapter = new ControlledFakeChannelAdapter()
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: realComposition,
+      outboundAdapters: [adapter]
+    })
     await expect(
       gateway.dispatch(
         { ...outbound(), tenantId: '' } as CanonicalOutboundMessageInput,
@@ -177,6 +196,7 @@ describe('channel gateway outbound', () => {
 describe('EvolutionAPI adapter', () => {
   it('normalizes realistic webhook payloads', () => {
     const adapter = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -208,6 +228,7 @@ describe('EvolutionAPI adapter', () => {
 
   it('rejects outbound echoes and incomplete payloads', () => {
     const adapter = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -230,12 +251,17 @@ describe('EvolutionAPI adapter', () => {
   })
 
   it('fails closed when enabled without configuration or with unsafe URLs', () => {
-    expect(() => new EvolutionChannelAdapter({ enabled: true })).toThrowError(
-      expect.objectContaining({ code: 'invalid_config' })
-    )
     expect(
       () =>
         new EvolutionChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
+          enabled: true
+        })
+    ).toThrowError(expect.objectContaining({ code: 'invalid_config' }))
+    expect(
+      () =>
+        new EvolutionChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           enabled: true,
           baseUrl: 'http://169.254.169.254',
           apiKey: 'k',
@@ -248,6 +274,7 @@ describe('EvolutionAPI adapter', () => {
     expect(
       () =>
         new EvolutionChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           enabled: true,
           baseUrl: 'http://evolution.example.com',
           apiKey: 'k',
@@ -257,6 +284,7 @@ describe('EvolutionAPI adapter', () => {
     expect(
       () =>
         new ChatwootChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           enabled: true,
           baseUrl: 'http://chatwoot.example.com',
           apiKey: 'k',
@@ -280,6 +308,7 @@ describe('EvolutionAPI adapter', () => {
     servers.push(server)
     const port = (server.address() as AddressInfo).port
     const loopback = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: `http://127.0.0.1:${port}`,
       allowPrivateNetworks: true,
@@ -300,6 +329,7 @@ describe('EvolutionAPI adapter', () => {
   it('sends through the configured endpoint with bounded failure mapping', async () => {
     const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }))
     const adapter = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -320,6 +350,7 @@ describe('EvolutionAPI adapter', () => {
     // bypass through the allowlist).
     const reboundFetch = vi.fn(async () => new Response('{}', { status: 200 }))
     const rebound = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['169.254.169.254'],
@@ -333,6 +364,7 @@ describe('EvolutionAPI adapter', () => {
     expect(reboundFetch).not.toHaveBeenCalled()
 
     const failing = new EvolutionChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://evolution.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -351,6 +383,7 @@ describe('EvolutionAPI adapter', () => {
 describe('Chatwoot adapter', () => {
   it('normalizes incoming messages and rejects outgoing echoes', () => {
     const adapter = new ChatwootChannelAdapter({
+      realCapabilityGuard: realChannelGuard,
       enabled: true,
       baseUrl: 'https://chatwoot.example.com',
       dnsLookup: async () => ['93.184.216.34'],
@@ -390,6 +423,7 @@ describe('Chatwoot adapter', () => {
     expect(
       () =>
         new ChatwootChannelAdapter({
+          realCapabilityGuard: realChannelGuard,
           enabled: true,
           baseUrl: 'https://x.example'
         })

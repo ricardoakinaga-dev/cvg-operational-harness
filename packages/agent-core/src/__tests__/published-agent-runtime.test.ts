@@ -1,4 +1,5 @@
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore,
@@ -253,11 +254,11 @@ describe('published agent runtime adapter', () => {
         conversationId: 'conv_runtime_fixture',
         sessionId: 'sess_runtime_fixture'
       },
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         version: 'knowledge-v1',
         answer: 'Rua fictícia, 100.',
         source: 'controlled://institutional'
-      }
+      })
     })
 
     expect(result.status).toBe('completed')
@@ -462,11 +463,11 @@ describe('published agent runtime adapter', () => {
       versionId: published.id,
       message: 'Qual endereço?',
       history: [],
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         version: 'knowledge-v1',
         answer: 'Rua fictícia, 100.',
         source: 'controlled://institutional'
-      }
+      })
     })
 
     expect(result.status).toBe('completed')

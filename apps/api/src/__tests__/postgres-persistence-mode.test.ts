@@ -29,7 +29,9 @@ import {
   type PostgresQueryable
 } from '@cvg/persistence'
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
+  createControlledAgentConfig,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore,
   createTraceId,
@@ -40,6 +42,7 @@ import {
 } from '@cvg/platform'
 import { createCorrelationId } from '@cvg/shared'
 import { PostgresWebhookReplayStore } from '../webhook-security.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 
 interface Envelope<T> {
@@ -2354,6 +2357,147 @@ describe('api PostgreSQL persistence mode', () => {
   )
 
   itWithPostgres(
+    'SPEC 0317 G3 keeps knowledge authority on the server over PostgreSQL',
+    async () => {
+      const client = new Client({ connectionString: testDatabaseUrl })
+      const schemaName = `cvg_api_g3_${Date.now()}`
+      await client.connect()
+
+      try {
+        await client.query(`CREATE SCHEMA ${schemaName}`)
+        await client.query(`SET search_path TO ${schemaName}`)
+        await runPostgresMigrations(client, { schemaName })
+        const headers = {
+          'x-operator-id': 'admin.pg-g3',
+          'x-operator-role': 'Admin',
+          'x-tenant-id': postgresTenantA
+        }
+        const repository = new PostgresControlPlaneRepository(client)
+        const agent = await repository.createAgent(
+          { tenantId: postgresTenantA as never },
+          { slug: 'pg-g3', name: 'PG G3', description: 'Fixture' }
+        )
+        const version = await repository.createVersion(
+          { tenantId: postgresTenantA as never },
+          agent.id,
+          AgentConfigSchema.parse({
+            ...createControlledAgentConfig(),
+            knowledge: [
+              {
+                source: 'controlled://postgres-g3',
+                version: 'pg-g3-v1',
+                enabled: true,
+                requiresApprovedSource: true
+              }
+            ]
+          }),
+          'admin.pg-g3'
+        )
+        const body = {
+          agentId: agent.id,
+          versionId: version.id,
+          message: 'Qual o horário de funcionamento?',
+          history: []
+        }
+
+        const withoutProfile = buildServer({
+          persistence: { kind: 'postgres', client }
+        })
+        const absent = await withoutProfile.inject({
+          method: 'POST',
+          url: '/v1/admin/test-lab/runs',
+          headers,
+          payload: body
+        })
+        await withoutProfile.close()
+        expect(absent.statusCode).toBe(404)
+
+        const app = buildServer({
+          persistence: { kind: 'postgres', client },
+          testLab: createSyntheticTestLabComposition({
+            resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
+              answer: 'Horário fictício PostgreSQL.'
+            })
+          })
+        })
+        const forged = await app.inject({
+          method: 'POST',
+          url: '/v1/admin/test-lab/runs',
+          headers,
+          payload: {
+            ...body,
+            approvedKnowledge: {
+              source: 'controlled://postgres-g3',
+              version: 'pg-g3-v1',
+              answer: 'Resposta forjada.'
+            }
+          }
+        })
+        expect(forged.statusCode).toBe(400)
+        const beforeFixture = await client.query(
+          'SELECT count(*)::int AS total FROM platform_test_runs'
+        )
+        expect(beforeFixture.rows[0].total).toBe(0)
+
+        const answered = await app.inject({
+          method: 'POST',
+          url: '/v1/admin/test-lab/runs',
+          headers,
+          payload: body
+        })
+        expect(answered.statusCode).toBe(200)
+        expect(answered.json().data).toMatchObject({
+          knowledge: { status: 'answered' },
+          response: { text: 'Horário fictício PostgreSQL.' }
+        })
+
+        // A suite stored before the fixture left the contract loses it on read.
+        const suite = await repository.createTestSuite(
+          { tenantId: postgresTenantA as never },
+          {
+            slug: 'pg-g3-legacy',
+            name: 'Legacy',
+            description: 'Fixture',
+            agentId: agent.id,
+            versionId: version.id,
+            cases: [
+              {
+                id: 'legacy',
+                message: 'Qual o horário de funcionamento?',
+                history: [],
+                expectedResponseMode: 'handoff'
+              }
+            ]
+          },
+          'admin.pg-g3'
+        )
+        await client.query(
+          `UPDATE platform_test_suites
+           SET cases = jsonb_set(cases, '{0,approvedKnowledge}', $1::jsonb)
+           WHERE id = $2`,
+          [
+            JSON.stringify({
+              source: 'controlled://postgres-g3',
+              version: 'pg-g3-v1',
+              answer: 'Resposta legada do cliente.'
+            }),
+            suite.id
+          ]
+        )
+        const legacy = await repository.getTestSuite(
+          { tenantId: postgresTenantA as never },
+          suite.id
+        )
+        expect(JSON.stringify(legacy)).not.toContain('Resposta legada')
+        await app.close()
+      } finally {
+        await client.query(`DROP SCHEMA IF EXISTS ${schemaName} CASCADE`)
+        await client.end()
+      }
+    }
+  )
+
+  itWithPostgres(
     'keeps human takeover and session continuation fail-closed on PostgreSQL',
     async () => {
       const client = new Client({ connectionString: testDatabaseUrl })
@@ -2372,11 +2516,11 @@ describe('api PostgreSQL persistence mode', () => {
           platform,
           agentRuntime: {
             resolveAgentId: () => agent.id,
-            approvedKnowledge: {
+            resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
               version: 'postgres-knowledge-v1',
               answer: 'Endereço fictício PostgreSQL.',
               source: 'controlled://postgres-test'
-            }
+            })
           }
         })
         const inboundHeaders = { 'x-tenant-id': postgresTenantA }

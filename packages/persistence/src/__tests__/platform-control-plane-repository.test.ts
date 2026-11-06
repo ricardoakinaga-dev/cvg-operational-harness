@@ -522,12 +522,7 @@ describe('Postgres control plane repository', () => {
             id: 'redacted-case',
             message: 'Email ana@example.com e +5511999999999',
             history: ['Contato joao@example.com'],
-            expectedResponseMode: 'clarify',
-            approvedKnowledge: {
-              version: 'knowledge-v1',
-              answer: 'Ligue +5511888888888',
-              source: 'controlled://institutional'
-            }
+            expectedResponseMode: 'clarify'
           }
         ]
       },
@@ -535,8 +530,7 @@ describe('Postgres control plane repository', () => {
     )
     expect(suite.cases[0]).toMatchObject({
       message: 'Email [redacted-email] e [redacted-phone]',
-      history: ['Contato [redacted-email]'],
-      approvedKnowledge: { answer: 'Ligue [redacted-phone]' }
+      history: ['Contato [redacted-email]']
     })
 
     const clone = await repository.cloneTestSuite(

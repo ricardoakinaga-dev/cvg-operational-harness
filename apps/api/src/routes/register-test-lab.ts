@@ -30,17 +30,52 @@ import {
   evaluateTestSuiteVariant,
   recordSuiteRun
 } from '../server-capability.ts'
+import type { TestLabComposition } from '../test-lab-composition.ts'
 import type { RouteContext } from './context.ts'
 
-export function registerTestLabRoutes(ctx: RouteContext): void {
-  const {
-    app,
-    audit,
-    emitRuntimeLog,
-    operatorIdentityResolver,
-    options,
-    platform
-  } = ctx
+/** Audit read of real executions: not part of the lab, always registered. */
+export function registerExecutionTraceRoutes(ctx: RouteContext): void {
+  const { app, operatorIdentityResolver, platform } = ctx
+
+  app.get('/v1/admin/execution-traces', async (request, reply) => {
+    const correlationId = createCorrelationId()
+    try {
+      const scope = requirePlatformScope(
+        request.headers,
+        'audit:view_full',
+        operatorIdentityResolver
+      )
+      const limit = parseTraceLimit(request.query)
+      const items = await platform.listExecutionTraces(scope, limit)
+      return ok(
+        {
+          items,
+          pageInfo: {
+            limit,
+            offset: 0,
+            total: items.length,
+            hasNextPage: false
+          }
+        },
+        correlationId
+      )
+    } catch (error) {
+      const safeError = toSafeError(error)
+      reply.code(statusCodeForError(safeError.code))
+      return fail(safeError.code, safeError.message, correlationId)
+    }
+  })
+}
+
+/** SPEC 0317 G3: registered only with the synthetic test composition. */
+export function registerTestLabRoutes(
+  ctx: RouteContext,
+  testLab: TestLabComposition
+): void {
+  const { app, audit, emitRuntimeLog, operatorIdentityResolver, platform } = ctx
+  const resolveApprovedKnowledge =
+    testLab.resolveApprovedKnowledge ?? ctx.options.resolveApprovedKnowledge
+  const knowledge = resolveApprovedKnowledge ? { resolveApprovedKnowledge } : {}
 
   app.post('/v1/admin/test-lab/runs', async (request, reply) => {
     const correlationId = createCorrelationId()
@@ -58,12 +93,7 @@ export function registerTestLabRoutes(ctx: RouteContext): void {
         versionId: body.versionId,
         message: body.message,
         history: body.history,
-        ...(options.resolveApprovedKnowledge
-          ? { resolveApprovedKnowledge: options.resolveApprovedKnowledge }
-          : {}),
-        ...(body.approvedKnowledge && !options.resolveApprovedKnowledge
-          ? { approvedKnowledge: body.approvedKnowledge }
-          : {})
+        ...knowledge
       })
       const identity = resolveOperatorIdentity(
         request.headers,
@@ -228,9 +258,7 @@ export function registerTestLabRoutes(ctx: RouteContext): void {
           versionId,
           cases: suite.cases,
           label: 'A',
-          ...(options.resolveApprovedKnowledge
-            ? { resolveApprovedKnowledge: options.resolveApprovedKnowledge }
-            : {})
+          ...knowledge
         })
         const run = await recordSuiteRun({
           platform,
@@ -284,9 +312,7 @@ export function registerTestLabRoutes(ctx: RouteContext): void {
             versionId: body.versionAId,
             cases: suite.cases,
             label: 'A',
-            ...(options.resolveApprovedKnowledge
-              ? { resolveApprovedKnowledge: options.resolveApprovedKnowledge }
-              : {})
+            ...knowledge
           }),
           evaluateTestSuiteVariant({
             store: platform,
@@ -295,9 +321,7 @@ export function registerTestLabRoutes(ctx: RouteContext): void {
             versionId: body.versionBId,
             cases: suite.cases,
             label: 'B',
-            ...(options.resolveApprovedKnowledge
-              ? { resolveApprovedKnowledge: options.resolveApprovedKnowledge }
-              : {})
+            ...knowledge
           })
         ])
         return ok(
@@ -384,35 +408,6 @@ export function registerTestLabRoutes(ctx: RouteContext): void {
     }
   })
 
-  app.get('/v1/admin/execution-traces', async (request, reply) => {
-    const correlationId = createCorrelationId()
-    try {
-      const scope = requirePlatformScope(
-        request.headers,
-        'audit:view_full',
-        operatorIdentityResolver
-      )
-      const limit = parseTraceLimit(request.query)
-      const items = await platform.listExecutionTraces(scope, limit)
-      return ok(
-        {
-          items,
-          pageInfo: {
-            limit,
-            offset: 0,
-            total: items.length,
-            hasNextPage: false
-          }
-        },
-        correlationId
-      )
-    } catch (error) {
-      const safeError = toSafeError(error)
-      reply.code(statusCodeForError(safeError.code))
-      return fail(safeError.code, safeError.message, correlationId)
-    }
-  })
-
   app.post('/v1/admin/test-lab/evaluate', async (request, reply) => {
     const correlationId = createCorrelationId()
     try {
@@ -428,9 +423,7 @@ export function registerTestLabRoutes(ctx: RouteContext): void {
         agentId: body.agentId,
         versionId: body.versionId,
         cases: body.cases,
-        ...(options.resolveApprovedKnowledge
-          ? { resolveApprovedKnowledge: options.resolveApprovedKnowledge }
-          : {})
+        ...knowledge
       })
       const identity = resolveOperatorIdentity(
         request.headers,

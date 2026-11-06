@@ -287,9 +287,6 @@ export function registerCapabilityApprovalsRoutes(ctx: RouteContext): void {
           },
           ...(options.resolveApprovedKnowledge
             ? { resolveApprovedKnowledge: options.resolveApprovedKnowledge }
-            : {}),
-          ...(body.approvedKnowledge && !options.resolveApprovedKnowledge
-            ? { approvedKnowledge: body.approvedKnowledge }
             : {})
         })
         const capabilityResult = trace.tools.find(

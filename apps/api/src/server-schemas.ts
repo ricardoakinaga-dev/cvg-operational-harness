@@ -2,7 +2,6 @@ import {
   AgentConfigSchema,
   AgentIdSchema,
   AgentVersionIdSchema,
-  ApprovedKnowledgeForTestSchema,
   TestLabCaseSchema
 } from '@cvg/platform'
 import { z } from 'zod'
@@ -12,8 +11,7 @@ export const TestLabRequestSchema = z
     agentId: AgentIdSchema,
     versionId: AgentVersionIdSchema,
     message: z.string().trim().min(1).max(4000),
-    history: z.array(z.string().max(4000)).max(50).default([]),
-    approvedKnowledge: ApprovedKnowledgeForTestSchema.optional()
+    history: z.array(z.string().max(4000)).max(50).default([])
   })
   .strict()
 
@@ -118,7 +116,6 @@ export const CapabilityApprovalIssueRequestSchema = z
 export const CapabilityApprovalExecutionRequestSchema = z
   .object({
     message: z.string().trim().min(1).max(4000),
-    history: z.array(z.string().max(4000)).max(50).default([]),
-    approvedKnowledge: ApprovedKnowledgeForTestSchema.optional()
+    history: z.array(z.string().max(4000)).max(50).default([])
   })
   .strict()

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
   CapabilityGateway,
   createControlledCapabilityGateway,
@@ -870,11 +871,11 @@ describe('Test Lab dry-run', () => {
       versionId: version.id,
       message: 'Qual o horario de funcionamento?',
       history: [],
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         version: 'knowledge-v1',
         answer: 'Atendimento fictício de segunda a sexta.',
         source: 'controlled://institutional-hours'
-      }
+      })
     })
 
     expect(trace).toMatchObject({
@@ -1111,11 +1112,11 @@ describe('Test Lab dry-run', () => {
       versionId: version.id,
       message: 'Qual o endereço?',
       history: [],
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         version: 'knowledge-v1',
         source: 'controlled://institutional-address',
         answer: 'Endereço fictício usado somente no teste.'
-      }
+      })
     })
 
     expect(trace.response).toEqual({
@@ -1158,14 +1159,17 @@ describe('Test Lab dry-run', () => {
       versionId: version.id,
       message: 'Qual o endereço?',
       history: [],
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         version: 'knowledge-v1',
         source: 'controlled://unconfigured-source',
         answer: 'Resposta que não pertence ao snapshot.'
-      }
+      })
     })
 
-    expect(trace.knowledge).toEqual({ status: 'approved_source_missing' })
+    expect(trace.knowledge).toEqual({
+      status: 'approved_source_missing',
+      reason: 'binding_mismatch'
+    })
     expect(trace.response.mode).toBe('handoff')
     expect(trace.response.text).not.toContain('Resposta que não pertence')
   })
@@ -1340,11 +1344,11 @@ describe('Test Lab dry-run', () => {
       message:
         'Meu nome é Ana. Endereço: Rua Fictícia, 123. CPF 111.222.333-44.',
       history: [],
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         version: 'knowledge-pii-v1',
         source: 'controlled://institutional-address',
         answer: 'Rua Fictícia, 123'
-      }
+      })
     })
     expect(piiTrace.input.message).toBe(
       'Meu nome é [redacted-name]. Endereço: [redacted-address]. CPF [redacted-cpf].'
@@ -1432,14 +1436,20 @@ describe('Test Lab dry-run', () => {
     await expect(
       runTestLab({
         ...base,
-        message: 'ok',
-        approvedKnowledge: {
+        message: 'Qual o horário de funcionamento?',
+        resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
           version: 'kb-v1',
           answer: 'not approved',
           source: 'https://unapproved.example'
-        }
+        })
       })
-    ).rejects.toMatchObject({ code: 'validation_failed' })
+    ).resolves.toMatchObject({
+      knowledge: {
+        status: 'approved_source_missing',
+        reason: 'binding_mismatch'
+      },
+      handoff: { requested: true }
+    })
   })
 
   it('runs deterministic Test Lab evaluations and reports regressions', async () => {
@@ -1473,18 +1483,18 @@ describe('Test Lab dry-run', () => {
 
     const passing = await evaluateTestLabCase({
       ...base,
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
+        version: 'kb-v1',
+        answer: 'Horário fictício.',
+        source: 'controlled://hours'
+      }),
       testCase: {
         id: 'institutional-answer',
         message: 'Qual o horário de funcionamento?',
         history: [],
         expectedPolicyDecision: 'allowed',
         expectedResponseMode: 'answer',
-        expectedHandoff: false,
-        approvedKnowledge: {
-          version: 'kb-v1',
-          answer: 'Horário fictício.',
-          source: 'controlled://hours'
-        }
+        expectedHandoff: false
       }
     })
     expect(passing).toMatchObject({

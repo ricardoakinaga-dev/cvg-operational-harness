@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AgentConfigSchema } from '@cvg/platform'
 import { buildServer } from '../server.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000081'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000082'
@@ -53,7 +54,7 @@ interface Envelope<T> {
 
 describe('controlled Test Lab suite API', () => {
   it('creates, evaluates and compares a suite without external effects', async () => {
-    const app = buildServer()
+    const app = buildServer({ testLab: createSyntheticTestLabComposition() })
     const created = await app.inject({
       method: 'POST',
       url: '/v1/admin/agents',

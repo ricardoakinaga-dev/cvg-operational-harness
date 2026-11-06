@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { assertForbiddenCapabilitiesDisabled } from './real-capabilities.ts'
 
 export const TRUSTED_PROXY_HOPS_MIGRATION_ERROR =
   'API_TRUSTED_PROXY_HOPS is deprecated; configure API_TRUSTED_PROXY_ADDRESSES with explicit IP addresses'
@@ -64,6 +65,7 @@ export type AppEnv = z.infer<typeof EnvSchema>
 
 export function parseEnv(input: NodeJS.ProcessEnv): AppEnv {
   const env = EnvSchema.parse(input)
+  assertForbiddenCapabilitiesDisabled(env)
   if (
     env.NODE_ENV === 'production' &&
     env.OPENAI_API_KEY !== undefined &&
@@ -118,13 +120,4 @@ export function parseEnv(input: NodeJS.ProcessEnv): AppEnv {
     throw new Error('Production requires API_REQUIRE_HTTPS=true')
   }
   return env
-}
-
-export function realWorldActionsDisabled(env: AppEnv): boolean {
-  return (
-    !env.ENABLE_REAL_CHANNELS &&
-    !env.ENABLE_REAL_RAG &&
-    !env.ENABLE_REAL_PAYMENTS &&
-    !env.ENABLE_REAL_MEDICAL_RECORDS
-  )
 }

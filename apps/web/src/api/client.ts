@@ -45,6 +45,18 @@ export interface OperatorSessionView {
   expiresAt: string
 }
 
+/** SPEC 0317 G3: outside the test profile the Test Lab routes do not exist. */
+async function emptyWhenTestLabAbsent<T>(
+  pending: Promise<readonly T[] | T[]>
+): Promise<T[]> {
+  try {
+    return [...(await pending)]
+  } catch (error) {
+    if (error instanceof ApiRequestError && error.status === 404) return []
+    throw error
+  }
+}
+
 export class ApiRequestError extends Error {
   constructor(
     message: string,
@@ -339,7 +351,6 @@ export interface PlatformTestCaseView {
   expectedPolicyDecision?: string
   expectedResponseMode: 'answer' | 'clarify' | 'handoff' | 'blocked'
   expectedHandoff?: boolean
-  approvedKnowledge?: { version: string; answer: string; source: string }
 }
 
 export interface PlatformTestSuiteView {
@@ -1419,11 +1430,6 @@ export const apiClient = {
     agentId: string
     versionId: string
     message: string
-    approvedKnowledge?: {
-      version: string
-      answer: string
-      source: string
-    }
   }): Promise<PlatformTraceView> {
     const trace = await request<PlatformTraceView>('/v1/admin/test-lab/runs', {
       method: 'POST',
@@ -1435,8 +1441,7 @@ export const apiClient = {
         agentId: input.agentId,
         versionId: input.versionId,
         message: input.message,
-        history: [],
-        approvedKnowledge: input.approvedKnowledge
+        history: []
       })
     })
     return redactPlatformPayload(trace)
@@ -1453,11 +1458,6 @@ export const apiClient = {
       expectedPolicyDecision?: string
       expectedResponseMode: 'answer' | 'clarify' | 'handoff' | 'blocked'
       expectedHandoff?: boolean
-      approvedKnowledge?: {
-        version: string
-        answer: string
-        source: string
-      }
     }>
   }): Promise<{
     passed: boolean
@@ -1522,7 +1522,9 @@ export const apiClient = {
     agentId: string
   ): Promise<PlatformTestSuiteView[]> {
     const query = `?agentId=${encodeURIComponent(requireAgentId(agentId))}`
-    return request(`/v1/admin/test-lab/suites${query}`, operatorInit(identity))
+    return emptyWhenTestLabAbsent(
+      request(`/v1/admin/test-lab/suites${query}`, operatorInit(identity))
+    )
   },
 
   async evaluatePlatformTestSuite(input: {
@@ -1583,11 +1585,12 @@ export const apiClient = {
     identity: OperatorIdentity & { tenantId: string },
     limit = 10
   ): Promise<PlatformTraceView[]> {
-    const page = await request<PlatformTracePageView>(
-      `/v1/admin/test-lab/runs?limit=${limit}`,
-      operatorInit(identity)
+    return emptyWhenTestLabAbsent(
+      request<PlatformTracePageView>(
+        `/v1/admin/test-lab/runs?limit=${limit}`,
+        operatorInit(identity)
+      ).then((page) => redactPlatformPayload(page.items))
     )
-    return redactPlatformPayload(page.items)
   },
 
   async listPlatformExecutionTraces(

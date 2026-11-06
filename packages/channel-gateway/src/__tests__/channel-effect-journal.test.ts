@@ -18,6 +18,7 @@ import {
   type ChannelEffectIdentity
 } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000000b1'
 const TENANT_B = 'tenant_00000000-0000-4000-8000-0000000000b2'
@@ -110,7 +111,10 @@ async function waitFor(
 describe('channel effect journal contract', () => {
   it('1. two simultaneous dispatches with the same key produce one send', async () => {
     const adapter = new ScriptedChannelAdapter()
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
 
     const [first, second] = await Promise.all([
       gateway.dispatch(message(), { takeoverActive: false }),
@@ -126,6 +130,7 @@ describe('channel effect journal contract', () => {
     const adapterA = new ScriptedChannelAdapter()
     const adapterB = new ScriptedChannelAdapter()
     const gatewayA = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterA],
       effectJournal: new FileChannelEffectJournal({
         directory,
@@ -133,6 +138,7 @@ describe('channel effect journal contract', () => {
       })
     })
     const gatewayB = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterB],
       effectJournal: new FileChannelEffectJournal({
         directory,
@@ -154,6 +160,7 @@ describe('channel effect journal contract', () => {
     const adapter = new ScriptedChannelAdapter()
     const events: string[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: new FileChannelEffectJournal({ directory }),
       onEvent: (event) => events.push(event.type)
@@ -195,6 +202,7 @@ describe('channel effect journal contract', () => {
     nowMs += 51
     const adapter = new ScriptedChannelAdapter()
     const restarted = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: new FileChannelEffectJournal({
         directory,
@@ -217,7 +225,10 @@ describe('channel effect journal contract', () => {
   it('5. failure before the send releases the lease so a retry sends once', async () => {
     const adapter = new ScriptedChannelAdapter()
     adapter.failBeforeSend = true
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
 
     await expect(
       gateway.dispatch(message(), { takeoverActive: false })
@@ -235,6 +246,7 @@ describe('channel effect journal contract', () => {
     adapter.failAfterSend = true
     const journal = new FileChannelEffectJournal({ directory })
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -288,6 +300,7 @@ describe('channel effect journal contract', () => {
       pollMs: 2
     })
     const gatewayA = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterA],
       effectJournal: journalA,
       leaseMs: 50,
@@ -303,6 +316,7 @@ describe('channel effect journal contract', () => {
 
     const adapterB = new ScriptedChannelAdapter()
     const gatewayB = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterB],
       effectJournal: new FileChannelEffectJournal({
         directory,
@@ -329,7 +343,10 @@ describe('channel effect journal contract', () => {
 
   it('8. the same key with a different payload is rejected as a conflict', async () => {
     const adapter = new ScriptedChannelAdapter()
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
     const parsed = message()
 
     await gateway.dispatch(parsed, { takeoverActive: false })
@@ -344,7 +361,10 @@ describe('channel effect journal contract', () => {
 
   it('9. distinct tenants with the same key do not interfere', async () => {
     const adapter = new ScriptedChannelAdapter()
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
     const first = message({ idempotencyKey: 'shared-key-tenant' })
     const second = message({
       idempotencyKey: 'shared-key-tenant',
@@ -366,6 +386,7 @@ describe('channel effect journal contract', () => {
     const adapter = new ScriptedChannelAdapter()
     const journal = new FileChannelEffectJournal({ directory })
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -384,6 +405,7 @@ describe('channel effect journal contract', () => {
     adapter.enabled = false
     const journal = new FileChannelEffectJournal({ directory })
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })

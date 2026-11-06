@@ -1,4 +1,5 @@
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
   createValidatedControlledReleaseCandidate,
   InMemoryControlPlaneStore
@@ -142,11 +143,11 @@ describe('published runtime integration', () => {
       inboundTenantResolver: () => tenantId,
       agentRuntime: {
         resolveAgentId: () => agent.id,
-        approvedKnowledge: {
+        resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
           version: 'runtime-knowledge-v1',
           answer: 'Endereço fictício publicado.',
           source: 'controlled://runtime-api'
-        }
+        })
       }
     })
 
@@ -395,11 +396,11 @@ describe('published runtime integration', () => {
       inboundTenantResolver: () => tenantId,
       agentRuntime: {
         resolveAgentId: () => agent.id,
-        approvedKnowledge: {
+        resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
           version: 'runtime-knowledge-v1',
           answer: 'Endereço fictício publicado.',
           source: 'controlled://runtime-api'
-        }
+        })
       }
     })
 

@@ -2,6 +2,8 @@ import { performance } from 'node:perf_hooks'
 import Fastify from 'fastify'
 import {
   createCorrelationId,
+  createRealCapabilityGuards,
+  describeRealCapabilityGuards,
   DomainError,
   fail,
   IDENTITY_MODE_ENV,
@@ -10,6 +12,7 @@ import {
   type OperatorIdentity
 } from '@cvg/shared'
 import {
+  assertComposedKnowledgeResolver,
   createControlledCapabilityGateway,
   InMemoryControlPlaneStore,
   type AgentId,
@@ -156,7 +159,14 @@ import { registerObservabilityRoutes } from './routes/register-observability.ts'
 import { registerCatalogRoutes } from './routes/register-catalog.ts'
 import { registerReleaseCandidatesRoutes } from './routes/register-release-candidates.ts'
 import { registerAgentsRoutes } from './routes/register-agents.ts'
-import { registerTestLabRoutes } from './routes/register-test-lab.ts'
+import {
+  registerExecutionTraceRoutes,
+  registerTestLabRoutes
+} from './routes/register-test-lab.ts'
+import {
+  assertTestLabBootstrap,
+  createConfiguredTestLab
+} from './test-lab-composition.ts'
 import type { RouteContext } from './routes/context.ts'
 export type {
   RuntimeLogEntry,
@@ -172,6 +182,17 @@ export type {
 export type { OperatorIdentityResolver } from '@cvg/shared'
 
 export function buildServer(options: BuildServerOptions = {}) {
+  // SPEC 0317 G4: refuses forbidden capabilities in every composition path.
+  const realCapabilities = createRealCapabilityGuards({ env: process.env })
+  const testLab = assertTestLabBootstrap(process.env, options.testLab)
+  for (const resolver of [
+    options.resolveApprovedKnowledge,
+    options.agentRuntime?.resolveApprovedKnowledge
+  ]) {
+    if (resolver) {
+      assertComposedKnowledgeResolver(resolver, realCapabilities.rag)
+    }
+  }
   const identityMode =
     options.identityMode === undefined
       ? parseIdentityMode(process.env[IDENTITY_MODE_ENV], process.env.NODE_ENV)
@@ -318,6 +339,15 @@ export function buildServer(options: BuildServerOptions = {}) {
       process.env.NODE_ENV === 'development') &&
     options.requestMetricsEnabled !== false
   const telemetry = options.telemetry ?? new CompositeTelemetry()
+  for (const guard of describeRealCapabilityGuards(realCapabilities)) {
+    safeTelemetry(() =>
+      telemetry.log('info', 'real_capability.guard', {
+        capability: guard.capability,
+        state: guard.state,
+        reason: guard.reason ?? 'none'
+      })
+    )
+  }
   const requestStartedAt = new WeakMap<object, number>()
   const app = Object.assign(
     Fastify({
@@ -806,7 +836,8 @@ export function buildServer(options: BuildServerOptions = {}) {
   registerCatalogRoutes(routeContext)
   registerReleaseCandidatesRoutes(routeContext)
   registerAgentsRoutes(routeContext)
-  registerTestLabRoutes(routeContext)
+  registerExecutionTraceRoutes(routeContext)
+  if (testLab) registerTestLabRoutes(routeContext, testLab)
 
   if (options.sessionEventStreams) {
     installSessionEventStream({
@@ -890,7 +921,14 @@ export async function buildServerFromEnv(
       'NODE_ENV must be explicitly set to development, test or production'
     )
   }
-  const { webhookReplayStore, ...buildOptions } = options
+  const { webhookReplayStore, ...explicitBuildOptions } = options
+  // SPEC 0317: both refusals happen before any pool or listener exists.
+  createRealCapabilityGuards({ env })
+  const testLab = createConfiguredTestLab(env, explicitBuildOptions.testLab)
+  const buildOptions = {
+    ...explicitBuildOptions,
+    ...(testLab ? { testLab } : {})
+  }
   // SPEC0254 §4.1: validated without I/O, before any pool or listener.
   const operatorLoginConfig = parseOperatorLoginConfig(env)
   if (!operatorLoginConfig && buildOptions.operatorLogin) {

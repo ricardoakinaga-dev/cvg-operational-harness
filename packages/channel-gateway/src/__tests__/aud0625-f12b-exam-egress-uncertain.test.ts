@@ -9,6 +9,7 @@ import {
   createExamDownloadTool,
   createExamUploadTool
 } from '../index.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 // SPEC 0273 (AUD0625 F12b): exam-egress after the request left. The upload
 // 5xx cases were `it.fails` in phase 1 and are plain `it` since the BUILD;
@@ -54,6 +55,7 @@ async function runTwice(
   const journal = new InMemoryChannelEffectJournal()
   let attempts = 0
   const tool = factory({
+    realCapabilityGuard: realChannelGuard,
     effectJournal: journal,
     workspaceRoot: workspace(),
     urlGuard: { allowedHosts: ['exams.example.com'] },
