@@ -382,6 +382,7 @@ function runSelfTest() {
       'scripts/lib/e2e-report-binding.mjs',
       'scripts/lib/finding-governance.mjs',
       'scripts/lib/skip-governance.mjs',
+      'scripts/lib/test-log-summaries.mjs',
       'scripts/phase10-verify.mjs'
     ]) {
       const target = path.join(fixtureRoot, relative)
@@ -1564,7 +1565,8 @@ function runSelfTest() {
     verdict
   }
   fs.writeFileSync(
-    path.join(root, 'certification', 'negative-validation.json'),
+    process.env.CVG_NEGATIVE_VALIDATION_PATH ??
+      path.join(root, 'certification', 'negative-validation.json'),
     `${JSON.stringify(output, null, 2)}\n`
   )
   for (const check of checks) {
