@@ -948,6 +948,7 @@ describe('Test Lab dry-run', () => {
       versionId: version.id,
       input: { message: 'email ana@example.com', historySize: 0 },
       intent: { name: 'unknown', confidence: 0.1 },
+      risk: { level: 'low' as const, reason: 'controlled_low_risk_request' },
       policy: [],
       knowledge: { status: 'not_requested' as const },
       tools: [],

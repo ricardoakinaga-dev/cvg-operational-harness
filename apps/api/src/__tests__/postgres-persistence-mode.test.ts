@@ -93,6 +93,7 @@ function atomicTrace(
     versionId,
     input: { message: 'Mensagem de teste atomico', historySize: 0 },
     intent: { name: 'respond', confidence: 1 },
+    risk: { level: 'low', reason: 'controlled_low_risk_request' },
     policy: [],
     knowledge: { status: 'not_requested' },
     tools: [],

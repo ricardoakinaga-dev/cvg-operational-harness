@@ -154,20 +154,29 @@ function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
     .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
 }
 
 /**
  * SPEC0259 §4.10 — the browser login page of the synthetic IdP: a labeled
- * form that posts to the same authorization URL, without any script.
+ * form that posts to the same authorization URL, without any script. The URL
+ * is rebuilt from percent-encoded pairs, so the request text never reaches
+ * the page as it was received.
  */
 function loginPage(
   target: URL,
   status: number,
   error?: string
 ): SyntheticResponse {
-  const action = escapeHtml(`${target.pathname}${target.search}`)
+  const query = [...target.searchParams]
+    .map(
+      ([name, value]) =>
+        `${encodeURIComponent(name)}=${encodeURIComponent(value)}`
+    )
+    .join('&')
+  const action = escapeHtml(`/authorize?${query}`)
   const body = [
     '<!doctype html>',
     '<html lang="pt-BR">',

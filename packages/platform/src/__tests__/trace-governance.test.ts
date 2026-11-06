@@ -20,6 +20,7 @@ function trace(): TestRunTrace {
     versionId,
     input: { message: 'Email trace@example.com', historySize: 1 },
     intent: { name: 'unknown', confidence: 0.2 },
+    risk: { level: 'low', reason: 'controlled_low_risk_request' },
     policy: [],
     knowledge: { status: 'not_requested' },
     tools: [],
