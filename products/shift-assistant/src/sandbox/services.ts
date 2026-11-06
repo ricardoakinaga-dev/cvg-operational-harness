@@ -255,6 +255,13 @@ function freeEvolution(note: string): string {
     .replace(/^[,.\s]+|[,.\s]+$/g, '')
 }
 
+function withoutLeadingName(text: string, name: string | undefined): string {
+  if (!name || !text.startsWith(name)) return text
+  const rest = text.slice(name.length)
+  const trimmed = rest.trimStart()
+  return trimmed.length < rest.length ? trimmed : text
+}
+
 export function sandboxOrganize(message: string) {
   const note = message.split('Anotação:\n').at(-1) ?? message
   const now =
@@ -280,9 +287,10 @@ export function sandboxOrganize(message: string) {
   )
   const promise =
     /vou ([^.\n]+?) (?:às|as) (\d{1,2})(?:h(\d{2})?|:(\d{2}))/i.exec(note)
-  const evolution = (
-    field(note, /evolu[cç][aã]o:?\s*([^.\n]+)/i) ?? freeEvolution(note)
-  ).replace(patientName ? new RegExp(`^${patientName}\\s+`) : /^$/, '')
+  const evolution = withoutLeadingName(
+    field(note, /evolu[cç][aã]o:?\s*([^.\n]+)/i) ?? freeEvolution(note),
+    patientName
+  )
   const hour = promise?.[2]?.padStart(2, '0')
   const minutes = promise?.[3] ?? promise?.[4] ?? '00'
   return {

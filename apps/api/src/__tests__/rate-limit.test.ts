@@ -134,4 +134,28 @@ describe('in-memory API rate limiter', () => {
       error: { code: 'rate_limited' }
     })
   })
+
+  // CodeQL #27 and #40 only recognize limiter middleware, not this hook. The
+  // limit is real and runs before the handler; these requests prove it.
+  it.each([
+    ['GET', '/v1/sessions/session-a/events/stream'],
+    ['POST', '/v1/journeys/tasks']
+  ] as const)('limits %s %s before its handler runs', async (method, url) => {
+    const keys: string[] = []
+    const app = buildServer({
+      rateLimiter: {
+        check: (key) => {
+          keys.push(key)
+          return { allowed: false, retryAfterSeconds: 7 }
+        }
+      },
+      sessionEventStreams: { events: {} as never }
+    })
+    const response = await app.inject({ method, url })
+    await app.close()
+
+    expect(response.statusCode).toBe(429)
+    expect(response.headers['retry-after']).toBe('7')
+    expect(keys).toEqual([expect.stringMatching(/^ip:/)])
+  })
 })

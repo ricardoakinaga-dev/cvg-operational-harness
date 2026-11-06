@@ -596,9 +596,10 @@ test('ID-05: actual publication filesystem failure leaves no success receipt', a
 test('ID-05/09: timeout kills observed detached owned descendant while leaving unrelated process alive', async () => {
   const f = fixture()
   const pidPath = path.join(f.base, 'detached.pid')
-  const code = `const {spawn}=require('node:child_process');const c=spawn(${JSON.stringify(NODE)},['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidPath)},String(c.pid));c.unref();setInterval(()=>{},1000);`
+  // The pid path travels as an argument, so the payload source stays a constant.
+  const code = `const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'});require('node:fs').writeFileSync(process.argv[1],String(c.pid));c.unref();setInterval(()=>{},1000);`
   await expect(
-    runOwnedProcess(NODE, ['-e', code], {
+    runOwnedProcess(NODE, ['-e', code, pidPath], {
       cwd: f.base,
       env: referenceEnvironment(NODE),
       timeoutMs: 500,

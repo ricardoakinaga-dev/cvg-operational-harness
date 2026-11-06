@@ -467,13 +467,18 @@ describe('PAR-X01 slice 2: process service engine', () => {
 
     it('gives the payload its grace period to stop by itself, then forces it', async () => {
       const file = join(workspace, `graceful-${randomBytes(4).toString('hex')}`)
-      const handler = `process.on('SIGTERM',()=>{require('node:fs').writeFileSync(${JSON.stringify(file)},'bye');process.exit(0)});setInterval(()=>{},1000)`
+      // The path travels as an argument, so the payload source stays a constant.
+      const handler = `process.on('SIGTERM',()=>{require('node:fs').writeFileSync(process.argv[1],'bye');process.exit(0)});setInterval(()=>{},1000)`
       const controller = new AbortController()
       const graceful = await service.launch(
-        request(handler, {
-          signal: controller.signal,
-          limits: limits({ graceMs: 3000 })
-        })
+        request(
+          handler,
+          {
+            signal: controller.signal,
+            limits: limits({ graceMs: 3000 })
+          },
+          [file]
+        )
       )
       await new Promise((r) => setTimeout(r, 600))
       controller.abort()
@@ -485,10 +490,14 @@ describe('PAR-X01 slice 2: process service engine', () => {
       rmSync(file, { force: true })
       const hard = new AbortController()
       const abrupt = await service.launch(
-        request(handler, {
-          signal: hard.signal,
-          limits: limits({ graceMs: 0 })
-        })
+        request(
+          handler,
+          {
+            signal: hard.signal,
+            limits: limits({ graceMs: 0 })
+          },
+          [file]
+        )
       )
       await new Promise((r) => setTimeout(r, 600))
       hard.abort()
@@ -546,11 +555,15 @@ describe('PAR-X01 slice 2: process service engine', () => {
 
     it('keeps the first cause and a single cleanup when expiry lands during a graceful stop', async () => {
       const file = join(workspace, `sigterms-${randomBytes(4).toString('hex')}`)
-      const handler = `process.on('SIGTERM',()=>{require('node:fs').appendFileSync(${JSON.stringify(file)},'x');setTimeout(()=>process.exit(0),900)});setInterval(()=>{},1000)`
+      const handler = `process.on('SIGTERM',()=>{require('node:fs').appendFileSync(process.argv[1],'x');setTimeout(()=>process.exit(0),900)});setInterval(()=>{},1000)`
       const launched = await service.launch(
-        request(handler, {
-          limits: limits({ lifetimeMs: 1500, graceMs: 2500, cleanupMs: 5000 })
-        })
+        request(
+          handler,
+          {
+            limits: limits({ lifetimeMs: 1500, graceMs: 2500, cleanupMs: 5000 })
+          },
+          [file]
+        )
       )
       await new Promise((r) => setTimeout(r, 700))
       const outcome = await launched.stop()
