@@ -35,6 +35,7 @@ import {
   computeReleaseCandidateEvidenceDigest,
   parseReleaseCandidateGateResults,
   sanitizeTestSuiteRunTraces,
+  sanitizePersistedTrace,
   sanitizeTraceForPersistence,
   type AgentConfig,
   type AgentCreateInput,
@@ -1830,16 +1831,19 @@ function mapTestSuiteRun(
   row: TestSuiteRunRow,
   expectedTenantId: string
 ): TestSuiteRunRecord {
-  const normalized = sanitizeTestSuiteRunTraces({
-    tenantId: TenantIdSchema.parse(row.tenant_id),
-    id: TestSuiteRunIdSchema.parse(row.id),
-    suiteId: TestSuiteIdSchema.parse(row.suite_id),
-    agentId: AgentIdSchema.parse(row.agent_id),
-    variants: row.result?.variants,
-    passed: row.result?.passed,
-    createdBy: row.created_by,
-    createdAt: new Date(row.created_at)
-  })
+  const normalized = sanitizeTestSuiteRunTraces(
+    {
+      tenantId: TenantIdSchema.parse(row.tenant_id),
+      id: TestSuiteRunIdSchema.parse(row.id),
+      suiteId: TestSuiteIdSchema.parse(row.suite_id),
+      agentId: AgentIdSchema.parse(row.agent_id),
+      variants: row.result?.variants,
+      passed: row.result?.passed,
+      createdBy: row.created_by,
+      createdAt: new Date(row.created_at)
+    },
+    sanitizePersistedTrace
+  )
   const checked = {
     ...normalized,
     variants: normalized.variants.map((variant) => ({
@@ -1894,7 +1898,7 @@ function assertReadTraceTenant(
     createdAt?: unknown
   }
 ): TestRunTrace {
-  const trace = sanitizeTraceForPersistence(rawTrace)
+  const trace = sanitizePersistedTrace(rawTrace)
   if (
     trace.tenantId !== expectedTenantId ||
     (rowReferences?.tenantId !== undefined &&

@@ -247,6 +247,23 @@ const TraceSchema = z
   .strip()
 
 export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
+  return canonicalizeTrace(trace, 'write')
+}
+
+/**
+ * The same checks for a trace that is already stored. An output policy that
+ * got stricter after the write cannot make history unreadable, and it cannot
+ * show the text either: the row comes back with the controlled template. Any
+ * structural defect still throws, because that is not a policy change.
+ */
+export function sanitizePersistedTrace(trace: unknown): TestRunTrace {
+  return canonicalizeTrace(trace, 'read')
+}
+
+function canonicalizeTrace(
+  trace: unknown,
+  access: 'write' | 'read'
+): TestRunTrace {
   const parsed = TraceSchema.safeParse(trace)
   if (!parsed.success) throw invalidTrace()
 
@@ -296,15 +313,35 @@ export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
       canonical.input.message
     )
   })
-  if (output.decision === 'rewritten') throw invalidTrace()
+  if (output.decision === 'rewritten' && access === 'write') {
+    throw invalidTrace()
+  }
 
   const inputMessage = redactSensitiveText(canonical.input.message)
   if (inputMessage.length > TRACE_TEXT_MAX_CHARS) throw invalidTrace()
+
+  if (output.decision === 'rewritten') {
+    return {
+      ...canonical,
+      input: {
+        message: inputMessage,
+        historySize: canonical.input.historySize
+      },
+      response: { text: output.text, mode: output.mode },
+      outputPolicy: {
+        decision: output.decision,
+        reason: output.reason,
+        mode: output.mode,
+        redacted: output.redacted
+      }
+    } as TestRunTrace
+  }
 
   const outputPolicy = canonical.outputPolicy
     ? normalizeOutputPolicy(canonical.outputPolicy, output, canonical.response)
     : undefined
   if (
+    access === 'write' &&
     outputPolicy?.decision === 'rewritten' &&
     outputPolicy.mode === 'handoff' &&
     !canonical.handoff.requested
@@ -324,7 +361,8 @@ export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
 }
 
 export function sanitizeTestSuiteRunTraces(
-  rawRun: unknown
+  rawRun: unknown,
+  sanitizeTrace: (trace: unknown) => TestRunTrace = sanitizeTraceForPersistence
 ): TestSuiteRunRecord {
   if (
     !isRecord(rawRun) ||
@@ -371,7 +409,7 @@ export function sanitizeTestSuiteRunTraces(
         caseId: rawResult.caseId.trim(),
         passed: rawResult.passed,
         failures: rawResult.failures.map((failure) => failure.trim()),
-        trace: sanitizeTraceForPersistence(rawResult.trace)
+        trace: sanitizeTrace(rawResult.trace)
       }
     })
     return {

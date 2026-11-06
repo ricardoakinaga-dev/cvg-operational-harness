@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createTraceId,
+  sanitizePersistedTrace,
   sanitizeTestSuiteRunTraces,
   sanitizeTraceForPersistence,
   type TestRunTrace
@@ -251,5 +252,94 @@ describe('controlled trace provenance boundary', () => {
     expect(latencyMs).toBe(1000)
     expect(tokenUsage).toBeDefined()
     expect(spans).toHaveLength(1)
+  })
+
+  describe('traces stored before a stricter output policy', () => {
+    const unsafe = 'tome 2 comprimidos de amoxicilina a cada 8 horas'
+    const stored = (changes: Record<string, unknown>) =>
+      ({ ...trace(), ...changes }) as unknown as TestRunTrace
+
+    it('refuses the text on write but reads it back as the template', () => {
+      const legacy = stored({ response: { text: unsafe, mode: 'answer' } })
+
+      expect(() => sanitizeTraceForPersistence(legacy)).toThrowError(
+        expect.objectContaining({ code: 'validation_failed' })
+      )
+      const read = sanitizePersistedTrace(legacy)
+      expect(JSON.stringify(read)).not.toContain('amoxicilina')
+      expect(read.outputPolicy).toMatchObject({
+        decision: 'rewritten',
+        reason: 'unsafe_output_rejected'
+      })
+      expect(read.traceId).toBe(legacy.traceId)
+    })
+
+    it('reads a trace without a risk label, failing closed on its text', () => {
+      const { risk, ...legacy } = trace()
+
+      expect(risk).toBeDefined()
+      expect(() =>
+        sanitizeTraceForPersistence(legacy as unknown as TestRunTrace)
+      ).toThrowError(expect.objectContaining({ code: 'validation_failed' }))
+      expect(
+        sanitizePersistedTrace(legacy as unknown as TestRunTrace).response.text
+      ).not.toBe(legacy.response.text)
+    })
+
+    it('stays stable when a read trace is read again', () => {
+      const once = sanitizePersistedTrace(
+        stored({ response: { text: unsafe, mode: 'answer' } })
+      )
+
+      expect(sanitizePersistedTrace(once).response).toEqual(once.response)
+    })
+
+    it('still throws on a structural defect', () => {
+      expect(() =>
+        sanitizePersistedTrace(stored({ tenantId: '' }))
+      ).toThrowError(expect.objectContaining({ code: 'validation_failed' }))
+      expect(() =>
+        sanitizePersistedTrace(
+          stored({
+            handoff: { requested: true, reason: null, state: 'BOT_ACTIVE' }
+          })
+        )
+      ).toThrowError(expect.objectContaining({ code: 'validation_failed' }))
+    })
+
+    it('reads a stored suite run through the same rule', () => {
+      const createdAt = new Date('2026-08-26T09:00:02.000Z')
+      const run = {
+        tenantId,
+        id: 'run',
+        suiteId: 'suite',
+        agentId,
+        passed: true,
+        createdBy: 'admin',
+        createdAt,
+        variants: [
+          {
+            label: 'A',
+            versionId,
+            passed: true,
+            results: [
+              {
+                caseId: 'case',
+                passed: true,
+                failures: [],
+                trace: stored({ response: { text: unsafe, mode: 'answer' } })
+              }
+            ]
+          }
+        ]
+      }
+
+      expect(() => sanitizeTestSuiteRunTraces(run)).toThrowError(
+        expect.objectContaining({ code: 'validation_failed' })
+      )
+      expect(
+        JSON.stringify(sanitizeTestSuiteRunTraces(run, sanitizePersistedTrace))
+      ).not.toContain('amoxicilina')
+    })
   })
 })
