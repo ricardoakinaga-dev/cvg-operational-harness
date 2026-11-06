@@ -5,6 +5,7 @@ import {
   DeterministicModelProvider,
   InMemoryControlPlaneStore,
   assessConversationSafety,
+  createSyntheticKnowledgeResolver,
   enforceControlledOutput,
   executeConfiguredAgent,
   resolveEffectiveRisk,
@@ -427,11 +428,11 @@ describe('G2 corpus through the controlled execution', () => {
   }
 
   const answer = (text: string) => ({
-    approvedKnowledge: {
+    resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
       source: 'controlled://g2-fixture',
       version: 'v1',
       answer: text
-    }
+    })
   })
 
   async function expectControlled(

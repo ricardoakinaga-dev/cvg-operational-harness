@@ -1,6 +1,7 @@
 import { AgentConfigSchema, CONTROLLED_SAFE_OUTPUTS } from '@cvg/platform'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildServer } from '../server.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 
 // SPEC 0317 G2 over HTTP: synthetic fixtures only.
 const tenantId = 'tenant_00000000-0000-4000-8000-000000000318'
@@ -60,7 +61,7 @@ describe('output boundary over HTTP', () => {
   })
 
   async function publishFixture(template: string, slug: string) {
-    app = buildServer()
+    app = buildServer({ testLab: createSyntheticTestLabComposition() })
     const agent = await app.inject({
       method: 'POST',
       url: '/v1/admin/agents',

@@ -62,7 +62,7 @@ describe.skipIf(!TEST_DATABASE_URL)('chaos: PostgreSQL resilience', () => {
       // only then is the first query required to succeed, without any retry.
       await vi.waitFor(() => expect(pool.totalCount).toBe(0), {
         timeout: 5_000,
-        interval: 10,
+        interval: 10
       })
       const recovered = await pool.query<{ answer: number }>(
         'SELECT 42 AS answer'
