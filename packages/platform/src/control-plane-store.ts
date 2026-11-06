@@ -1377,15 +1377,7 @@ function sanitizeTestCase(rawCase: TestLabCase): TestLabCase {
   return {
     ...testCase,
     message: redactSensitiveText(testCase.message),
-    history: testCase.history.map((item) => redactSensitiveText(item)),
-    ...(testCase.approvedKnowledge
-      ? {
-          approvedKnowledge: {
-            ...testCase.approvedKnowledge,
-            answer: redactSensitiveText(testCase.approvedKnowledge.answer)
-          }
-        }
-      : {})
+    history: testCase.history.map((item) => redactSensitiveText(item))
   }
 }
 

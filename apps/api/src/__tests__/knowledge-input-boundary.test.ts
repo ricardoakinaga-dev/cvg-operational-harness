@@ -3,10 +3,11 @@ import {
   AgentConfigSchema,
   createControlledAgentConfig,
   InMemoryControlPlaneStore,
-  type ApprovedKnowledgeResolver
+  composeSyntheticKnowledgeResolver
 } from '@cvg/platform'
 import { VersionedKnowledgeCatalog } from '@cvg/rag'
 import { buildServer } from '../server.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 
 const tenantId = 'tenant_00000000-0000-4000-8000-000000000142'
 
@@ -17,7 +18,7 @@ const adminHeaders = {
 }
 
 describe('API controlled knowledge input boundary', () => {
-  it('rejects a source identifier above the shared bounded limit', async () => {
+  it('refuses client knowledge in the test contract, whatever its shape', async () => {
     const platform = new InMemoryControlPlaneStore()
     const agent = await platform.createAgent(
       { tenantId },
@@ -33,7 +34,10 @@ describe('API controlled knowledge input boundary', () => {
       createControlledAgentConfig(),
       'test.knowledge-api-boundary'
     )
-    const app = buildServer({ platform })
+    const app = buildServer({
+      platform,
+      testLab: createSyntheticTestLabComposition()
+    })
 
     const response = await app.inject({
       method: 'POST',
@@ -92,25 +96,17 @@ describe('API controlled knowledge input boundary', () => {
       version: 'fixture-v1',
       question: 'horário de funcionamento',
       answer: 'Atendimento fictício das 9h às 17h.',
-      source: 'fixture-manual'
+      source: 'controlled://institutional-hours'
     })
     await catalog.publish(tenantId, source.id)
-    const resolveApprovedKnowledge: ApprovedKnowledgeResolver = ({
-      tenantId: scope,
-      question
-    }) => {
-      const answer = catalog.answer(scope, question)
-      return answer.status === 'answered' && answer.version && answer.answer
-        ? {
-            source: 'controlled://institutional-hours',
-            version: answer.version,
-            answer: answer.answer
-          }
-        : undefined
-    }
+    const resolveApprovedKnowledge = composeSyntheticKnowledgeResolver(
+      ({ tenantId: scope, question }) =>
+        catalog.resolveApproved(scope, question)
+    )
     const app = buildServer({
       platform,
-      resolveApprovedKnowledge
+      resolveApprovedKnowledge,
+      testLab: createSyntheticTestLabComposition()
     })
 
     const request = {

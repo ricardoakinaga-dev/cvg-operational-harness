@@ -213,10 +213,6 @@ export async function executeInboundRuntime(input: {
     },
     ...(input.options.resolveApprovedKnowledge
       ? { resolveApprovedKnowledge: input.options.resolveApprovedKnowledge }
-      : {}),
-    ...(input.options.approvedKnowledge &&
-    !input.options.resolveApprovedKnowledge
-      ? { approvedKnowledge: input.options.approvedKnowledge }
       : {})
   })
   if (result.status === 'completed') {

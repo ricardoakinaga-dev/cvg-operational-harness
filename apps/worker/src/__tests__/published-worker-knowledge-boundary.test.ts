@@ -1,4 +1,5 @@
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
   createControlledAgentConfig,
   createValidatedControlledReleaseCandidate,
@@ -70,7 +71,7 @@ async function publishKnowledgeVersion(store: InMemoryControlPlaneStore) {
 }
 
 describe('published worker knowledge input boundary', () => {
-  it('forwards valid controlled knowledge to the pinned runtime', async () => {
+  it('answers from the composed resolver on the pinned runtime', async () => {
     const platform = new InMemoryControlPlaneStore()
     const target = await publishKnowledgeVersion(platform)
 
@@ -81,11 +82,13 @@ describe('published worker knowledge input boundary', () => {
         versionId: target.versionId,
         message: 'Qual o horário de funcionamento?',
         history: [],
-        approvedKnowledge: knowledge,
         conversationId: 'conversation_worker_knowledge',
         sessionId: 'session_worker_knowledge'
       },
-      { platform }
+      {
+        platform,
+        resolveApprovedKnowledge: createSyntheticKnowledgeResolver(knowledge)
+      }
     )
 
     expect(result).toMatchObject({
@@ -118,10 +121,12 @@ describe('published worker knowledge input boundary', () => {
         message: 'Qual o horário de funcionamento?',
         history,
         conversationId: 'conversation_worker_knowledge',
-        sessionId: 'session_worker_knowledge',
-        approvedKnowledge: knowledge
+        sessionId: 'session_worker_knowledge'
       },
-      { platform }
+      {
+        platform,
+        resolveApprovedKnowledge: createSyntheticKnowledgeResolver(knowledge)
+      }
     )
 
     expect(result.status).toBe('completed')
@@ -144,6 +149,29 @@ describe('published worker knowledge input boundary', () => {
           versionId: 'agent_version_00000000-0000-4000-8000-000000000138',
           message: 'Mensagem controlada',
           history: Array.from({ length: 51 }, () => 'item')
+        },
+        { platform }
+      )
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      message: 'Worker runtime job is invalid'
+    })
+    expect(getVersion).not.toHaveBeenCalled()
+  })
+
+  it('refuses knowledge carried by the job, however well formed', async () => {
+    const getVersion = vi.fn()
+    const platform = { getVersion } as never
+
+    await expect(
+      processAgentTurnJob(
+        {
+          tenantId,
+          agentId: 'agent_00000000-0000-4000-8000-000000000138',
+          versionId: 'agent_version_00000000-0000-4000-8000-000000000138',
+          message: 'Qual o horário de funcionamento?',
+          history: [],
+          approvedKnowledge: knowledge
         },
         { platform }
       )

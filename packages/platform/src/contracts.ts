@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { KnowledgeBlockReason } from './knowledge-authority.ts'
 import type {
   ControlledOutputDecision,
   ControlledOutputMode,
@@ -179,22 +180,6 @@ export const KnowledgeBindingSchema = z
   })
   .strict()
 export type KnowledgeBinding = z.infer<typeof KnowledgeBindingSchema>
-
-export const ApprovedKnowledgeForTestSchema = z
-  .object({
-    version: z.string().trim().min(1).max(120),
-    answer: z.string().trim().min(1).max(4000),
-    source: z
-      .string()
-      .trim()
-      .min(1)
-      .max(200)
-      .regex(/^controlled:\/\//)
-  })
-  .strict()
-export type ApprovedKnowledgeForTest = z.infer<
-  typeof ApprovedKnowledgeForTestSchema
->
 
 export const HandoffPrioritySchema = z.enum(['low', 'medium', 'high'])
 export type HandoffPriority = z.infer<typeof HandoffPrioritySchema>
@@ -729,6 +714,9 @@ export interface TestRunTrace {
     status: 'not_requested' | 'approved_source_missing' | 'answered' | 'handoff'
     source?: string
     version?: string
+    /** Safe code explaining why no institutional answer was given. */
+    reason?: KnowledgeBlockReason
+    provenance?: { recordId: string; excerptSha256: string }
   }
   tools: Array<{
     name: string
@@ -793,8 +781,7 @@ export const TestLabCaseSchema = z
     history: z.array(z.string().max(4000)).max(50).default([]),
     expectedPolicyDecision: PlatformDecisionSchema.optional(),
     expectedResponseMode: z.enum(['answer', 'clarify', 'handoff', 'blocked']),
-    expectedHandoff: z.boolean().optional(),
-    approvedKnowledge: ApprovedKnowledgeForTestSchema.optional()
+    expectedHandoff: z.boolean().optional()
   })
   .strict()
 export type TestLabCase = z.infer<typeof TestLabCaseSchema>

@@ -72,10 +72,22 @@ function stop(child) {
   })
 }
 
-async function main() {
-  assertRuntimeShape()
-  const port = await getFreePort()
-  const child = spawn(process.execPath, ['apps/api/dist/main.js'], {
+// SPEC 0317: the image must refuse each of these before serving anything.
+const REFUSED_BOOTS = [
+  { ENABLE_REAL_PAYMENTS: 'true' },
+  { ENABLE_REAL_MEDICAL_RECORDS: 'true' },
+  { ENABLE_REAL_CHANNELS: 'invalid' },
+  { CVG_TEST_LAB_PROFILE: 'synthetic' }
+]
+
+const TEST_LAB_ROUTES = [
+  '/v1/admin/test-lab/runs',
+  '/v1/admin/test-lab/suites',
+  '/v1/admin/test-lab/evaluate'
+]
+
+function startApi(port, overrides = {}) {
+  return spawn(process.execPath, ['apps/api/dist/main.js'], {
     cwd: root,
     env: {
       ...process.env,
@@ -89,10 +101,39 @@ async function main() {
       ENABLE_REAL_RAG: 'false',
       ENABLE_REAL_PAYMENTS: 'false',
       ENABLE_REAL_MEDICAL_RECORDS: 'false',
-      PORT: String(port)
+      PORT: String(port),
+      ...overrides
     },
     stdio: ['ignore', 'pipe', 'pipe']
   })
+}
+
+async function assertBootRefused(overrides) {
+  const port = await getFreePort()
+  const child = startApi(port, overrides)
+  const label = Object.keys(overrides).join(',')
+  const deadline = Date.now() + 8000
+  let live = null
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) break
+    live = await statusFor(port, '/live')
+    if (live === 200) break
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const exitCode = child.exitCode
+  await stop(child)
+  if (live === 200 || exitCode === null || exitCode === 0) {
+    throw new Error(
+      `runtime_smoke_boot_not_refused:${label}:live=${String(live)}:exit=${String(exitCode)}`
+    )
+  }
+}
+
+async function main() {
+  assertRuntimeShape()
+  for (const overrides of REFUSED_BOOTS) await assertBootRefused(overrides)
+  const port = await getFreePort()
+  const child = startApi(port)
   let output = ''
   child.stdout.on('data', (chunk) => {
     output += chunk.toString()
@@ -111,14 +152,30 @@ async function main() {
     if (live === 200 && ready === 200) break
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
+  const testLab = []
+  if (live === 200 && ready === 200) {
+    for (const route of TEST_LAB_ROUTES) {
+      testLab.push(await statusFor(port, route))
+    }
+  }
   await stop(child)
   if (live !== 200 || ready !== 200) {
     throw new Error(
       `runtime_smoke_failed:live=${String(live)}:ready=${String(ready)}:output=${output.slice(-4000)}`
     )
   }
+  if (testLab.some((status) => status !== 404)) {
+    throw new Error(`runtime_smoke_test_lab_present:${testLab.join(',')}`)
+  }
   process.stdout.write(
-    `${JSON.stringify({ status: 'PASS', live, ready, sourceIncluded: false })}\n`
+    `${JSON.stringify({
+      status: 'PASS',
+      live,
+      ready,
+      sourceIncluded: false,
+      testLabAbsent: true,
+      refusedBoots: REFUSED_BOOTS.length
+    })}\n`
   )
 }
 

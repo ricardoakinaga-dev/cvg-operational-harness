@@ -451,6 +451,18 @@ Context, response provenance, per-attempt budget accounting, approved prompt bin
 
 [The documentation index](../README.md), [ADR-010](adrs/ADR-010-harness-product-isolation.md), [operational glossary](GLOSSARY.md), [isolation backlog](../03_build/0370_harness_product_isolation_backlog.md) and [production plan](../03_build/0374_plano_producao_harness.md) provide current mission and ownership. The [September architecture snapshot](CURRENT_IMPLEMENTATION_2026-09-29.md), [UP91 roadmap](../03_build/0363_program_roadmap_2026-09-30.md) and [UP91 execution report](../04_audit/evidence/UP91-EXEC-20260930/round3-report.md) remain historical references, not instructions to reactivate that program. The original Phase 0/1 document is preserved byte-for-byte as a [historical source](../04_audit/evidence/UP91-EXEC-20260930/public-api-doc/PUBLIC_API.before.md.txt). This reference grants no real clinical, financial, scheduling or record action, external effects, release or production approval.
 
+## SPEC 0317 G3/G4 — conhecimento e flags com autoridade do servidor
+
+Mudança de contrato público:
+
+- As rotas `/v1/admin/test-lab/*` só existem com `testLab` composto por `createSyntheticTestLabComposition()` (`NODE_ENV=test`) ou, em hosts por ambiente, com `CVG_TEST_LAB_PROFILE=synthetic` em `NODE_ENV=test`, persistência em memória e flags reais desligadas. Fora disso respondem 404; pedir o perfil fora de teste impede o boot. `GET /v1/admin/execution-traces` é leitura de auditoria e continua registrada.
+- `approvedKnowledge` saiu dos corpos do laboratório, de `/v1/admin/capability-approvals/:id/execute`, dos casos de suíte (`TestLabCaseSchema`) e do job publicado do worker (`PublishedAgentJobSchema`): os schemas estritos respondem 400. Também saiu de `AgentRuntimeOptions`, `TestLabInput` e da entrada de `executePublishedAgent`.
+- `ApprovedKnowledgeResolver` agora recebe `agentId`, `versionId`, `bindings` e `signal` e devolve `ApprovedKnowledgeResolution` (tenant, fonte, versão, resposta e proveniência com `excerptSha256`). Só vale composto por `composeRealKnowledgeResolver` (guarda aberta) ou `composeSyntheticKnowledgeResolver` (`NODE_ENV=test`). Resolvedor cru impede o boot na API e é recusado sem ser chamado no worker. Sem resolvedor, falha, timeout de 2 s, resposta inválida, outro tenant, fonte não vigente ou hash divergente levam a handoff; `trace.knowledge.reason` traz o código seguro.
+- `ChannelGateway` exige `composition` (`synthetic` ou `real` com guarda e `authorizeDispatch`) assim que recebe um adapter. `EvolutionChannelAdapter` e `ChatwootChannelAdapter` habilitados e `createExam*Tool` exigem `realCapabilityGuard`.
+- `realWorldActionsDisabled` foi removido. `createRealCapabilityGuards` emite guardas por capacidade: `ENABLE_REAL_CHANNELS`/`ENABLE_REAL_RAG` true sem decisão T4 fornecida pela composição continuam bloqueados, e guarda aberta não substitui fonte, policy, grant, approval nem journal. `ENABLE_REAL_PAYMENTS` e `ENABLE_REAL_MEDICAL_RECORDS` true impedem o boot da API e do worker; essas categorias são recusadas também no registro e no despacho de capabilities por rótulo declarado, defesa léxica complementar.
+
+Nenhum host do harness compõe hoje adapter real de canal ou RAG; estas guardas não concedem capacidade, T4, release ou produção.
+
 ## SPEC0211/0212 — comportamento em implementação
 
 BUILD autorizado pelo usuário em 14/10/2026; candidata e gate independente ainda em verificação, sem concessão de paridade ou release. A tabela registra os novos exports experimentais que os testes de superfície devem validar.

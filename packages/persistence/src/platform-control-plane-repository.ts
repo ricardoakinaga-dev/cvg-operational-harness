@@ -1815,7 +1815,9 @@ function mapTestSuite(row: TestSuiteRow): TestSuiteRecord {
     versionId: row.version_id as TestSuiteRecord['versionId'],
     version: row.version,
     cases: Array.isArray(row.cases)
-      ? row.cases.map((testCase) => sanitizeTestCase(testCase as TestLabCase))
+      ? row.cases.map((testCase) =>
+          sanitizeTestCase(withoutLegacyKnowledge(testCase))
+        )
       : [],
     previousSuiteId: row.previous_suite_id
       ? TestSuiteIdSchema.parse(row.previous_suite_id)
@@ -2058,16 +2060,20 @@ function sanitizeTestCase(rawCase: TestLabCase): TestLabCase {
   return {
     ...testCase,
     message: redactSensitiveText(testCase.message),
-    history: testCase.history.map((item) => redactSensitiveText(item)),
-    ...(testCase.approvedKnowledge
-      ? {
-          approvedKnowledge: {
-            ...testCase.approvedKnowledge,
-            answer: redactSensitiveText(testCase.approvedKnowledge.answer)
-          }
-        }
-      : {})
+    history: testCase.history.map((item) => redactSensitiveText(item))
   }
+}
+
+/**
+ * SPEC 0317 G3: suites stored before the fixture left the contract may still
+ * carry client-chosen knowledge. It is dropped on read and never reaches a run.
+ */
+function withoutLegacyKnowledge(rawCase: unknown): TestLabCase {
+  const testCase = {
+    ...(rawCase as TestLabCase & { approvedKnowledge?: unknown })
+  }
+  delete testCase.approvedKnowledge
+  return testCase
 }
 
 function cloneTestSuiteRun(run: TestSuiteRunRecord): TestSuiteRunRecord {

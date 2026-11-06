@@ -13,7 +13,6 @@
 import {
   createControlledCapabilityGateway,
   executeConfiguredAgent,
-  type ApprovedKnowledgeForTest,
   type AgentExecutionActor,
   type ControlPlaneStore,
   type PluginAuditEvent,
@@ -36,7 +35,6 @@ export interface PublishedAgentExecutionInput {
   message: string
   history: string[]
   context?: { conversationId?: string; sessionId?: string }
-  approvedKnowledge?: ApprovedKnowledgeForTest
   resolveApprovedKnowledge?: ApprovedKnowledgeResolver
   capabilityGateway?: CapabilityGateway
   actor?: AgentExecutionActor
@@ -124,9 +122,6 @@ export async function executePublishedAgent(
     ...(input.onToolAudit ? { onToolAudit: input.onToolAudit } : {}),
     ...(input.eventBus ? { eventBus: input.eventBus } : {}),
     ...(input.context ? { context: input.context } : {}),
-    ...(input.approvedKnowledge
-      ? { approvedKnowledge: input.approvedKnowledge }
-      : {}),
     ...(input.resolveApprovedKnowledge
       ? { resolveApprovedKnowledge: input.resolveApprovedKnowledge }
       : {})

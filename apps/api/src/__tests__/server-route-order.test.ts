@@ -16,6 +16,7 @@ import { buildServer } from '../server.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 import { SYNTHETIC_AUTHORITY_VERSION } from './case-authorization-fixtures.ts'
 import type { RegisteredRoute } from '../operator-route-class.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 
 const fixturePath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -32,7 +33,9 @@ function lines(app: unknown): string[] {
 }
 
 async function capture() {
-  const simulation = buildServer()
+  const simulation = buildServer({
+    testLab: createSyntheticTestLabComposition()
+  })
   await simulation.ready()
   const trusted = buildServer({
     identityMode: 'trusted',
@@ -41,7 +44,8 @@ async function capture() {
       now: () => 1_800_000_000_000
     }),
     operatorSessionStore: createInMemoryOperatorSessionStore(),
-    casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION }
+    casePrincipalAuthority: { authorityVersion: SYNTHETIC_AUTHORITY_VERSION },
+    testLab: createSyntheticTestLabComposition()
   } as never)
   await trusted.ready()
   const result = { simulation: lines(simulation), trusted: lines(trusted) }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
   CONTROLLED_OUTPUT_MAX_CHARS,
   CONTROLLED_SAFE_OUTPUTS,
@@ -322,11 +323,11 @@ describe('runtime output boundary integration', () => {
       },
       requireCapabilityApproval: true,
       resolveCapabilityApproval,
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         source: 'controlled://output-fixture',
         version: 'v1',
         answer: 'Diagnóstico: gastrite. Dê dipirona 10 mg.'
-      }
+      })
     })
 
     expect(trace.response).toMatchObject({
@@ -389,11 +390,11 @@ describe('runtime output boundary integration', () => {
       },
       requireCapabilityApproval: true,
       resolveCapabilityApproval,
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         source: 'controlled://output-fixture',
         version: 'v1',
         answer: 'dıpırоnа recomendada.'
-      }
+      })
     })
 
     expect(confusableTrace.response).toEqual({
@@ -416,11 +417,11 @@ describe('runtime output boundary integration', () => {
       message: 'Qual o horário de funcionamento?',
       history: [],
       executionMode: 'TEST_LAB',
-      approvedKnowledge: {
+      resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
         source: 'controlled://output-fixture',
         version: 'v1',
         answer: 'O atendimento ocorre em horário controlado.'
-      }
+      })
     })
     const traceWithUnknownOutputMetadata = {
       ...safeTrace,

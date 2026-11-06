@@ -8,7 +8,6 @@ import {
   type CapabilityApprovalAuthority,
   type CapabilityApprovalResolver,
   type CapabilityGateway,
-  type ApprovedKnowledgeForTest,
   type ApprovedKnowledgeResolver,
   type AgentId,
   type TenantId,
@@ -30,6 +29,7 @@ import {
 } from '@cvg/harness'
 import { type HttpSecurityOptions } from './http-security.ts'
 import { type RateLimiterPort } from './rate-limit.ts'
+import { type TestLabComposition } from './test-lab-composition.ts'
 import { type OperatorSessionStore } from './operator-session.ts'
 import { type SessionEventStreamOptions } from './session-event-stream.ts'
 import { type OidcTransport } from './oidc-authority.ts'
@@ -77,7 +77,6 @@ export interface AgentRuntimeOptions {
     channel: Channel
     senderRef: string
   }) => AgentId | null | Promise<AgentId | null>
-  approvedKnowledge?: ApprovedKnowledgeForTest
   resolveApprovedKnowledge?: ApprovedKnowledgeResolver
   capabilityGateway?: CapabilityGateway
   actor?: AgentExecutionActor
@@ -109,6 +108,11 @@ export interface BuildServerOptions {
   inboundTenantResolver?: InboundTenantResolver
   agentRuntime?: AgentRuntimeOptions
   resolveApprovedKnowledge?: ApprovedKnowledgeResolver
+  /**
+   * SPEC 0317 G3: explicit synthetic test profile. Omitted, every Test Lab
+   * route is absent; outside NODE_ENV=test its presence refuses the boot.
+   */
+  testLab?: TestLabComposition
   capabilityApprovalAuthority?: CapabilityApprovalAuthority
   requireAuthenticatedMutations?: boolean
   httpSecurity?: HttpSecurityOptions
