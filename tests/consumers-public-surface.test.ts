@@ -261,10 +261,13 @@ describe('HISO-009 supported consumer surface', () => {
       try { await import(name + '/src/index.ts'); console.log(name + ' IMPORTED') }
       catch (error) { console.log(name + ' ' + (error?.code ?? 'UNKNOWN')) }
     }`
+    // O filho é o sistema sob teste: não deve emitir cobertura do runner.
+    const childEnv = { ...process.env }
+    delete childEnv.NODE_V8_COVERAGE
     const output = execFileSync(
       process.execPath,
       ['--input-type=module', '-e', probe],
-      { cwd: root, encoding: 'utf8' }
+      { cwd: root, encoding: 'utf8', env: childEnv }
     )
 
     expect(output.trim().split('\n')).toEqual(
