@@ -87,6 +87,23 @@ describe('submittedBy on the execution spine', () => {
     expect(record.submittedBy).toEqual({ kind: 'unknown' })
   })
 
+  it.each([
+    ['undefined', undefined],
+    ['null', null]
+  ])(
+    'refuses a missing submission (%s) as a validation failure',
+    async (_label, raw) => {
+      const store = createInMemoryOperationalExecutionStore()
+      await expect(store.submit(raw as never)).rejects.toBeInstanceOf(
+        OperationalExecutionError
+      )
+      await expect(store.submit(raw as never)).rejects.toMatchObject({
+        code: 'validation_failed',
+        message: 'tenantId is required'
+      })
+    }
+  )
+
   it('a replay by the same principal converges; any other one conflicts', async () => {
     const store = createInMemoryOperationalExecutionStore()
     const submission = {
