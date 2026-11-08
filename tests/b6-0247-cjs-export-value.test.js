@@ -13,7 +13,9 @@ import { describe, it, expect } from 'vitest'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import os from 'node:os'
+import { beforeAll } from 'vitest'
 import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
 import { ownedRunParent } from './support/owned-run-parent.mjs'
 
@@ -131,13 +133,88 @@ function physical(fx) {
     compiled: { status: 'UNAVAILABLE', files: [] }
   }
 }
+// K3 (BUILD0420, option A): the same clean caller, the same requests and the
+// same assertions; only the plumbing moves. One pinned-Node process per shard
+// computes its share of the catalog up front, in beforeAll, with K shards in
+// parallel (K = min(4, cores), 1 when the core count is unavailable; B6_SHARDS
+// forces K for measurement); every it() reads its own entry, and a missing
+// entry falls back to the original per-request call.
+const BATCH_CODE =
+  'const fs=require("node:fs"); const e=require(process.argv[1]); const r=JSON.parse(fs.readFileSync(0,"utf8")); const out=[]; for (const q of r.requests) { for (const o of q.input.origins) o.id=e.semanticOriginId(o); out.push(q.census ? e.analyzeSemanticBoundary(q.input,{refusalCensus:true}) : e.runSemanticBoundary(q.input)); } process.stdout.write(JSON.stringify(out));'
+// Tempo do lote (beforeAll) medido neste worktree em 08/11/2026, 16 núcleos
+// com load 13–29 de outras cargas: K=4 ≈ 42–43 s (77 pedidos, duas medições);
+// K=1 (serial) ≈ 144 s; o arquivo original gastava 181,7 s em 98 testes.
+// hookTimeout = max(60 s, 3 × lote K=4 ≈ 130 s), arredondado para 180 s, acima
+// também do lote serial, para cobrir um runner de 1 núcleo. O limite por
+// chamada do motor (limits.timeoutMs = 300 s) não muda.
+const BATCH_HOOK_TIMEOUT = 180000
+const SHARDS = Math.max(
+  1,
+  Math.min(
+    Number(process.env.B6_SHARDS) || 4,
+    typeof os.availableParallelism === 'function'
+      ? os.availableParallelism()
+      : 1
+  )
+)
+function cleanBatch(requests) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pinnedNode, ['-e', BATCH_CODE, enginePath], {
+      timeout: BATCH_HOOK_TIMEOUT,
+      env: {
+        PATH: path.dirname(pinnedNode) + ':/usr/bin:/bin',
+        LANG: 'C',
+        TZ: 'UTC'
+      }
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d))
+    child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d))
+    child.on('error', reject)
+    child.on('close', (status, signal) => {
+      if (status !== 0)
+        reject(Error('clean caller failed: ' + (stderr || signal)))
+      else resolve(JSON.parse(stdout))
+    })
+    child.stdin.end(JSON.stringify({ requests }))
+  })
+}
+// items: { store, key, request }, request in the shape cleanCall receives.
+async function runBatches(items) {
+  const shards = Array.from({ length: SHARDS }, () => [])
+  items.forEach((q, i) => shards[i % SHARDS].push(q))
+  const live = shards.filter((s) => s.length)
+  const outputs = await Promise.all(
+    live.map((s) => cleanBatch(s.map((q) => q.request)))
+  )
+  live.forEach((s, i) => s.forEach((q, j) => q.store.set(q.key, outputs[i][j])))
+}
 const results = new Map()
+const censuses = new Map()
+beforeAll(
+  () =>
+    runBatches([
+      ...FIXTURES.map((fx) => ({
+        store: results,
+        key: fx.id,
+        request: { input: physical(fx) }
+      })),
+      {
+        store: censuses,
+        key: 'F3',
+        request: { input: physical(byId('F3')), census: true }
+      }
+    ]),
+  BATCH_HOOK_TIMEOUT
+)
 function result(fx) {
   if (!results.has(fx.id))
     results.set(fx.id, cleanCall({ input: physical(fx) }))
   return results.get(fx.id)
 }
-const census = (fx) => cleanCall({ input: physical(fx), census: true })
+const census = (fx) =>
+  censuses.get(fx.id) ?? cleanCall({ input: physical(fx), census: true })
 const byId = (id) => FIXTURES.find((f) => f.id === id)
 const group = (g) => FIXTURES.filter((f) => f.group === g)
 const tuples = (out) => out.unknowns.map((u) => [u.reason, u.file, u.detail])
