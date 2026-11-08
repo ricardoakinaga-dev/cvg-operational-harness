@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * SPEC0259 Q6 — console no perfil OIDC (vitest + jsdom). O perfil de build é
  * trocado por `vi.mock` do módulo de perfil; as origens são sintéticas e o

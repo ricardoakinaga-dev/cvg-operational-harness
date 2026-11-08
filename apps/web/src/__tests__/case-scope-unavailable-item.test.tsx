@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * SPEC0251 §4.4 / S8 — a 404 on an approval decision or on a task status
  * change means the item is no longer available to this operator (case not

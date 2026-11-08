@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * AUD0621 F22 (SPEC0250 P7, SPEC0114 "Fila de approvals") — two pending
  * approvals with the same action, risk and status but different cases must be

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * AUD0625 F17 (SPEC 0269) — the console reaches conversations past the first
  * page: "Carregar mais conversas" appends the next page and "Abrir caso"
