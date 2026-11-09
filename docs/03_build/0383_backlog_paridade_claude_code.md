@@ -14,6 +14,35 @@ Cada cartão declara o que no título, onde, como, dependências, reuso, dono de
 
 Estimativas ROM em dias de engenharia humana, por delta C100; incluem SPEC, implementação, testes e uma revisão, mas excluem espera humana/conta e execução pendente dos PAR. Faixas não são promessa de velocidade de agentes. Uma revisão independente por cartão, até dois retrabalhos; depois replanejar, sem fabricar aceite.
 
+## Execução do núcleo — 27/10/2026
+
+### Prioridade e execução comum — atualização de27/10/2026
+
+O objetivo principal é construir e validar o núcleo/kernel/runtime. A aplicação consumidora é veículo de teste com barra própria. Adotar o [protocolo comum do0381](0381_plano_executivo_paridade_claude_code.md#execucao-nucleo) e os marcos M1–M4 do0382; M5–M7 e as16 famílias permanecem no alvo integral. Este0383 é o único dono do estado C100; o0380 conserva os PAR, sem duplicar build, status ou esforço.
+
+| Marco a avançar       | Cartões C100 e reuso                                                    | Entrega concreta esperada do dono                                                                                                                                                                                          |
+| --------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1 — Núcleo governado | C100-Q01 com PAR-K01/K03/S01/X01–X04 e demais pré-requisitos declarados | L0/L1/L5 reconciliam fontes e autoridade, explicitam as dependências que faltam integrar e qualificam a jornada pública READ→WRITE retida→approval→restart. Kit/comparador/captura aprovados continuam entregas de suporte |
+| M2 — Continuidade     | C100-S01/S02/C01/C02/B01/B02 com os PAR correspondentes                 | L1/L2 fecham contrato e prova multi-processo, fork, stream/cursor, contexto e accounting. Não criar outro store ou depender só de transcript/polling                                                                       |
+| M3 — Extensões        | C100-K01/T01/T02/P01/P02/E01/E02                                        | L3 prepara contratos de discovery/manifesto/MCP e L2 o servidor do host. Qualificar transporte e lifecycle com L5; instrução externa nunca cria grant                                                                      |
+| M4 — Supervisão       | C100-O01/O02/O03/L01/H01/H02/K02/W01                                    | L4/L1 definem supervisor, herança, mailbox/jobs, budgets e posse; L2 oferece interfaces de controle. Provar cancel, restart, respawn e erro final honesto                                                                  |
+
+O agrupamento não substitui as dependências das fichas: por exemplo P02 continua dependendo de S02, e O01 dos contratos S01/B01/T01/K01. Iniciar preparação documental não autoriza construir o dependente. Policies, approval, auditoria, isolamento e cancelamento são transversais desde M1.
+
+### Preparação contratual prioritária dos C100
+
+| Dono de função      | Contrato a fechar                                                                                                                                  | Caso positivo e negativos que o desenho deve prever                                                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L1/L2 — S01/S02/C/B | Identidade e ownership, API de sessão, projeções/fork, configuração efetiva, cursor/terminal e reserva/settlement                                  | Processo2 retoma estado; writer antigo/tenant errado recusados; fork sem approval herdado; stream cortado não vira sucesso; saldo agregado não cresce após retry/restart |
+| L3/L2 — P01/P02     | Cliente versus servidor MCP, transportes confirmados, handshake, configuração, credencial, schema/classificação, limites e recursos não confiáveis | Servidor conhecido funciona através do kernel; strict-config, destino, schema e cliente inválidos negados; timeout/cancel/reconnect e elicitação falsa discriminados     |
+| L4/L1 — O01/O02/O03 | Supervisor no mesmo kernel, estados/linhagem, profundidade/fanout, grants/budget, mailbox, ownership e cleanup                                     | Filho autorizado conclui e é auditado; filho/neto não amplia grant; cancel alcança árvore; mensagem e efeito não duplicam no crash/respawn; cleanup não esconde a causa  |
+| L2/L3 — H/K/L       | Perfis de permissão, lifecycle/handlers, snapshot e passagem plano→execução                                                                        | Modo/skill/hook/configuração não removem controle; plano alterado não reutiliza approval; conteúdo do modelo não autoriza efeito                                         |
+| L5 — Q/E            | Oráculo real fixado, cenário/corpus, comparador, medidor e regra de promoção                                                                       | Bom autenticado passa; adulteração, referência ausente, resultado parcial/stale e tenant trocado não recebem PASS_CURRENT                                                |
+
+O dono fixa interfaces finais, máquina de estados, limites numéricos e migrations na SPEC da fatia antes do BUILD; o plano não os inventa. Aprovações antigas continuam exatas e não são solicitadas novamente se o recorte autorizado é o mesmo. Novas superfícies T3/T4 seguem os gates correspondentes.
+
+O executor real só é confirmado pelo claim conciliado. L0 mantém uma próxima entrega material por cartão, com candidato, dependência, fonte de autoridade, paths, prova e aceitante. Cada atividade de CI/recibo deve declarar qual critério libera e sua condição de saída. Falhas e pendências históricas permanecem preservadas; nenhuma linha desta atualização declara M1, função ou produção aceitos.
+
 ## Checkpoint técnico — 18/10/2026
 
 Builder local2f0cc11f reaproveita exatamente a correção já commitada na raiz:
@@ -195,7 +224,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Unidadeativa:C100-Q01-QUALIFIER-001,apenasmecanismolocaldaSPEC0229aprovada, candidata/branch próprias derivadasD80. KitQ03qualificado localmente com16gates/38hashes; noveinputs idênticos na candidataQ01. Comparador/CLI na candidatacff0e7c3 concluiuCQ01–CQ08locais:399testes+39cenáriosindependentes,16gates e38hashesatuais; [resultado](../04_audit/evidence/CLAUDE100-EXEC-20261017/spec0229-build/REPORT.md). Unidade0229concluída, Q01/M1integraisabertos. NenhumcréditodeM1oufechamentodasnove dependências. Captura real da referência e oráculos da jornada continuam pendentes.
 - Unidade local concluída: `C100-Q01-REF-PORT-001`, [resultado SPEC0235](../04_audit/evidence/CLAUDE100-EXEC-20261017/spec0235-runtime/REPORT.md). Aprovação humana exata cumprida, fonte28811967 e candidato8ad65c01: NP01–NP10 locais aceitos, 16 gates e 38 hashes oficiais; unit4952/0/1pendingbaseline, PG302/302, E2E12/12. Claude2.1.302 real observado com três POST/503 e 13 controles; auditoria independente163/163 sem bloqueios. Integração de27novos paths privados byteidênticos e250/250focais no root; SPEC/sete protegidos intactos, recursos próprios removidos. OriginalBUILD235 e LEDGER FAILED preservados; recuperação ORIGIN aprovada. Zero crédito M1/funcional; Q01 continua IN_PROGRESS.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: reconciliar contrato/dono da qualificação de boundary e preparar HOW do fecho do builder e binding privado de recursos. [Checkpoint5e3b](../04_audit/evidence/CLAUDE100-EXEC-20261017/foundation-qualification-preparation/REPORT.md):2camposTSAPPROVE/0obrigatórios;56nativos antes pendentes+12E2E PASS atuais,tipagem/lint/formato verdes. Três suítes94:51PASS43FAIL,7pinsDRIFT/6files;15pendentes anteriores+fence não executados. P5/P0qualificação global aberta,nãoháfullcertnova ourootpromote;PGremovido/jobs0/portaslivres. Preservar5e3b,99c9 eoldFAILED,semrepin/waiver;117+17,M1/PAR,0029/0030 abertos,238pendinghumano.
+- Próxima ação: 27/10 — L0/L1/L5 reconciliam os mecanismos/capturas já concluídos e as dependências PAR com seus donos; publicar um único próximo recorte material de M1 com SHA, autoridade, paths, positivo/negativo e aceitante. Qualificar READ→WRITE retida→approval→restart sem duplicar efeito; não reexecutar suporte histórico como se fosse a jornada faltante.
 - Gate pendente independente: `C100-Q01-REF-CAPTURE-001:AWAIT-HUMAN-T3` — aguardar resposta à decisão já enviada sobre o [pacote SPEC0238](../04_audit/evidence/CLAUDE100-EXEC-20261017/spec0238-decision/decision-packet.md), SHA48b270842ec83b422ecafeff2a4e802abd2194838ad3669becd2ebf825c464e6. Revisão independenteR2 APPROVE_SPEC/zero obrigatórios/43checks; retrabalho1/2 usado, R1preservada. Proposta de3cenários locaisSSE/Read/WriteDenied, semM1/adapterCVG/modelo/conta real. BUILD não autorizado até resposta explícita. SetePARM1 e117+17mantidos;0221/0225têm ajustes já aprovados e não serão reperguntados. Entrega da pergunta accepted:true não é aprovação; não reenviar nem iniciar BUILD por timeout.
 
 ## F2 — Sessão, streaming, contexto e modelos
@@ -212,7 +241,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-03-01, CC100-03-02, CC100-03-03, CC100-03-06, CC100-03-07, CC100-03-10.
 - Aceite: Continuidade entre processos, seleção e fork pelo contrato público; approval não se transfere ao fork; opt-out não grava conteúdo recuperável.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L1/L2 fecham a SPEC do complemento público de seleção/resume/fork/opt-out sobre a0221 e os PAR aceitos; definir ID/linhagem, contexto e configuração recuperados, retenção e consulta. Provar continuidade entre processos e approval não transferível.
 
 ### C100-S02 — Completar contrato headless, schema e envelopes incrementais
 
@@ -226,7 +255,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-07-02, CC100-07-03, CC100-07-05, CC100-07-06, CC100-07-07, CC100-07-09.
 - Aceite: CLI/SDK correspondem aos casos de referência; um terminal; JSON inválido e corte de stream nunca viram sucesso.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L2 fixa text/json/stream, JSON Schema, cursor, eventos parciais e EOF sobre os contratos PAR; provar terminal único, reconnect e erro tipado sem promover fragmento/stream cortado a sucesso.
 
 ### C100-C01 — Memória aprendida com revisão e proveniência
 
@@ -240,7 +269,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-06-06, CC100-06-07, CC100-06-08, CC100-06-09.
 - Aceite: Memória útil reaparece na sessão autorizada; expirada/cruzada não entra; nota não autoriza efeito nem substitui fonte institucional.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L1 prepara contrato de memória aprendida com fonte, revisão, tenant/workspace, retenção e conflito; definir prova de recall e rejeição de origem não autorizada antes de BUILD de persistência.
 
 ### C100-C02 — Instruções por escopo e snapshot efetivo do prompt
 
@@ -254,7 +283,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-06-05, CC100-14-05, CC100-14-06.
 - Aceite: Prompt reproduzível por execução e versão; alteração durante resume respeita snapshot; instrução de origem negada não entra.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L1/L2 definem fontes/precedência, snapshot/digest e mudança de versão no resume/compact; comprovar que instrução de recurso externo não remove policy ou cria grant.
 
 ### C100-B01 — Budget agregado persistente e reservas concorrentes
 
@@ -268,7 +297,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-10-01, CC100-10-02, CC100-10-03, CC100-10-08.
 - Aceite: Dois filhos concorrentes e restart não ampliam teto agregado; expiração/cancelamento conservam contabilização sem conceder crédito fictício.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L1 fecha reserva/settlement duráveis da árvore com o supervisor; demonstrar dois filhos concorrentes, retry, crash e cancel preservando teto, sem dupla cobrança nem crédito fictício.
 
 ### C100-B02 — Effort, seleção e fallback com rastreio explícito
 
@@ -282,7 +311,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-10-05, CC100-10-06, CC100-10-07.
 - Aceite: Perfil e effort efetivos visíveis; erro de capacidade explícito; indisponibilidade pode usar fallback autorizado, nunca egress proibido.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L1/L2 definem effort, seleção/fallback e rastreio no gateway, sem substituir modelos pelo nome da flag; fixar equivalência de resultado/custo e negativos antes do ensaio autorizado.
 
 ## F3 — MCP, skills, plugins e avaliação
 
@@ -298,7 +327,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-01-01, CC100-01-02, CC100-01-04, CC100-01-07, CC100-01-08.
 - Aceite: Todo evento incluído no catálogo tem trigger público e prova; timeout, origem e precedência tratados; hook não amplia grant.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L3 reconcilia os eventos/handlers confirmados e o lifecycle PAR, fixa escopo/matcher/merge/erros e prepara trigger público por evento; negação de controle permanece soberana.
 
 ### C100-T01 — Compatibilidade SKILL.md e carregamento progressivo
 
@@ -312,7 +341,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-05-01, CC100-05-02, CC100-05-03.
 - Aceite: Skill é descoberta e invocada sem carregar todos os corpos; conteúdo fora do root/hash inválido ou ferramentas proibidas é recusado.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L3 reconcilia a inspeção0255 já decidida e seus pré-requisitos Q01/M1 e PAR-K05; especificar separadamente compatibilidade SKILL.md, discovery e corpo sob demanda. Não confundir inspeção local com admissão runtime nem reabrir o mesmo gate humano.
 
 ### C100-T02 — Ciclo de plugins, dependências e custo de contexto
 
@@ -326,7 +355,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-05-05, CC100-05-07, CC100-05-08, CC100-05-09.
 - Aceite: Versão/dependências efetivas e custo são inspecionáveis; update concorrente não troca execução em curso nem ativa plugin sem revisão.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L3 define origem, revisão, dependências, configuração, hashes e custo de contexto do plugin; testar unknownfields, drift e escape sem executar código durante inspeção ou conceder grant na instalação.
 
 ### C100-P01 — Compatibilidade de transportes e configuração MCP
 
@@ -340,7 +369,8 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-04-03, CC100-04-04, CC100-04-05, CC100-04-06, CC100-04-07.
 - Aceite: Transporte necessário funciona com servidor sintético; strict-config ignora fontes não explícitas; credencial, schema e egress inválidos são recusados.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L3 com L2/L4 prepara a SPEC do cliente MCP: transportes realmente confirmados, handshake/versionamento, strict-config, identidade/credencial, schema, egress, caps/timeout/cancel/reconnect e ciclo de subprocesso. Um servidor sintético bom e negativos conhecidos devem ser definidos antes do BUILD.
+- Preparação de 27/10: [SPEC0266 — cliente MCP governado](../02_spec/0266_governed_mcp_client.md), proposta T1 com codecs 2025/2026, stdio/HTTP, 27 cenários NOT_RUN e rastreabilidade dos 11 requisitos CC18-04. R1 pediu três correções de desenho; a revisão R2 aceita a reparação do rascunho no SHA a62f86c0, com zero correções obrigatórias nesse escopo. Isso não concede TECHNICALLY_SPECIFIED ou BUILD. Portas X01/egress/credenciais/MRTR, schemas/SDK/caps e revisão humana T3 continuam pré-requisitos. Esta referência não altera status, dependências ou aceite.
 
 ### C100-P02 — Recursos, prompts, elicitação e servidor MCP com identidade
 
@@ -354,7 +384,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-04-09, CC100-04-10, CC100-04-11.
 - Aceite: MCP pede entrada e retoma uma vez; servidor do host interoperável; resposta humana falsa, URL hostil, conteúdo excedido ou cliente sem grant é negado.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L2/L3 fecham separadamente contrato do servidor MCP do host e consumo de resources/prompts/elicitação; definir identidade/tenant/grants, limites e correlação de entrada humana. Provar interoperabilidade e retomada única; SDK JSON-RPC e instrução externa não são autorização MCP.
 
 ### C100-E01 — Evals com ablação, mocks e orçamento local
 
@@ -368,7 +398,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-15-01, CC100-15-02, CC100-15-03, CC100-15-04, CC100-15-05.
 - Aceite: Mede delta de qualidade/custo/latência; threshold e teto falham quando excedidos; plugin adulterado não passa por fixture autocertificada.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L5/L3 definem dataset idêntico e duas condições com/sem extensão, métricas de qualidade/custo/latência e orçamento; braço ausente/timeout permanece incompleto, sem oráculo escolhido depois do resultado.
 
 ### C100-E02 — Promoção de extensão por evidência e regressão
 
@@ -382,7 +412,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-15-06, CC100-15-07, CC100-15-08.
 - Aceite: Nova versão invalida receipt antigo; extensão sem prova atual não promove; relatório prova footprint e custo por braço.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L5/L0 definem vínculo da avaliação à versão da extensão, regressões e decisão de promoção; provar recusa de relatório incompleto/adulterado. Resultado de eval não concede aprovação de segurança ou release.
 
 ## F4 — Autonomia, hooks completos e operação
 
@@ -398,7 +428,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-01-05, CC100-01-06.
 - Aceite: Cada tipo confirmado passa caso sintético e negativo; timeout/cancelamento bloqueiam conforme contrato; comandos fora da allowlist não iniciam.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L3/L4 especificam handlers HTTP/comando/modelo/agente sobre transportes e supervisor aceitos; provar timeout/cancel/allowlist e herança de budget/grants sem executor paralelo.
 
 ### C100-O01 — Manifestos e perfis de subagentes especializados
 
@@ -412,7 +442,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-02-01, CC100-02-03, CC100-02-05, CC100-02-06.
 - Aceite: Filho especializado roda no mesmo kernel; contexto não vaza; limite de profundidade/fanout e budget rejeita caso excedente.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L4/L1 fecham a SPEC do supervisor antes da implementação: estados, ID/linhagem, spawn/fork, contexto/skills/modelo, grants por interseção e reserva agregada, depth/fanout. Congelar positivos/negativos com filho e neto no mesmo kernel.
 
 ### C100-O02 — Attach, logs, stop e respawn de sessões background
 
@@ -426,7 +456,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-11-02, CC100-11-03, CC100-11-04, CC100-11-06, CC100-11-07.
 - Aceite: Operador dono acompanha e para job; respawn retoma sem efeito duplicado; remoção usa dono e conflito do W01; erro e saída parcial não são conclusão bem-sucedida.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L4/L2 definem owner, ID/nome e estados de start/list/attach/logs/stop/respawn/remove; consumir posse do W01 e jobs PAR. Provar recovery e remoção sem afetar workspace ou efeito de outro dono.
 
 ### C100-O03 — Steering, mailbox e cancelamento de árvore de agentes
 
@@ -440,7 +470,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-02-08, CC100-11-08.
 - Aceite: Mailbox entrega uma vez; cancelamento alcança filho e neto; cleanup com falha não oculta erro original nem marca sucesso.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L4/L1 especificam mailbox/dedup/ack, steering, árvore de cancel e reconciliação após restart; provar mensagem única, cancel de neto e preservação do erro primário mesmo se cleanup falhar.
 
 ### C100-L01 — Plano revisável e todos com transição governada
 
@@ -454,7 +484,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-08-02, CC100-08-04, CC100-08-06.
 - Aceite: Plano persiste, é revisável e consultável; executar sem gate permanece bloqueado; alteração de plano invalida a aprovação vinculada.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L2/L4 definem plano/todos versionados, consulta e transição para execução, sem inferir approval de texto; alteração do plano invalida seu vínculo anterior e nunca aprova efeito automaticamente.
 
 ### C100-H01 — Perfis de permissão e modo restricted verificáveis
 
@@ -468,7 +498,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-09-08.
 - Aceite: READ permitido funciona; WRITE/EXTERNAL negado não inicia; aprovação não é inferida de mensagem ou resultado de modelo.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L2/L1 fecham a matriz de modos/permissões/restricted sobre os controles obrigatórios; provar READ autorizado e WRITE/EXTERNAL bloqueados sem iniciar corpo, inclusive nos caminhos MCP/filhos do perfil.
 
 ### C100-H02 — Configuração efetiva, safe/bare e diagnóstico
 
@@ -482,7 +512,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: CC100-14-01, CC100-14-02, CC100-14-03, CC100-14-04, CC100-14-08.
 - Aceite: Sem auto-load indevido em modo explícito; safe/bare não desliga policy/approval; segredo não aparece em dump, erro ou log.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L2 define configuração efetiva/origens/precedência/safe/bare e diagnóstico redigido; provar que modo reduzido não remove controle e que snapshot/versão acompanham a sessão.
 
 ### C100-W01 — Worktree gerenciado e diretórios adicionais por tarefa
 
@@ -614,7 +644,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: habilitador/qualificação transversal; não aumenta o numerador por concluir o cartão.
 - Aceite: 117 resultados comparáveis e17controles adicionais atuais executados pelo contrato de sua classe; nenhum obrigatório ausente/skip, nenhum mock substituindo a referência funcional ou divergência sem decisão.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L5/L0 reconciliam requisitos funcionais e controles separadamente no mesmo candidato; reaproveitar apenas receipts com identidade/oráculo/revisão atuais e manter referência indisponível pendente, sem retirar família.
 
 ### C100-Q03 — Recuperação, contenção e performance comparáveis
 
@@ -628,7 +658,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: habilitador/qualificação transversal; não aumenta o numerador por concluir o cartão.
 - Aceite: Nenhum vazamento, efeito duplicado ou grant expandido; SLOs aprovados satisfeitos; causa primária preservada em falha dupla.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L5 fixa perfil/carga/oráculos de recovery/concorrência/contenção antes do ensaio; provar crash/reconnect/cancel e recursos liberados em cada família habilitada, sem transportar PASS entre versões.
 
 ### C100-Q04 — Medidor Claude e bloqueio no CI da candidata
 
@@ -642,7 +672,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: habilitador/qualificação transversal; não aumenta o numerador por concluir o cartão.
 - Aceite: Receipts falsos, stale, exclusão de requisito, mudança de referência ou regressão derrubam check; imagem/SBOM vinculados à candidata.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L5 liga medidor/catálogos ao contrato do CI, preserva17 controles e117 resultados e rejeita stale/resultado parcial conhecido; infraestrutura e notas arquiteturais não contam como funcionalidade.
 
 ### C100-Q05 — Auditoria independente e aceite dos 100%
 
@@ -656,7 +686,7 @@ Dono é papel proposto; alocação nominal e paths disjuntos são fixados no cla
 - Requisitos diretamente atribuídos: habilitador/qualificação transversal; não aumenta o numerador por concluir o cartão.
 - Aceite: Todos os requisitos PASS_CURRENT, 16 famílias completas, zero exceção aberta, controles verdes e decisão humana registrada; documentação sozinha não encerra.
 - Prova: procedimentos positivos e negativos do catálogo nos boundaries públicos, manifesto com SHA/digests, log bruto e parecer independente; gate humano quando aplicável. Para T1, inspeção rastreável e checks documentais. Não executado nesta rodada.
-- Próxima ação: Conferir fonte e oráculo; preparar ou reconciliar a SPEC com os donos PAR; só executar código após o gate da fatia.
+- Próxima ação: 27/10 — L0/L5 montam pacote independente somente após os aceites atuais:117 resultados,17 controles,16 famílias e nenhuma exceção aberta; decisão de paridade e decisão de produção0373/0374 permanecem próprias.
 
 ## Matriz completa de aceites por família
 

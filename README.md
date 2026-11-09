@@ -4,6 +4,23 @@ CVG Operational Harness is a governed runtime foundation for reusable
 operational AI agents across the CVG ecosystem. The Esmeralda V2 secretary is
 the legacy product being isolated under `legacy/`.
 
+## Prioridade de construção e orientação aos agentes — 27/10/2026
+
+O objetivo central é construir e validar o **núcleo, kernel e runtime** do
+Operational Harness: policies e controles obrigatórios, sessões duráveis,
+streaming, MCP e orquestração com subagentes supervisionados. O produto acima
+é uma aplicação consumidora de validação, com domínio e liberação próprios.
+
+Antes de escolher uma tarefa, ler o
+[protocolo comum de execução do núcleo](docs/03_build/0381_plano_executivo_paridade_claude_code.md#execucao-nucleo),
+o [roadmap DeepSeek](docs/03_build/0379_roadmap_paridade_100_deepseek.md) e o
+[roadmap Claude Code](docs/03_build/0382_roadmap_paridade_claude_code.md).
+Os estados e próximas ações pertencem ao
+[backlog PAR](docs/03_build/0380_backlog_paridade_100_deepseek.md) e ao
+[backlog C100](docs/03_build/0383_backlog_paridade_claude_code.md).
+Claims, contratos, gates e provas devem convergir na mesma candidata; um
+componente implementado não encerra uma capacidade ou libera produção.
+
 ## Estado atual — 17/10/2026 — harness e consumidor
 
 A direção vigente é a [ADR-010](docs/architecture/adrs/ADR-010-harness-product-isolation.md):

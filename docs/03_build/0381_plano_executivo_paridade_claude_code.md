@@ -2,7 +2,9 @@
 
 Data: 17/10/2026. Programa `CLAUDE100`. Task documental `CLAUDE100-PLAN-20261017`. Direção do usuário: criar plano executivo, roadmap e backlog para parear **100% das funcionalidades identificadas na análise 0618** com o Operational Harness.
 
-Estado: `PROPOSED_FOR_EXECUTION`. A criação do planejamento está autorizada; o pedido não é aprovação das SPECs, de BUILD T3/T4, de contas externas ou de release. [Roadmap 0382](0382_roadmap_paridade_claude_code.md), [backlog 0383](0383_backlog_paridade_claude_code.md), [catálogo Claude-CAP v1](tracking/claude100_catalog_v1.json) e [evidências do planejamento](../04_audit/evidence/CLAUDE100-PLAN-20261017/README.md).
+Atualização de direção e execução documental: **27/10/2026, solicitada por Ricardo**. Prioridade: kernel estável, runtime robusto, policies, sessões, MCP e orquestração supervisionada, com paridade DeepSeek/Claude e aplicação consumidora de validação. A execução ocorre por fatias; o estado de cada cartão pertence aos backlogs. Esta atualização implementa o planejamento e não aprova novas SPECs, BUILD T3/T4, contas externas ou release. [Roadmap 0382](0382_roadmap_paridade_claude_code.md), [backlog 0383](0383_backlog_paridade_claude_code.md), [catálogo Claude-CAP v1](tracking/claude100_catalog_v1.json) e [evidências do planejamento original](../04_audit/evidence/CLAUDE100-PLAN-20261017/README.md).
+
+Todos os agentes devem aplicar o [protocolo comum de execução do núcleo](#execucao-nucleo) antes de selecionar uma fatia PAR ou C100. Ele define divisão de responsabilidades, contrato de tarefa, prova, integração e caminho para produção; não cria outra carteira de estados.
 
 ## Resultado pretendido
 
@@ -95,7 +97,7 @@ Contratos públicos e eventos são compartilhados pelo integrador; adapters poss
 
 O [0380](0380_backlog_paridade_100_deepseek.md) continua proprietário do estado e do trabalho PAR. O [0383](0383_backlog_paridade_claude_code.md) é a extensão de deltas C100 e da qualificação Claude, ligada por uma ponte no 0380. O mesmo componente não ganha duas tasks de construção ou dois estados concorrentes.
 
-Há **37 cartões C100 novos**, **53 PAR referenciados diretamente** e **58 PAR no fecho transitivo**, sem contar carriers opcionais como SSH/ACP como obrigatórios para cloud/IDE. Reuso opcional só vira dependência após decisão arquitetural, com recalculo do grafo e do esforço. Não se exige concluir todos os 111 PAR ou obter 266/266 DeepSeek para iniciar ou aceitar o Claude100.
+Há **37 cartões C100 novos**, **53 PAR referenciados diretamente** e **58 PAR no fecho transitivo**, sem contar carriers opcionais como SSH/ACP como obrigatórios para cloud/IDE. Reuso opcional só vira dependência após decisão arquitetural, com recalculo do grafo e do esforço. Não se exige concluir todos os 111 PAR ou obter 272/272 DeepSeek para iniciar ou aceitar o Claude100.
 
 Um PAR pode produzir evidência aproveitável pelos dois alvos, mas cada catálogo qualifica seus próprios requisitos. `PAR-Q02` compara DeepSeek; não é automaticamente um comparador Claude. C100-Q01 adiciona o driver/oráculo específico. Infraestrutura Q03/Q04/Q06/Q08 é reutilizada, sem alterar o denominador aprovado do PAR-CAP.
 
@@ -161,4 +163,102 @@ Registro de 17/10/2026: planejamento criado; nenhum requisito qualificado, nenhu
 
 Para retomar: ler instruções, 99/20/30, coordenação, este plano, 0382/0383 e catálogo; conferir pin, Git status e claims; escolher somente tarefa com dependências/gates atuais. Parada ou falha não autoriza reset, perda de histórico ou reinício de efeito incerto. Recuperar por journal/checkpoint, reconciliar estado e preservar a causa primária.
 
-**Próxima ação executável: C100-G01 — validar o catálogo e a identidade da referência**, mantendo as 16 famílias e registrando variantes ainda não observadas. Em seguida, G02/G03 e pacote G04. Produção do núcleo continua na [trilha 0374](0374_plano_producao_harness.md); paridade não concede deploy, push, dado real ou efeito clínico/financeiro.
+**Próxima ação de coordenação em27/10:** L0 deve reconciliar a entrada da jornada M1 no C100-Q01, com os donos PAR-K01/K03/K04/S01/X01–X04, as aprovações e as devoluções existentes; publicar a próxima fatia material, executor e prova pelo protocolo abaixo. G01–G04 têm entregas documentais registradas no0383 e não devem ser repetidos por esta orientação histórica. Identidade/oráculos que sofreram alteração são revalidados no escopo afetado. Produção do núcleo continua na [trilha 0374](0374_plano_producao_harness.md); paridade não concede deploy, push, dado real ou efeito clínico/financeiro.
+
+<a id="execucao-nucleo"></a>
+
+## Protocolo comum de execução do núcleo
+
+Direção explícita de Ricardo em27/10: o CVG Operational Harness é o núcleo reutilizável. O Assistente de Plantão e outros produtos exercitam suas interfaces. A construção do kernel, runtime, policies, sessões, MCP e orquestração deve conduzir a fila. O [diagnóstico de planejamento](../alinhamento_planejamento_nucleo_paridade_2026-10-27.md) e o [relatório de paridade](../relatorio_paridade_nucleo_deepseek_claude_2026-10-27.md) fundamentam esta atualização; suas notas não são gates.
+
+### Fontes e fronteiras de autoridade
+
+- Estado, dependências, prioridade P0/P1 e próxima ação dos PAR: somente0380. Estado dos C100: somente0383. Roadmaps descrevem ordem e marcos; SPECs aprovadas definem contratos; registros de execução demonstram o resultado. Atualizar um desses artefatos não atualiza os demais por inferência.
+- Preservar os 111 PAR,37 C100, 272 capacidades DeepSeek no [escopo vigente do Q01](0380_backlog_paridade_100_deepseek.md#escopo-par-cap-vigente) e117 resultados Claude mais17 controles CVG. Uma implementação comum tem um único builder e pode servir aos dois alvos depois dos respectivos aceites. Nenhum requisito sai do denominador por esta priorização.
+- A prioridade orienta seleção dentro das dependências existentes. Não transforma TODO em READY, não revoga trabalho já autorizado, não transfere lease nem reduz aceites. Preparação de contrato em caminho livre pode ocorrer antes de a implementação dependente estar habilitada.
+- Aprovações0221/0222/0225 com ajustes continuam vinculadas ao [recibo de16/10](../04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json). Conferir a revisão e aplicar o recorte permitido; não repetir a decisão nem tratar o pacote inteiro como aprovado.0220/0226 adiadas conservam sua situação.
+- Controles de policy, approval, budget, journal, auditoria, pausa e cancelamento acompanham todas as fatias. Orquestrador decide por descritores; runtime executa pelo kernel. MCP, hooks, planos, skills e filhos nunca ganham um caminho paralelo de efeito.
+
+### Entregas prioritárias e saídas observáveis
+
+| Marco do0382          | Trabalho que deve convergir                                                                                                        | Fronteira e prova obrigatória                                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1 — Núcleo governado | PAR-K01/K03/S01/X01–X04 e C100-Q01, respeitando os pré-requisitos de cada cartão; K04 fecha a fundação de lifecycle correspondente | Criar sessão, READ, WRITE retida, approval autenticado, retomada e restart. Caso autorizado produz um efeito; negação, tenant trocado e duplicata são discriminados. Conformidade I1–I12 e mecanismos/oráculos no mesmo candidato |
+| M2 — Continuidade     | Sessões/projeções/fork/contexto PAR-S/C, streaming PAR-M01/A01/A05 e complementos C100-S/C/B                                       | Processo2 reconstrói pendências e configuração; fork preserva linhagem sem approval reutilizável; reconexão mantém cursor; stream termina uma vez; reservas concorrentes e restart conservam o teto                               |
+| M3 — Extensões        | PAR-K04/K05/K09/K10/T07/P01 e C100-T/K/P/E, com os respectivos dependentes                                                         | MCP cliente/servidor interoperável no escopo confirmado; skill progressiva e hook executam sob controles; schema, credencial, egress, autoridade, timeout e cleanup negativos são provados                                        |
+| M4 — Orquestração     | PAR-K06/O01/O02/O03/O06/O08/O09/O13 e complementos C100-O/L/B/H                                                                    | Spawn/fork com grants por interseção e accounting agregado; mailbox/job duráveis; cancel de pai/filho/neto; workflow retoma sem efeito extra; plano/goals não concedem approval                                                   |
+
+Esta tabela agrupa a convergência; não substitui as arestas do0380/0383 nem declara que todos os cartões da mesma célula podem iniciar juntos. M5–M7, workspaces, rewind e superfícies remotas continuam no alvo completo. Preparar contratos adiante não antecipa efeitos, modelos ou serviços reais.
+
+K04 é uma frente de lifecycle a reconciliar em paralelo conforme suas dependências; não foi acrescentado como novo pré-requisito de todo M1. Cada recorte continua sujeito à lista de dependências e ao aceite que já lhe pertencem, incluindo as exigências de lifecycle do perfil que ele efetivamente habilita.
+
+### Frentes e posse de arquivos
+
+| Papel existente     | Responsabilidade verificável                                                                                                  | Limite de escrita e devolução                                                                                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L0 — Integrador     | Selecionar próxima tarefa elegível, compor dependências, conferir autoridade, coordenar candidata e atualizar estado canônico | Um writer de contratos compartilhados, schema/migrations, lock e ledgers por janela. Registrar quem ocupa o papel no claim; não presumir que um nome histórico ainda é o executor |
+| L1 — Núcleo e dados | Kernel/journal/sessões/contexto/budget; compatibilidade de readers/writers e recuperação                                      | Módulos e migrations explicitamente reservados. Devolver contrato, delta, prova de concorrência/restart e recursos liberados                                                      |
+| L2 — Interfaces     | API/SDK/CLI, eventos, cursor, configuração e interação de approval                                                            | Consumir contrato congelado de L1/L3/L4; não criar store, policy ou loop substituto no cliente                                                                                    |
+| L3 — Extensões      | MCP, skills, plugins e hooks                                                                                                  | Adapters e testes próprios, sem mudar controles obrigatórios ou conceder grants por discovery                                                                                     |
+| L4 — Supervisão     | Subagentes, jobs, workflows, mailbox, workspaces e posse de processos                                                         | Usar o runtime/serviço de subprocesso existentes; orçamento e autoridade herdados. Não operar recursos de outro agente                                                            |
+| L5 — Qualificação   | Oráculos, negativos, comparadores, medidores e julgamento independente                                                        | Congelar inputs da revisão e preservar brutos. Quem implementou não emite aprovação independente da mesma fatia                                                                   |
+
+São papéis, não seis agentes adicionais. A disponibilidade real determina as frentes simultâneas. Antes da escrita, consultar GBrain e claims e vincular cada tarefa a um executor e, quando exigido, revisor distinto. Interseção de paths exige sequência ou divisão acordada; nunca dois writers no mesmo módulo. Um agente sem task elegível devolve o bloqueio e a próxima dependência, sem inventar novos probes ou assumir o lease do par.
+
+### Contrato mínimo de cada tarefa
+
+O dono registra os campos abaixo no artefato de tarefa aceito pela rotina existente; não substituir schemas de controllers por um formato novo.
+
+| Campo                  | Conteúdo que permite execução por outro agente                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identidade e resultado | ID do cartão e da fatia; um resultado observável; marco/capacidade que avança; escopo que continua pendente                                                     |
+| Entrada                | SHA da candidata, interfaces e revisões consumidas, estado real, fonte de autoridade e dependências atendidas ou bloqueadas                                     |
+| Execução               | Executor, revisor/integrador, paths exclusivos, paths somente leitura e janela de recursos; reconciliar dependência cujo dono ainda não devolveu                |
+| Contrato               | SPEC e decisão aplicável; invariantes, compatibilidade, limites, estados/erros e comportamento em cancelamento, retry, crash e commit incerto                   |
+| Prova                  | Fronteira pública, cenário sintético positivo, negativo conhecido, comandos/perfis aplicáveis e critério de término; fixar oráculos e limites antes da execução |
+| Devolução              | Diff/fontes identificadas, argv/exit/bruto e hashes, resultado real, achados, limitações, recursos encerrados, próximo passo e atualização da carteira/GBrain   |
+
+Uma tarefa de infraestrutura de CI, parser, recibo ou harness de teste deve indicar qual critério de M1–M4 ela bloqueia, a condição objetiva que a encerra e qual entrega material volta à fila depois. Sucesso de infraestrutura não incrementa o numerador de paridade. Falha de execução permanece histórica e não vira PASS pela troca de nome ou pelo êxito de um subconjunto.
+
+### Conteúdo exigido das SPECs de fundação e extensão
+
+| Contrato                     | Pontos que precisam estar resolvidos antes do BUILD da fatia                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kernel/policies              | Serviços obrigatórios, ordem policy→approval→efeito, guardas monotônicas, command binding, uso único da aprovação, profile/tenant, pausa, log anterior ao efeito, settlement e erro normalizado. Orquestrador sem ferramentas executáveis; interface pública sem bypass                                                                                                   |
+| Sessão — base0221 e deltas S | Identidade/tenant, create/open/read/append/flush/close e funções incluídas no recorte, ownership de writer, sequence/cursor, concorrência, transição de writers antigos, falha de COMMIT, recovery, projeções e compatibilidade. Fork, retenção e opt-out com donos próprios; sem segundo log                                                                             |
+| MCP — PAR-P01/C100-P01/P02   | Separar cliente e servidor, transportes confirmados, handshake/versionamento, configuração explícita, allowlist por tenant, origem de credencial, schema/classificação de efeito e passagem pelo kernel. Limites de payload/tempo/concorrência, cancel/reconnect, lifecycle de processo, resources/prompts não confiáveis, elicitação correlacionada e interoperabilidade |
+| Supervisor — PAR-O/C100-O    | Máquina de estados, ID/linhagem, spawn versus fork, contexto isolado, grants por interseção, modelo/skills permitidos, profundidade/fanout e reserva agregada. Mailbox/ack/dedup, wait/attach/stop/respawn, posse de PID/process group, cancelamento da árvore, restart e resultado terminal honesto                                                                      |
+| Stream/contexto/budget       | Ordem de eventos e cursor, backpressure, terminal único, fragmento versus resposta final, cancelamento e uso parcial; fatos e obrigações preservados na compactação; reserva/settlement idempotentes e contabilização de retry/filhos sem crédito fictício                                                                                                                |
+
+O plano define o conteúdo necessário, não inventa valores numéricos, API final, migration ou semântica de segurança ainda sem decisão. O dono apresenta a SPEC concreta e revisável, reaproveitando contratos existentes. Ampliar contrato aprovado continua exigindo a autoridade correspondente.
+
+### Entrada, verificação e integração
+
+1. L0 confere o próximo passo no cartão canônico, recibos de autoridade, candidata e claims. Preparação T1 não inicia runtime. BUILD só começa com a tarefa/contrato/gate aplicáveis e dependências comprovadas para aquele recorte.
+2. Builder conserva a reprodução original, altera apenas os paths próprios e verifica o comportamento pela fronteira contratada. Tests de fixture/componente são identificados; não substituem multi-processo, PostgreSQL, contenção ou referência real exigidos pelo aceite.
+3. Ao concluir a implementação, congelar a composição para revisão proporcional e julgamento independente quando exigido. Corrigir achados dentro do ciclo vigente; não abrir alias para zerar tentativas ou apagar falha anterior.
+4. L0 confere o delta, inputs, execução, limitações e cleanup antes de integrar. Rodar os checks da constituição e do perfil em Node22, incluindo PostgreSQL/E2E/certificação quando aplicáveis e com claim próprio. Esta atualização documental não executa nem dispensa esses gates.
+5. O dono atualiza o cartão com resultado real e um próximo passo singular. Anexar a prova que fecha o aceite ou discriminar o restante; IMPLEMENTED, revisão aprovada e PASS_CURRENT são resultados distintos. Publicar no GBrain e confirmar a leitura. Ledgers ocupados recebem delta no handoff até o responsável integrar.
+
+O recibo identifica source SHA/digest, configuração saneada, ambiente, schemas/fixtures, comando/argv, exit, raw, datas, resultado, revisão e decisão aplicável. Capturas comparativas incluem a referência fixada; controles CVG citam a sua SPEC. O mesmo receipt não aprova outra versão nem outro requisito por semelhança.
+
+### Recuperação e caminho para produção
+
+Na retomada, ler os artefatos atuais e verificar a última tarefa terminal e a próxima ação; um log antigo não prova processo vivo. Revalidar inputs afetados por mudança, manter o estado incerto e usar journal/checkpoint antes de repetir efeito. O integrador resolve conflito de contrato ou posse antes de continuar a fatia dependente.
+
+| Declaração pretendida                    | Condição para poder fazê-la                                                                                                                                                                                                                         |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fatia do núcleo construída               | Implementação conectada e verificações da tarefa disponíveis; ainda não é aceite global                                                                                                                                                             |
+| Capacidade qualificada                   | Positivos/negativos e requisitos do cartão no candidato identificado, com revisão e autoridade aplicáveis; catálogo só recebe o crédito correspondente                                                                                              |
+| Núcleo pronto para produção em um perfil | Todas as dez condições da [barra0373](0373_barra_producao_harness.md) no mesmo commit/imagem, reconciliação do isolamento e da operação exigidos na [trilha0374](0374_plano_producao_harness.md), decisão de ativação e recuperação correspondentes |
+| Perfil de produção com MCP/subagentes    | Além da barra do núcleo, as capacidades habilitadas desse perfil precisam de seus aceites; não ativar uma função pendente porque M1 ou a imagem passou                                                                                              |
+| Paridade completa                        | Denominador original de cada referência, capacidades atuais, controles e auditoria final próprios. Produção proporcional do núcleo não precisa aguardar toda a cauda de paridade                                                                    |
+| Produto liberado/piloto                  | Barra0368 e backlog do consumidor, com suas decisões e ambiente; usar a aplicação em teste não concede esse aceite                                                                                                                                  |
+
+A qualificação técnica local do núcleo pode avançar com fixtures e recursos próprios. Ausência do servidor hospitalar não torna todas as tarefas do kernel inelegíveis; impede as provas que dependem daquele destino. Nenhum texto deste plano autoriza dado real, modelo/canal externo, push, deploy ou produção irrestrita.
+
+### Ações de retomada do planejamento
+
+L0 deve registrar a reconciliação de entrada de C100-Q01/M1 com os donos PAR-K01/K03/K04/S01/X01–X04 e os recibos existentes. L1 reconcilia0221/0222/0225 dentro dos ajustes concedidos e a ordem0029→0030→0031. L3 prepara a SPEC concreta MCP; L4 prepara supervisor/budget/mailbox com L1; L5 vincula os oráculos e critérios aos dois catálogos. Cada executor só é confirmado no claim real; esta lista não realoca tarefas em andamento.
+
+Revisar a fila ao receber uma devolução, decisão, mudança de contrato ou bloqueio material. Publicar próxima entrega elegível, dependência, dono e prova nos backlogs existentes. Não iniciar novamente G01 ou uma captura histórica já concluída apenas porque o texto original do plano os apresentava como futuro.

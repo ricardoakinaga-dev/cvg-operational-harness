@@ -1,5 +1,21 @@
 # Operational index — derived navigation
 
+## Construção e estabilização — Open-ClaudeCode, 01/11/2026
+
+Os achados da extração REA foram incorporados ao [roadmap0394](03_build/0394_roadmap_melhorias_claude_rea.md) e ao [backlog0395](03_build/0395_backlog_melhorias_claude_rea.md). O roadmap define a ordem de integração até produção; o backlog associa dez contraprovas de budget, cancelamento, aprovação, persistência, ferramentas, MCP, filhos, stream e sandbox aos cartões e responsáveis existentes.
+
+Prioridade de execução: concluir diagnóstico/qualificação CI e consumir os reparos já existentes de runtime; comprovar segurança, isolamento, recuperação e operação na candidata final; então seguir a [barra0373](03_build/0373_barra_producao_harness.md) e o [plano0374](03_build/0374_plano_producao_harness.md). A [continuidade0410](03_build/0410_aud0627_followup_execution.md) mantém seus claims CI/QA. A produção do núcleo e a paridade completa têm critérios próprios; capacidades adiadas continuam sem ativação implícita.
+
+O [relatório de origem](04_audit/evidence/OPENCLAUDE-REA-20261101/REPORT.md) identifica Open-ClaudeCode1f0fab6/CLI2.1.88 e46 fontes analisadas estaticamente com cobertura parcial. Fonte recuperada, source map e bundle executável têm evidências distintas. A incorporação documental não demonstra execução funcional, não substitui o pinClaude302 e não concede release. [Handoff da incorporação](08_runtime/handoffs/openclaude_docs_20261101.md) registra alterações aplicadas e pendências coordenadas; produção `NO_GO` até os aceites da barra vigente.
+
+## Continuidade após auditoria — 01/11/2026
+
+A [auditoria0627](04_audit/0627_repository_score_audit_2026-11-01.md) avaliou a main publicada `a2f345a3b`: harness77/100, prontidão60/100 e consumidor67/100 separado. O checkout compartilhado `ce23da17f` é anterior; a onda8 `c8be3a516` contém reparos locais ainda sujeitos a integração e qualificação. As versões não compartilham certificado automaticamente.
+
+O pedido de execução contínua está no [plano0410](03_build/0410_aud0627_followup_execution.md), com tarefas e aceites por unidade. [Handoff de continuidade](08_runtime/handoffs/aud0627_followup_codex_20261101.md) registra os deltas propostos aos ledgers ocupados pelos pares. Consultar GBrain e claims antes de cada tarefa e registrar resultado ao concluir. Carteiras técnicas e gates continuam canônicos; produção `NO_GO`.
+
+Os blocos de datas anteriores abaixo são preservados como histórico. Não representam a versão publicada atual nem concedem novas aprovações.
+
 This file is a manually reconciled navigation aid derived from the append-only
 records; it is not generated automatically yet. The linked ledgers and canonical
 backlogs remain the sources of operational status. This index must not be used to

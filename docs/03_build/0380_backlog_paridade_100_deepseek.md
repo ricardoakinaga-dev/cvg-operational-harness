@@ -7,7 +7,7 @@
 
 ## Extensão Claude100 — 17/10/2026
 
-Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado dos 266 PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
+Por pedido do usuário, as 16 famílias da análise [0618](../04_audit/0618_claude_code_capabilities_2026-10-17.md) receberam [plano executivo 0381](0381_plano_executivo_paridade_claude_code.md), [roadmap 0382](0382_roadmap_paridade_claude_code.md) e [backlog complementar 0383](0383_backlog_paridade_claude_code.md). São 134 requisitos iniciais propostos (117 comparáveis e 17 controles CVG adicionais obrigatórios) e 37 cartões C100 de delta/qualificação. O catálogo Claude está separado das 272 capacidades do escopo PAR-CAP DeepSeek; nenhum percentual, status, prioridade ou aceite dos PAR é alterado por essa documentação.
 
 Este 0380 permanece a fonte do estado e da execução dos PAR reaproveitados; o 0383 possui apenas o estado dos C100 e o encaminhamento dos aceites Claude. Uma implementação comum tem um único dono, claim e tarefa; serve aos dois catálogos somente depois de qualificada em cada um. Carriers opcionais não se tornam pré-requisitos por mera associação. A extensão não substitui 0379/0380, não concede BUILD T3/T4 e não altera a trilha de produção 0374.
 
@@ -30,7 +30,40 @@ Regras da carteira:
 4. Um writer por arquivo compartilhado (schema, lockfile, contratos públicos, ledgers). Cartões paralelos têm caminhos disjuntos e claim próprio.
 5. Uma revisão independente por cartão e no máximo dois retrabalhos (proposta D3). Se a revisão rejeitar duas vezes, o cartão volta para replanejamento, sem novo ciclo de crítica.
 
+<a id="escopo-par-cap-vigente"></a>
+
+Escopo vigente em 31/10/2026: **272 capacidades**, pela emenda D1 do [recibo32](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-32.json), sobre a correção para 270 do [recibo30](../04_audit/evidence/USER-DECISIONS-20261028/human-decisions-30.json). A [medida r3-denominator-272](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/measure.json) publica o hash do [catálogo versionado](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/catalog-272.json.gz); os 270 IDs e descrições anteriores ficam verbatim, com G1/SPILL-03 e G1/SESSION-07 acrescentados. Totais atuais: G1=52, G2=71, G3=56, G4=47 e G5=46. O catálogo histórico de16/10 tinha 266 capacidades. A emenda não altera os 111 cartões PAR nem seus estados, dependências ou aceites: Q01/F01 continua aberto, 355 propostas aguardam revisão semântica e as 26 relações das duas capacidades novas permanecem propostas. Não há novo ciclo de crítica por inferência, PASS funcional, autorização de BUILD ou produção. Em WEB-02, o DNS pelo proxy é exceção documentada da referência; o CVG mantém validação/fixação universal ou proxy desligado, conforme o mesmo recibo32.
+
 ## Resumo
+
+<a id="fila-nucleo"></a>
+
+### Fila de execução do núcleo — direção de27/10/2026
+
+Ricardo confirmou a prioridade de kernel estável, runtime robusto, policies, sessões, MCP e subagentes. Todos os builders devem usar o [protocolo comum do0381](0381_plano_executivo_paridade_claude_code.md#execucao-nucleo). Esta fila organiza os cartões existentes; seus estados, prioridades e dependências permanecem nas respectivas fichas abaixo. Não é uma segunda lista de status.
+
+| Entrega a selecionar      | Cartões canônicos                                       | Papel que prepara/implementa   | Primeira unidade verificável e integração                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pipeline e estado durável | PAR-K01/K03                                             | L0/L1, com L5 na prova         | Reconciliar encaminhamento público e journal já construídos; escolher o menor delta restante da jornada approval→efeito→restart, sem repetir efeito ou abandonar estado incerto          |
+| Contenção comum           | PAR-X01/X02/X03/X04                                     | L1/L4; L5 verifica             | Definir serviço de subprocesso e perfil real antes de MCP/hooks externos; provar ambiente permitido, saída/tempo, árvore de processos encerrada e ruleset aplicado no perfil que o exige |
+| Lifecycle e perfil        | PAR-K04/K05                                             | L1; L2 consome                 | Reconciliar0222 e fronteiras dos registries; troca durante uso, quiescência, rollback e controle obrigatório não removível; configuração da sessão identificada                          |
+| Sessão entre processos    | PAR-S01/S02/S04                                         | L1/L2                          | Aplicar recorte aprovado0221 após dependências; demonstrar writer exclusivo, reopen após kill e contexto/projeção recuperados. Fork preserva linhagem e não reaproveita approval         |
+| Streaming e contexto      | PAR-M01/A01/A05/C01/C02                                 | L1/L2                          | Provider e API/SDK com terminal único/cursor/backpressure; cancel e reconexão não duplicam evento; compactação preserva fatos e obrigações no perfil aprovado                            |
+| Extensões governadas      | PAR-K09/K10/T07/P01                                     | L3; L2 no host                 | Contratos de hooks/skills/MCP com origem, hash, schema e grants; primeira jornada positiva e negativos pelo mesmo pipeline. Reutilizar deltas C100, sem segundo executor                 |
+| Filhos e jobs             | PAR-K06/O01/O02/O03                                     | L4/L1                          | Contrato do supervisor antes de código: ID/linhagem, estado, subconjunto de autoridade, accounting agregado, mailbox, ownership, stop/restart e resultado terminal                       |
+| Workflows e planos        | PAR-O06/O08/O09/O13                                     | L4/L1/L2                       | Compor supervisor e sessões para workflow/goal/todo/teams; plano e mensagem são dados, efeito continua exigindo policy/approval; restart não reexecuta nó/mensagem                       |
+| Medida e regressão        | PAR-Q01/Q05/Q06                                         | L5/L0                          | Ligar requisito→SPEC→fonte→teste→receipt→verdict por referência; publicar pendentes/stale sem inventar PASS. Infraestrutura de CI informa qual aceite libera                             |
+| Entrada em produção       | Critérios0373/0374; PAR-Q08 e demais cartões aplicáveis | L0 e responsáveis operacionais | Congelar perfil/candidato/imagem, conferir barra e operação/rollback e obter decisão correspondente; função de extensão pendente não entra habilitada                                    |
+
+Papéis L0–L5 são responsabilidades descritas no0381. O claim deve apontar o executor real, revisor e paths; não atribuir automaticamente tarefas a uma sessão antiga. Dependências exatas podem exigir cartões fora da linha da tabela e continuam obrigatórias. Contrato T1 pode ser preparado em paralelo; BUILD de contrato/segurança/schema continua exigindo a decisão específica.
+
+Próxima ação do integrador: reconciliar K01/K03/K04/S01/X01–X04 com C100-Q01 e registrar a próxima fatia elegível de M1. Registrar o que falta integrar e quem possui a dependência; uma aprovação limitada, captura ou teste focal não fecha o pai.
+
+### Regra de entrega e aceite das fichas
+
+Cada próxima ação deve produzir um artefato revisável: contrato reconciliado, delta de código conectado ou prova do aceite. A tarefa declara o recorte, entrada atual, autoridade, dependências, executor, paths, caso positivo/negativo, limite e recursos antes de executar. Ao devolver, registrar fonte/digests, comando/argv/exit/bruto, resultado, limites, revisão, cleanup e próximo passo no cartão e no GBrain.
+
+Um `Hoje` ou `SPEC pendente` escrito no corte inicial não revoga recibo posterior. As próximas ações datadas abaixo mandam reconciliar esse histórico. Conservar os resultados anteriores e a decisão exata; atualizar somente a realidade comprovada, sem tratar esta mudança documental como implementação ou aceite.
 
 | Fase                               | Cartões | Esforço (dias, faixa) | P0     | P1     | P2     | P3     |
 | ---------------------------------- | ------- | --------------------- | ------ | ------ | ------ | ------ |
@@ -110,9 +143,10 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Fase F0 · prioridade P0 · tamanho M · trilha T1 · relevância hospitalar alta · estado `IN_PROGRESS`.
 - Origem: 266 capacidades da análise PARE100-GAP (G1–G5). Absorve: P100-003.
 - Hoje: Matriz de 44.132 folhas estáticas (30.586 STATIC, 13.546 UNKNOWN), sem nenhum PASS funcional; levantamento por capacidade feito em 16/10 por leitura.
-- Entrega: Revisar as 266 capacidades com fonte (caminho e commit da referência), relevância, classe (EQUIVALENTE, EQUIVALENTE_GOVERNADA ou DIVERGENTE_DECIDIDA) e procedimento de aceite. As folhas estáticas ficam como rastreabilidade, ligadas a uma capacidade.
+- Entrega: Revisar as 272 capacidades do escopo autorizado vigente com fonte (caminho e commit da referência), relevância, classe (EQUIVALENTE, EQUIVALENTE_GOVERNADA ou DIVERGENTE_DECIDIDA) e procedimento de aceite. As folhas estáticas ficam como rastreabilidade, ligadas a uma capacidade.
 - Depende de: PAR-G01.
 - Aceite: Nenhuma capacidade sem procedimento e cartão; denominador publicado com hash; qualquer mudança de escopo exige decisão registrada e nova versão da medida.
+- Próxima ação: 31/10 — L5/L0 concluem a revisão semântica no escopo 272: o [handoff das 355 propostas](../04_audit/evidence/AUD0625-PAR-Q01-CATALOG-20261031/denominator-272/review-handoff.json) conserva o histórico de revisão/retrabalho para o DF dispor o gate exato e o revisor não autor, sem reset inferido. As26 relações de SPILL-03/SESSION-07 permanecem propostas separadas; UNKNOWN, divergências e demais pendências continuam explícitos. Catálogo versionado não é freeze aceito nem medidor funcional.
 
 ### PAR-Q02 — Comparador diferencial keyless operando
 
@@ -152,6 +186,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Script que lê o catálogo e os resultados atuais e publica PASS_CURRENT/total por família e no geral, como relatório (ainda não como gate).
 - Depende de: PAR-Q01.
 - Aceite: O relatório só conta PASS_CURRENT; PARTIAL, NOT_RUN, BLOCKED e exceção pendente contam como não aprovado; o número sai do mesmo commit dos resultados.
+- Próxima ação: 27/10 — L5 implementa o relatório somente após a entrada do catálogo autorizada, distinguindo PASS_CURRENT, parcial, bloqueado, NOT_RUN e stale por fonte/candidato. Verificar que suporte de CI/testes não aumenta o numerador.
 
 ## F1 — Kernel único e contenção
 
@@ -177,10 +212,11 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 
 - Fase F1 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `IN_PROGRESS`.
 - Origem: G1/CORE-03; AUD0611 lacuna 1. Absorve: P100-010, PDSH-003b.
-- Hoje: `CONTROLLED_RUNTIME` da plataforma ainda executa fora do kernel; fatia sintética 0214 aprovada; SPEC0217 aprovada; SPEC0220 pendente.
+- Hoje, reconciliado em27/10: a main61e5 examinada já encaminha `test-lab` para `executeControlledKernel`/`createOperationalHarness`; isso não encerra recovery durável ou todos os perfis.0214/0217 e as fatias posteriores conservam seus aceites;0220 foi adiada e a qualificação corrente deve ser reconciliada pelos donos, sem repetir o adapter.
 - Entrega: API, worker e execução publicada passam pelo kernel durável, com adaptador compatível para os contratos atuais.
 - Depende de: PAR-G01.
 - Aceite: Conformidade I1–I12 verde nos três modos; teste de arquitetura prova que não sobra caminho de execução fora do kernel; restart retoma a execução.
+- Próxima ação: 27/10 — Reconciliar a delegação pública já integrada com os contratos0217/0214 e os aceites restantes; L0/L1 devem selecionar o delta que falta à jornada C100-Q01/M1 e publicar candidata, paths e prova de crash/restart sem bypass. Não reconstruir o adapter nem declarar todos os perfis aceitos por sua presença.
 
 ### PAR-K02 — Retirar as bibliotecas legadas ativas
 
@@ -194,20 +230,22 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 ### PAR-K03 — Checkpoint durável antes do modelo e do efeito
 
 - Fase F1 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `IN_PROGRESS`.
-- Origem: G1/SESSION-02, G1/LLM-03. Absorve: P100-020 (parte); SPEC0224 aprovada; SPEC0225 pendente.
+- Origem: G1/SESSION-02, G1/LLM-03. Absorve: P100-020 (parte); SPEC0224 aprovada; SPEC0225 recebeu aprovação com ajustes em16/10, vinculada ao recibo e ao recorte próprios.
 - Hoje: Journal de efeitos e step-store existem; rota RESPONSE com contexto completo aceita só em memória (R19, AUD 0616); retry não é registrado antes do backoff.
 - Entrega: Checkpoint antes da requisição ao modelo, antes de efeito externo e antes do próximo passo; tentativa de retry gravada antes do backoff; retomada pública em PostgreSQL.
 - Depende de: PAR-K01.
 - Aceite: Crash entre modelo e ferramenta, e entre ferramenta e resultado, não repete efeito em PostgreSQL real; a tentativa de retry aparece no log antes da espera.
+- Próxima ação: 27/10 — L1 deve reconciliar a entrega0225 e seu recibo de aprovação com ajustes, distinguir resultado completo no journal de recovery público e registrar a menor fatia ainda sem prova. Preservar estados STARTED/UNCERTAIN, retry e readers legados; integração/qualificação antes de consumir como dependência aceita.
 
 ### PAR-K04 — Lifecycle de capabilities com quiescência
 
 - Fase F1 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `IN_PROGRESS`.
-- Origem: G1/CORE; G4/HOST-07. Absorve: P100-012; SPEC0222 pendente.
+- Origem: G1/CORE; G4/HOST-07. Absorve: P100-012; SPEC0222 recebeu aprovação com ajustes em16/10, sem aceite integral inferido.
 - Hoje: Boot selado, ordem, rollback e dispose existem; não há gerações, recarga nem quiescência.
 - Entrega: Gerações de capability, admissão, retirada, recarga e unload com quiescência; controles imutáveis.
 - Depende de: PAR-K01.
 - Aceite: Recarga com turno em curso não perde nem duplica efeito; unload ou reordenação de controle é negado e auditado.
+- Próxima ação: 27/10 — L1 deve aplicar apenas o recorte0222 aprovado com ajustes e fixar a relação com PluginRegistry/CapabilityRegistry. Registrar API/estado/lease, troca durante uso, close/rollback e prova de quiescência; controles não podem ser removidos ou reordenados.
 
 ### PAR-K05 — Perfis e presets declarativos validados
 
@@ -217,6 +255,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Perfis nomeados com herança (base, headless, sdk, produção), presets de ferramentas, prompt e skills por sessão, persona composável.
 - Depende de: PAR-K04.
 - Aceite: Perfil ou preset sem controle obrigatório é recusado no boot; troca de preset não altera sessão já criada; persona não remove bloqueios.
+- Próxima ação: 27/10 — Após a fundação de lifecycle, L1/L2 definem perfis/presets e snapshot efetivo por sessão na SPEC; provar boot sem controle recusado, precedência e compatibilidade na retomada, antes de habilitar presets de MCP/filhos.
 
 ### PAR-K06 — Agente vivo: steering, cancelamento e espera de ociosidade
 
@@ -226,6 +265,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Registro de agentes vivos com iniciador, follow-up/steering, cancelamento e espera de ociosidade.
 - Depende de: PAR-K01.
 - Aceite: Steering entra no passo seguinte; cancelamento não executa efeito pendente de aprovação; agente de outro tenant não é visível.
+- Próxima ação: 27/10 — L4/L2 definem identidade/owner do agente vivo, steering no próximo passo, wait e cancelamento no contrato público; vincular ao supervisor e provar tenant/budget e ferramenta pendente sem efeito após cancel.
 
 ### PAR-K07 — Ferramentas paralelas com limite
 
@@ -253,6 +293,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Protocolo de hooks com eventos, matcher e merge; hooks só negam ou anexam contexto; comando externo só por allowlist e aprovação.
 - Depende de: PAR-K04.
 - Aceite: Hook nunca altera decisão de controle obrigatório; erro de hook falha fechado; toda negação de hook fica no log.
+- Próxima ação: 27/10 — L3 especifica evento, escopo, precedência e razão auditável do hook sobre o lifecycle existente; incluir positivo e erro/timeout/cancel que não removam a negação de controle.
 
 ### PAR-X01 — Serviço único de subprocesso e ambiente do filho
 
@@ -262,6 +303,8 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Serviço de spawn, grupo, kill, wait e dispose usado por shell, MCP stdio, LSP e conversão de documentos; ambiente do filho por allowlist.
 - Depende de: PAR-G01.
 - Aceite: Depois de cancel, timeout ou dispose nenhum processo da árvore sobra (verificado em `/proc`); o filho não vê variáveis do host.
+- Próxima ação: 27/10 — L1/L4 fecham o contrato único spawn/group/kill/wait/dispose e allowlist de ambiente; reservar recursos próprios e produzir prova nativa da árvore encerrada para shell e futuros consumidores MCP/hooks, com erro primário preservado.
+- Preparação de 27/10: [escolha proposta de mecanismo X01](../04_audit/evidence/CORE-X01-MECHANISM-81C4-20261027/DECISION.md), com cgroup próprio, identidade estável e supervisor independente; não é SPEC adotada ou BUILD. A baseline do runner existente passou em dois cenários de encerramento e confirmou, em experimento separado, dependência do timeout no owner pausado. Os 17 procedimentos do mecanismo novo continuam NOT_RUN; HOW/ABI/perfis e gate T3 permanecem abertos.
 
 ### PAR-X02 — Landlock real e relatório honesto de contenção
 
@@ -271,6 +314,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Probe de ABI por syscall e ruleset aplicado no processo filho (helper nativo pequeno); o campo deixa de afirmar suporte só pela versão.
 - Depende de: PAR-X01.
 - Aceite: Sem ruleset aplicado, `requireLandlock` falha fechado; teste nativo mostra escrita fora do workspace negada pelo Landlock.
+- Próxima ação: 27/10 — Depois do serviço de subprocesso, fixar helper/ABI/roots/direitos na SPEC e provar aplicação real do ruleset; separar suporte do host de enforcement efetivo e recusar o perfil requireLandlock sem prova.
 
 ### PAR-X03 — Testes nativos de contenção e limites de recurso
 
@@ -280,6 +324,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: no-new-privs, seccomp e limites (rlimits ou cgroups); suíte nativa de fuga.
 - Depende de: PAR-X02.
 - Aceite: Escrita fora, leitura de `/etc/shadow` e `~/.ssh`, rede, symlink e hardlink de fuga e fork bomb são negados em teste nativo.
+- Próxima ação: 27/10 — L5 fixa oráculos e recursos sintéticos antes do ensaio nativo; provar os escapes e limites do aceite no perfil e fonte identificados, discriminando falha de infraestrutura de recusa de segurança.
 
 ### PAR-X04 — Enforcement por efeito e política de sandbox por sessão
 
@@ -289,6 +334,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Modos read-only e workspace-write por sessão ou tenant, persistidos; enforcement de arquivo, rede e processo reportado como fato.
 - Depende de: PAR-X02.
 - Aceite: Contenção parcial ou indisponível é recusável pelo chamador; a política da sessão sobrevive a restart.
+- Próxima ação: 27/10 — L1/L4 definem classificação de efeito e perfil de sandbox persistido por sessão; provar restart e recusa de contenção parcial, sem tratar a classificação de uma capability como grant.
 
 ## F2 — Modelo, sessão e contexto
 
@@ -321,6 +367,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Stream por provider com cancelamento, usage parcial e exatamente um resultado terminal.
 - Depende de: PAR-K03.
 - Aceite: Todo stream termina em sucesso, falha ou cancelamento; corte de conexão não grava resposta parcial como final.
+- Próxima ação: 27/10 — L1/L2 fixam o contrato de chunks, usage parcial, cancel e terminal único no gateway; positivos e conexão interrompida devem passar pelo provider sintético suportado, sem registrar resposta parcial como final.
 
 ### PAR-M02 — Requisição congelada antes do adaptador
 
@@ -352,11 +399,12 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 ### PAR-S01 — Persistência pública de sessão entre processos
 
 - Fase F2 · prioridade P0 · tamanho G · trilha T3 · relevância hospitalar alta · estado `TODO`.
-- Origem: G1/SESSION-01 (presente) e ownership entre processos. Absorve: P100-015, P100-020; SPEC0221 pendente.
+- Origem: G1/SESSION-01 (presente) e ownership entre processos. Absorve: P100-015, P100-020; SPEC0221 recebeu aprovação com ajustes em16/10; aplicar o recorte exato antes de BUILD.
 - Hoje: Store append-only em PostgreSQL com RLS e catálogo v1 existe; ownership entre processos e transição com writers antigos não existem.
 - Entrega: Mesmo log v1 com ownership entre processos, adoção explícita de metadata e recusa de writer antigo.
 - Depende de: PAR-K03.
 - Aceite: Dois processos escrevem e leem o mesmo log sem lacuna nem duplicata; writer antigo é recusado; outro tenant não lê nada.
+- Próxima ação: 27/10 — L1/L2 reconciliam a0221 com os ajustes já aprovados e a ordem0029→0030→0031; fixar os métodos do recorte, ownership e transição de writers antes de implementar. Provar dois processos/kill/reopen, sequência íntegra, writer antigo e tenant errado recusados.
 
 ### PAR-S02 — Projeções de sessão com cache
 
@@ -366,6 +414,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Projeções reconstruídas do log (estado atual, pendências, metas, todos) com cache de checkpoint.
 - Depende de: PAR-S01.
 - Aceite: Projeção reconstruída do zero é igual à do cache; cada item cita o evento de origem.
+- Próxima ação: 27/10 — L1 define projeções/versão/cursor e autoridade do log existente; provar reconstrução do zero versus cache, origem de cada pendência e recovery, sem criar outro store para goals/todos/filhos.
 
 ### PAR-S03 — Estatísticas, esboço de turnos e título
 
@@ -384,6 +433,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Fork semeado com turnos concluídos, sem herdar aprovações pendentes.
 - Depende de: PAR-S01.
 - Aceite: Fork mantém tenant e linhagem; aprovação pendente do original não vale no fork.
+- Próxima ação: 27/10 — L1/L2 definem a fronteira entre resume e fork, ID/tenant/linhagem e contexto semeado; demonstrar retomada pública e filho/fork sem reutilização de approval do original.
 
 ### PAR-S05 — Consulta de sessões com rastreio
 
@@ -420,6 +470,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Condensação com requisição de modelo sob pressão de tokens, nova tentativa após overflow, preservando fatos, obrigações e aprovações.
 - Depende de: PAR-M01, PAR-K03.
 - Aceite: Aprovação pendente e obrigação aberta sobrevivem à compactação (teste por fato); overflow não chega ao provider sem compactar antes; compactação cancelada não grava resumo.
+- Próxima ação: 27/10 — L1 define pressão, facts/obrigações/approvals preservados e procedimento do perfil aprovado; provar positivo e overflow/cancel sem promover conteúdo não confiável a instrução ou autorização.
 
 ### PAR-C02 — Pressão de tokens antes do dispatch
 
@@ -429,6 +480,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Pressão calculada antes de cada chamada, com usage por tentativa, inclusive falhas.
 - Depende de: PAR-M01.
 - Aceite: A projeção de pressão bate com o usage reconstruído do log.
+- Próxima ação: 27/10 — L1 vincula o cálculo de pressão à sessão/projeção e configurações identificadas; fixar o método e os casos de overflow antes do ensaio, preservando limites de budget e chamadas ao provider.
 
 ### PAR-C03 — Spill de saídas grandes e poda de resultados
 
@@ -535,6 +587,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Descoberta por origem com precedência, hash aprovado, observação de mudanças e ferramenta de catálogo para o modelo.
 - Depende de: PAR-K05.
 - Aceite: Skill que exige ferramenta fora do grant falha ao carregar; skill sem hash aprovado não entra no catálogo.
+- Próxima ação: 27/10 — L3 reconcilia o recorte de inspeção0255 e seus pré-requisitos com o loader runtime; especificar SKILL.md/discovery/corpo sob demanda por fatias, origem/hash e requiredTools, sem transformar inspeção offline em admissão ou grant.
 
 ### PAR-T09 — Registro de workspaces e sessões por tenant
 
@@ -571,6 +624,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Canal de eventos por sessão (SSE ou WebSocket) com cursor de retomada, cancelamento, backpressure e RLS.
 - Depende de: PAR-S01, PAR-M01.
 - Aceite: Dois tenants assinando ao mesmo tempo não veem eventos um do outro; queda e reconexão não perdem nem duplicam evento.
+- Próxima ação: 27/10 — L2 fixa transporte de eventos/cursor/backpressure sobre sessão e streaming já qualificados; demonstrar reconnect, consumidor lento e isolamento concorrente de tenants antes de consumidores ao vivo.
 
 ### PAR-A02 — Controle ao vivo de turno e sessão pela API
 
@@ -598,6 +652,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Notificações `session.event`, `session.status` e término de filho, com assinatura por sessão e backpressure.
 - Depende de: PAR-A01.
 - Aceite: Perda ou duplicação de notificação é detectada pelo cursor; versão incompatível é recusada.
+- Próxima ação: 27/10 — L2 especifica assinatura/cursor, status e detecção de lacuna/duplicata para clientes TS/Python; provar paridade dos dois clientes na mesma fixture e preservar a diferença entre notificação e conclusão do turno.
 
 ### PAR-A06 — Cliente de alto nível e prompt multimodal no SDK
 
@@ -643,6 +698,8 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Cliente MCP como adaptador de capabilities: allowlist de servidores por tenant, credencial por servidor, classificação de efeito obrigatória, validação de schema, recursos e instruções limitadas.
 - Depende de: PAR-X02, PAR-T12.
 - Aceite: Ferramenta externa só executa pelo pipeline (policy, aprovação, journal); servidor desconhecido, schema hostil e timeout são recusados; processo stdio morre no dispose.
+- Próxima ação: 27/10 — L3 prepara a SPEC do cliente MCP com L2/L4: transportes stdio/HTTP do recorte, handshake, tenant/servidor/credencial, schema/classificação, caps/timeout/cancel/reconnect e posse do processo. Congelar os positivos de interoperabilidade e negativos; BUILD só após dependências/gate, ferramenta sempre pelo kernel.
+- Preparação de 27/10: [SPEC0266 — cliente MCP governado](../02_spec/0266_governed_mcp_client.md), proposta T1 com codecs 2025/2026, stdio/HTTP, 27 cenários NOT_RUN e rastreabilidade dos 11 requisitos CC18-04. R1 pediu três correções de desenho; a revisão R2 aceita a reparação do rascunho no SHA a62f86c0, com zero correções obrigatórias nesse escopo. Isso não concede TECHNICALLY_SPECIFIED ou BUILD. Portas X01/egress/credenciais/MRTR, schemas/SDK/caps e revisão humana T3 continuam pré-requisitos. Esta referência não altera status, dependências ou aceite.
 
 ## F4 — Orquestração
 
@@ -670,6 +727,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Registro de subagentes e driver no mesmo kernel (spawn e fork); filho recebe subconjunto de ferramentas, orçamento e tenant; linhagem no audit.
 - Depende de: PAR-K06, PAR-S04.
 - Aceite: Filho nunca executa ferramenta fora do grant do pai; falha do filho volta como erro; linhagem correta na auditoria.
+- Próxima ação: 27/10 — L4/L1 preparam a SPEC do supervisor no mesmo runtime: spawn/fork, ID/linhagem, contexto, grants por interseção, reserva de budget e limites depth/fanout. Provar filho autorizado, tentativa fora do grant e cancelamento, sem herdar approval reutilizável.
 
 ### PAR-O02 — Filhos continuáveis com mailbox durável
 
@@ -679,6 +737,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Enviar mensagem, interromper e listar filhos, com mailbox em PostgreSQL e retomada.
 - Depende de: PAR-O01.
 - Aceite: Restart retoma a mensagem sem entregar duas vezes; filho de outro tenant não é endereçável.
+- Próxima ação: 27/10 — L4/L1 especificam envelope/ID/ack/dedup, owner e estados da mailbox no mesmo domínio de sessão; provar entrega/retomada após crash, tenant errado e duplicata, conservando a causa de falha.
 
 ### PAR-O03 — Jobs de agente em segundo plano
 
@@ -688,6 +747,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Iniciar, listar, ler saída e encerrar jobs com posse por sessão; aviso de conclusão que acorda o agente com teto.
 - Depende de: PAR-S01, PAR-A01.
 - Aceite: Crash, retry e duplicata não criam efeito extra; só o dono lê ou encerra o job.
+- Próxima ação: 27/10 — L4/L2 definem ciclo start/list/attach/logs/stop/respawn com posse por sessão e journal; provar estado parcial/erro final, leitura por não dono recusada e recuperação sem efeito extra.
 
 ### PAR-O04 — Agendamento persistente com entrega idempotente
 
@@ -715,6 +775,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Workflow com agentes, paralelo, pipeline e fases, checkpoints e execução em segundo plano; a forma (script do modelo ou definição declarativa) sai da decisão D4.
 - Depende de: PAR-O01, PAR-O03.
 - Aceite: Workflow interrompido retoma do checkpoint; reexecução mantém um efeito; cancelamento vira erro, nunca sucesso parcial.
+- Próxima ação: 27/10 — L4 define estados, nós, dependências, checkpoint e compensação/estado incerto no contrato do workflow; usar supervisor e sessão existentes. Provar interrupção entre nós e retomada, cancelamento e efeito não repetido.
 
 ### PAR-O08 — Goal durável por sessão
 
@@ -724,6 +785,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Goal persistido com compare-and-set, ferramentas de leitura e atualização, driver de rodadas com limite e comandos de operador.
 - Depende de: PAR-S02.
 - Aceite: Corridas de pausa, parada e rodada preservam a intenção; goal encerrado não reabre; goal nunca concede autorização.
+- Próxima ação: 27/10 — L4/L1 definem versão e transições do goal como projeção da sessão; testar corridas pause/stop/round e proibir goal encerrado de reabrir ou conceder permissão de efeito.
 
 ### PAR-O09 — Modo de planejamento e todos da sessão
 
@@ -733,6 +795,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Plano revisável aprovado antes de efeitos; lista de todos por sessão com posse e projeção.
 - Depende de: PAR-S02, PAR-T11.
 - Aceite: Aprovar o plano não aprova efeito; todos são dado não autoritativo.
+- Próxima ação: 27/10 — L2/L4 especificam plano/todos versionados e passagem governada; provar revisão/consulta e vínculo da decisão ao plano atual. Approval de plano não substitui approval de efeito.
 
 ### PAR-O10 — PTC: programas do modelo em Node contido
 
@@ -1069,6 +1132,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Roster com limite, mailbox durável, quadro de tarefas com DAG e versão otimista, ferramentas, perfil e UI.
 - Depende de: PAR-O02, PAR-O06.
 - Aceite: Mensagens e DAG sobrevivem a restart; duplicata não executa duas vezes; conflito de versão é explícito.
+- Próxima ação: 27/10 — Após mailbox/workflow qualificados, L4 define ownership/versionamento do quadro e mensagens; demonstrar restart, dedup e conflito explícito, mantendo cada membro sob budget/grants herdados.
 
 ### PAR-O07 — Loop Ralph
 
@@ -1105,6 +1169,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Execução de configurações de hooks de outras ferramentas sob o protocolo do PAR-K09.
 - Depende de: PAR-K09.
 - Aceite: Comando não revisado não roda; ponte nunca altera controle obrigatório.
+- Próxima ação: 27/10 — L3/L2 mapeiam somente eventos e handlers confirmados nas referências fixadas; declarar diferenças/equivalências e provar que a ponte usa o executor governado, sem conceder execução ao comando não revisado.
 
 ### PAR-I09 — Telemetria de produto e identidade anônima
 
@@ -1224,6 +1289,7 @@ Os cartões P100 continuam com seu histórico no 0378. Depois do PAR-G01, o stat
 - Entrega: Snapshot por superfície (SDK, sessão, API, web), diferenciais e medidor como checks obrigatórios.
 - Depende de: PAR-Q05, PAR-Q02.
 - Aceite: Regressão de capacidade já aprovada derruba o CI.
+- Próxima ação: 27/10 — L5/L0 ligam medidor/diferenciais aceitos ao CI no contrato correspondente; controle conhecido adulterado e regressão de capacidade devem falhar. Não remover gates existentes para reduzir custo de certificação.
 
 ### PAR-Q07 — Recuperação, concorrência e performance
 

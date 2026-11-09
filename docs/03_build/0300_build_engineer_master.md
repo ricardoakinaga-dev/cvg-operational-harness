@@ -1,5 +1,7 @@
 # 0300 — Build Engineer Master
 
+> Remediação 0626 em execução por pedido do usuário: [auditoria funcional](../04_audit/0626_full_functional_audit_2026-10-30.md) → [plano de execução integral](0626_remediation_execution_plan.md) → [contrato por tarefa](../02_spec/0626_audit_remediation_contract.md). Os quinze apontamentos e três condições de qualificação têm rastreio próprio; implementação privada, revisão e integração são estados separados. Estado e deltas aos ledgers estão no [handoff](../08_runtime/handoffs/aud0626_remediation.md). Produção `NO_GO`.
+
 > Ciclo corrente AUD51 (24/09/2026): [roadmap 0346](0346_aud29_roadmap.md) → [backlog A29](0347_aud29_backlog.md) → [handoff 0348](0348_next_stage_c1_decision.md) → [pedido C1L](../04_audit/evidence/AUD-20260924/M07-S1-C1L/approval-request.md) → [resultado C1J](../04_audit/evidence/AUD-20260924/M07-S1-C1J/final-gate-result.md). C1L SHA-256 `0a6dd3efa5bc3a45b8e42062680b338e58e3b4e45a924dd177d6a12b77601f6c` aguarda aprovação para matriz local limitada. M07-S1 continua `FAIL / OPEN`; S2/S3/S4 e M05 bloqueadas; produção `NO_GO`.
 
 > Histórico AUD31 (24/09/2026): [auditoria 0570](../04_audit/0570_r1_delivery_repository_reaudit_2026-09-24.md) → [roadmap 0346](0346_aud29_roadmap.md) → [backlog 0347](0347_aud29_backlog.md) → [próxima etapa 0348](0348_next_stage_c1_decision.md). O gate C1 foi aprovado, mas o freeze parou em exit 64 porque o scanner rejeitou a pasta C1. A decisão seguinte era o gate C1E, agora histórico.

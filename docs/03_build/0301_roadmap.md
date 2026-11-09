@@ -1,5 +1,7 @@
 # 0301 — Roadmap
 
+> Remediação 0626: o [plano de execução](0626_remediation_execution_plan.md) define reconciliação, certificador, núcleo, produto, qualificação e entrega documental. Progresso e dependências são atualizados naquele plano e no [handoff](../08_runtime/handoffs/aud0626_remediation.md); testes focais não substituem os gates do candidato integrado. Status `IN_PROGRESS`, produção `NO_GO`.
+
 > Ciclo corrente AUD51: [0346 roadmap](0346_aud29_roadmap.md) → [0347 backlog](0347_aud29_backlog.md) → [0348 próxima etapa](0348_next_stage_c1_decision.md) → [pedido C1L](../04_audit/evidence/AUD-20260924/M07-S1-C1L/approval-request.md) → [resultado C1J](../04_audit/evidence/AUD-20260924/M07-S1-C1J/final-gate-result.md). C1L aguarda aprovação pelo SHA-256 `0a6dd3efa5bc3a45b8e42062680b338e58e3b4e45a924dd177d6a12b77601f6c` para reteste local limitado. C1K ficou `STOPPED_UNAVAILABLE`; M07-S1 e M05 continuam bloqueados.
 
 > Histórico C1/C1E: o fixture C1 foi corrigido, o scanner rejeitou a pasta de saída, e C1E depois executou sua matriz. Os resultados estão em [C1](../04_audit/evidence/AUD-20260923/M07-S1-R1-C1/final-gate-result.md) e [C1E](../04_audit/evidence/AUD-20260923/M07-S1-R1-C1E/final-gate-result.md); ambos são históricos.

@@ -8,6 +8,12 @@
 
 ## Resumo para decisão
 
+Atualização de27/10/2026, por direção explícita de Ricardo: a prioridade de execução é estabilizar e qualificar **kernel/runtime e controles**, depois continuidade de sessões/streaming, extensões MCP/skills/hooks e orquestração supervisionada. O [protocolo comum do núcleo](0381_plano_executivo_paridade_claude_code.md#execucao-nucleo) governa tarefa, posse, prova e integração dos dois programas; o0380 continua dono de todos os estados PAR.
+
+Os números, lacunas e calendário abaixo pertencem ao levantamento de16/10. Avanços posteriores devem ser reconciliados por fonte/recibo no cartão, sem reconstruir o que já foi entregue. O recorte de prioridade não reduz o escopo aprovado, não exclui F6 nem substitui os aceites.
+
+Escopo vigente em 31/10/2026: **272 capacidades**, conforme os [recibos30 e32 e a medida versionada do Q01](0380_backlog_paridade_100_deepseek.md#escopo-par-cap-vigente). O levantamento de 266 e suas estatísticas abaixo são históricos de16/10; não foram recalculados nem promovidos a resultado atual. O freeze do Q01 permanece aberto, a paridade continua `NOT_MEASURED` e a ampliação documental não concede BUILD ou produção.
+
 - **Ponto de partida:** das 266 capacidades da referência levantadas em 16/10, o CVG tem 9 presentes, 76 parciais e 175 ausentes; 6 são divergência deliberada ou não se aplicam. A cobertura indicativa por leitura é de cerca de **18%** (parcial vale meio). Nenhuma capacidade tem ainda `PASS_CURRENT`.
 - **Por que não 70%:** a [auditoria 0611](../04_audit/0611_harness_deepseek_pairing_2026-10-14.md) mediu só o motor, com peso alto em governança, onde o CVG é forte. Aqui cada capacidade conta igual e entram interface, orquestração, protocolos e ferramentas, onde o CVG quase não tem nada.
 - **Tamanho:** 111 cartões, cerca de **1.440 dias de engenharia** (faixa de 950 a 1.890).
@@ -26,7 +32,7 @@
 | G5 — aplicações, interface e interação  | 46          | 3         | 10       | 33       | —                  |
 | **Total**                               | **266**     | **9**     | **76**   | **175**  | **6**              |
 
-Lacunas que mais pesam, confirmadas no código:
+Lacunas do levantamento de16/10, confirmadas naquele código; conferir o cartão e a fonte atual antes de usá-las como diagnóstico:
 
 - O gateway de modelo não faz streaming (`stream: false` nos providers) e a API não tem SSE nem WebSocket. Console ao vivo, SDK com notificações e jobs observáveis dependem disso.
 - O Landlock é inferido pela versão do kernel e nenhum ruleset é aplicado. A contenção real hoje é o bubblewrap.
@@ -37,7 +43,7 @@ O CVG já tem mais que a referência em identidade de operador com OIDC e sessã
 
 ## O que significa 100% (decisões D1, D2 e D4)
 
-1. **Denominador:** o catálogo PAR-CAP v1, com as 266 capacidades revisadas no PAR-Q01, cada uma com fonte na referência, procedimento de aceite e cartão. As 44.132 folhas estáticas da matriz P100-003 ficam como rastreabilidade de cada capacidade, não como denominador. Uma folha estática não é um comportamento testável.
+1. **Denominador:** o escopo autorizado do catálogo PAR-CAP v1 tem 272 capacidades; sua revisão e freeze continuam abertos no PAR-Q01. Cada capacidade exige fonte na referência, procedimento de aceite e cartão. As 44.132 folhas estáticas da matriz P100-003 ficam como rastreabilidade de cada capacidade, não como denominador. Uma folha estática não é um comportamento testável.
 2. **Numerador:** capacidades com `PASS_CURRENT` no medidor PAR-Q05. `PARTIAL`, `NOT_RUN`, `BLOCKED` e exceção pendente não contam. Uma falha de autorização, isolamento, efeito duplicado ou recuperação bloqueia o aceite mesmo com percentual alto, como no 0376.
 3. **Classes de capacidade:**
    - `EQUIVALENTE`: mesmo comportamento observável.
@@ -94,10 +100,12 @@ Leitura do calendário:
 - Agentes podem codificar mais rápido que pessoas, mas o PARE100 entregou 2 cartões de higiene em três dias com o processo atual. A velocidade real (dias estimados entregues por semana) será medida nos dois primeiros sprints e o calendário recalculado com ela. Até lá, as datas acima são a referência.
 - O caminho crítico de M3 é PAR-G01 → PAR-K01 → PAR-K03 → PAR-S01 → PAR-A01 → PAR-O03 → PAR-O04 → PAR-U03 → PAR-Q06 → PAR-Q07 → PAR-Q09. Ele encurta se os contratos de PAR-K03, PAR-S01 e PAR-A01 forem congelados cedo, para que os dependentes comecem sobre o contrato e não sobre a entrega final.
 
-## Primeiro sprint (duas semanas)
+## Primeiro sprint planejado em16/10 (histórico)
+
+O plano abaixo registra a seleção inicial; PAR-G01 já possui fechamento no0380. Na retomada de27/10, usar a fila prioritária e o protocolo comum para reconciliar os saldos reais. Não repetir commit, decisão humana ou qualificação já concluída por ler esta lista histórica.
 
 1. **PAR-G01:** o Codex faz commit, em branch própria, do trabalho da worktree em `/tmp` e integra a migration 0029. Os cinco gates T3 pendentes foram decididos em 16/10/2026 (0221, 0222 e 0225 aprovadas com ajustes; 0220 e 0226 adiadas), [registro](../04_audit/evidence/USER-DECISIONS-20261016/spec-gates.json).
-2. **PAR-Q01 e PAR-Q05:** congelar o catálogo PAR-CAP v1 a partir das 266 capacidades e publicar o medidor com a linha de base real.
+2. **PAR-Q01 e PAR-Q05:** concluir a revisão e congelar o catálogo PAR-CAP v1 no escopo autorizado de 272 capacidades, depois publicar o medidor com a linha de base real.
 3. **Em paralelo, com caminhos disjuntos:** PAR-K01 continua com o Codex (dono do P100-010); PAR-X01 e depois PAR-X02 (Landlock real, P0 de segurança, independente do resto); PAR-Q03 (kit de testes).
 4. **Saída do sprint:** denominador congelado, medidor com número real, serviço de subprocesso integrado e contrato do Landlock revisado. Nada de declaração antecipada de paridade.
 
@@ -149,6 +157,20 @@ Registro da decisão:
 | Vários agentes no mesmo checkout                                                 | Claim por cartão, caminhos disjuntos, integrador único (D6)                                             |
 
 ## Continuidade
+
+### Ordem de convergência do núcleo em27/10
+
+| Frente de prioridade    | Cartões existentes e resultado a integrar                                      | Condição de passagem                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Fundação                | PAR-K01/K03/K04 e X01–X04; um só caminho governado, estado durável e contenção | Jornada pública com approval, crash/restart e negativos; não basta o adapter ou o parser passar                                       |
+| Continuidade            | PAR-S01/S02/S04, M01, A01/A05 e C01/C02                                        | Ownership entre processos, contexto/projeção, fork sem herdar approval, stream com cursor e terminal único                            |
+| Extensões               | PAR-K05/K09/K10/T07/P01, com as dependências próprias                          | Configuração e lifecycle preservam controles; MCP/skill/hook têm SPEC concreta, interoperabilidade e provas de falha                  |
+| Orquestração            | PAR-K06/O01/O02/O03/O06/O08/O09/O13                                            | Filhos/jobs/workflows com grants limitados, contabilização agregada, cancelamento e retomada sem efeito extra                         |
+| Qualificação e operação | PAR-Q01/Q05/Q06 e critérios da0373/0374 para o perfil selecionado              | Evidência por capacidade na mesma candidata; medidores não contam infraestrutura como paridade; perfil não habilita funções pendentes |
+
+Esta é uma ordem de seleção e convergência, não substituição do grafo. Preparação documental pode ser paralela; código espera os contratos, dependências e gates exatos. O [roadmap Claude0382](0382_roadmap_paridade_claude_code.md) detalha M1–M4 como jornadas compartilhadas, mantendo M5–M7 no alvo Claude e todos os marcos deste programa DeepSeek.
+
+Próxima ação de coordenação: o integrador deve reconciliar o que já foi entregue em K01/K03/K04/S01 e na contenção, apontar o bloqueio real da próxima jornada e registrar executor, paths e prova no0380. Infraestrutura de CI indica o critério que desbloqueia e sua condição de saída. O produto de validação e a instalação hospitalar mantêm seus gates próprios; não passam a conduzir o backlog do kernel.
 
 - O medidor PAR-Q05 publica o percentual por família toda semana. O roadmap é revisto ao fim de cada marco e depois dos dois primeiros sprints.
 - Mudança de escopo, de classe de capacidade ou da referência entra como decisão registrada e nova versão do catálogo.

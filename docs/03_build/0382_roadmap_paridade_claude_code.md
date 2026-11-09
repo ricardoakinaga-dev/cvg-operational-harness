@@ -1,6 +1,8 @@
 # 0382 — Roadmap de paridade funcional Claude Code
 
-Programa `CLAUDE100`, 17/10/2026. [Plano executivo 0381](0381_plano_executivo_paridade_claude_code.md) define escopo, referência, medida e autoridade. [Backlog 0383](0383_backlog_paridade_claude_code.md) contém estado e dependências C100; [0380](0380_backlog_paridade_100_deepseek.md) continua proprietário dos PAR; [catálogo](tracking/claude100_catalog_v1.json) contém os 134 requisitos iniciais obrigatórios das 16 famílias:117 resultados comparáveis e17controles CVG, com oráculos distintos e conclusão conjunta. Estado do roadmap: proposto, sem BUILD iniciado.
+Programa `CLAUDE100`, criado em17/10/2026 e atualizado documentalmente em27/10 por pedido de Ricardo. [Plano executivo 0381](0381_plano_executivo_paridade_claude_code.md) define escopo, referência, medida e autoridade. [Backlog 0383](0383_backlog_paridade_claude_code.md) contém estado e dependências C100; [0380](0380_backlog_paridade_100_deepseek.md) continua proprietário dos PAR; [catálogo](tracking/claude100_catalog_v1.json) contém os134 requisitos iniciais obrigatórios das16 famílias:117 resultados comparáveis e17 controles CVG. Há entregas de suporte locais registradas no0383; a jornada M1 e a paridade integral continuam sujeitas aos próprios aceites. A frase inicial de17/10 “sem BUILD iniciado” é histórica, não o estado atual de todas as fatias.
+
+Direção de execução: **núcleo e runtime primeiro, com policies transversais; sessões, MCP e subagentes são capacidades centrais**. Todos os agentes aplicam o [protocolo comum do0381](0381_plano_executivo_paridade_claude_code.md#execucao-nucleo), incluindo contrato de tarefa, posse, prova e integração. A aplicação consumidora serve para validar o núcleo.
 
 ## Regra de sequenciamento
 
@@ -57,6 +59,17 @@ O desenho resume a ordem; dependências exatas por task estão no 0383. Por exem
 
 Não há percentuais artificiais atribuídos aos marcos. O percentual funcional considera os117resultados comparáveis com receipts válidos; os17controles adicionais têm seu próprio gate obrigatório com SPEC/provas CVG; um marco não acrescenta automaticamente uma fração fixa de progresso.
 
+### Saídas prioritárias que os agentes devem produzir
+
+| Marco | Próxima definição/integração                                                                                                         | Verificação que precisa discriminar falha                                                                                                                      |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1    | L0/L1/L5 reconciliam kernel, journal, sessão e contenção com C100-Q01; explicitar a fatia ainda faltante e a autoridade já concedida | READ autorizado, WRITE pendente sem corpo executado, aprovação vinculada e retomada; restart e retry produzem um efeito, tenant/binding adulterado recusados   |
+| M2    | L1/L2 fecham ownership, projeções, fork, contexto, stream/cursor e budget agregado                                                   | Processo2 recupera a mesma sessão; fork não herda approval; desconexão não perde/duplica evento; parcial não vira final; dois consumidores não ampliam o saldo |
+| M3    | L3 define e constrói a fatia MCP/skills/hooks, com L2 para o servidor do host e L5 para interoperabilidade                           | Servidor conhecido funciona; desconhecido, schema hostil, credencial errada e grant ausente falham; timeout/cancel encerram recursos e preservam causa         |
+| M4    | L4/L1 definem supervisor, mailbox, jobs/workflow e accounting; L2 fornece controle público e L5 julga                                | Filho/neto não ampliam autoridade; fanout/depth/budget limitados; cancel/restart/respawn não duplicam mensagem ou efeito; erro de cleanup não fabrica sucesso  |
+
+Aplicar os pré-requisitos exatos de cada cartão, inclusive os que vêm de outra fase. As linhas são resultados a integrar, não autorização de executar tudo em paralelo. Policies, audit, journal, isolamento e cancelamento fazem parte de todas as saídas. Preparar SPEC de MCP e supervisor pode ocorrer em paralelo com a reconciliação da fundação; seu BUILD depende do contrato e do gate correspondentes.
+
 ## Caminhos críticos e dependências herdadas
 
 O grafo inclui 37 deltas C100 e 58 PAR únicos no fecho conservador, sem contar carriers opcionais como dependências obrigatórias. O caminho crítico nominal inicial é:
@@ -92,9 +105,9 @@ Valores arredondados para cima; o [modelo](../04_audit/evidence/CLAUDE100-PLAN-2
 
 Após dois sprints, publicar dias estimados aceitos por semana, lead time, retrabalho e espera. Recalcular prazo com capacidade real e o grafo atualizado, sem mudar a barra de 100%. Datas só são fixadas quando equipe, acessos e gates estiverem disponíveis.
 
-## Primeiro sprint: retirar incertezas e demonstrar o núcleo
+## Primeiro sprint planejado em17/10 (histórico)
 
-Sprint proposto de duas semanas; execução e capacidade nominal ainda não alocadas. Meta principal: catálogo comparável e uma fatia de execução apta a começar, não “paridade pronta”.
+O desenho inicial propôs duas semanas para catálogo comparável e uma fatia de execução apta a começar, sem declaração de paridade. G01–G04 e unidades de suporte já têm resultados no0383. Na retomada de27/10, aplicar as saídas prioritárias e a próxima ação atual deste roadmap; a lista original abaixo não ordena refazer entregas encerradas.
 
 1. L0/L5: G01 e G02, conferindo pin, fontes, variantes e oráculos. Mapear desde o primeiro dia o acesso necessário a cloud/IDE/gateway, sem abrir conta ou usar credencial real implicitamente.
 2. L0/L1: G03 em paralelo documental, conferindo o que já foi integrado, aceito e rejeitado nas candidatas/worktrees. Não desfazer ou mover trabalho ativo de outro agente.
@@ -125,4 +138,6 @@ Pontos de replanejamento: fim de G03; dois primeiros sprints; mudança da refer�
 
 ## Próxima ação
 
-Executar **C100-G01** na trilha documental, depois G02/G03. Os estados de execução estão no 0383 e nos PAR originais. A candidata estável e a [produção 0374](0374_plano_producao_harness.md) permanecem em trilha própria; nenhum marco autoriza dados reais, push ou deploy por inferência.
+Em27/10, **reconciliar a próxima fatia material de C100-Q01/M1** com as dependências PAR e os recibos existentes; não repetir G01–G04 documentais já registrados como concluídos no0383. Registrar owner real, SHA, gate, paths, critério bloqueado e próxima prova antes do BUILD. Preparar os contratos MCP e supervisor nas frentes correspondentes. Os estados de execução permanecem no0383 e nos PAR originais.
+
+Para produção, seguir as dez condições da0373 e a [trilha0374](0374_plano_producao_harness.md) no mesmo commit/imagem e no perfil selecionado. Funções MCP/subagentes habilitadas nesse perfil exigem seus aceites; M1 não as libera. Paridade completa e piloto do consumidor continuam decisões distintas. Nenhum marco autoriza dados reais, push ou deploy por inferência.

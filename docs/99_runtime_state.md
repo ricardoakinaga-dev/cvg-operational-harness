@@ -1,3 +1,10 @@
+# MAIN-CONSOLIDATION — concluída, somente main — 19/10/2026
+
+- `status: COMPLETED` desta consolidação. [PR #4](https://github.com/ricardoakinaga-dev/cvg-operational-harness/pull/4) integrado por squash protegido em `3704e3f8`; árvore idêntica à revisão `da35382a` qualificada. [Resultado verificável](04_audit/evidence/MAIN-CONSOLIDATION-20261018/completion.json).
+- `last_completed_action`: 9 checks PASS; 35 gates, 34 seals e 56 artefatos conferidos por hash; atestação e proveniência independentes PASS. 5.700 unitários PASS, zero falhas/pendências; cobertura, PostgreSQL, E2E, três browsers, imagem e certificação completa aprovados. Certificação `AAA_CONTROLLED/CONDITIONAL_GO`, sem release de produção.
+- Checkout principal em `main`; somente `main` como branch local e remota. Snapshot final verificado e restaurado cobre 29 worktrees, commits e deltas anteriores à ativação. 87 arquivos recebidos conferidos; três paths antigos renomeados; todos os paths protegidos retidos sem escrita ou perda observada. Arquivos documentais pendentes continuam no workspace, deliberadamente preservados.
+- `next_action`: nenhuma para a consolidação. Frentes experimentais e programas em andamento seguem íntegros e sujeitos aos próprios gates; o arquivamento de branches não os aprova, cancela ou conclui. Recuperação privada: `/home/ricardo/cvg-main-consolidation-20261018/RECOVERY.md`.
+
 # MAIN-CONSOLIDATION — reparo do E2E hospedado — 19/10/2026
 
 - `status: IN_PROGRESS`. Verify39190236719 chegou ao E2E após5700unit/zero pending, cobertura e gates de integraçãoPASS, mas falhou antes dos testes no coletor Gitdiff do Playwright. Diff real1,897GB e repro privada confirmada. [Task finita](04_audit/evidence/MAIN-CONSOLIDATION-20261018/playwright-diff-metadata-task.md), [evidência](04_audit/evidence/MAIN-CONSOLIDATION-20261018/playwright-diff-metadata-proof.json).
@@ -27,6 +34,28 @@
 - `status: IN_PROGRESS`. CI39177487433 da fonte a466 terminou FAIL em cinco arquivos: fixtures com caminhoNode24/identidade física Git/tar/strace, enforcement de cobertura ausente e validação de fingerprints. Nenhum merge aceito. [Task de reparo](04_audit/evidence/MAIN-CONSOLIDATION-20261018/ci-a466-repair-task.md), [perfil físico explícito](04_audit/evidence/MAIN-CONSOLIDATION-20261018/boundary-native-profile-task.md).
 - `last_completed_action`: driverci-bar recupera implementação a724 com per-file obrigatório/validação agregada/recusa de snapshot antigo;109testes focaisPASS. Fixture de runtime portável101/101PASS e negativaNode24realPASS; pins/guardas mantidos. Dois arquivos nativos renomeados byteidênticos, comando próprio sem skip e coleta fechada verificada.16candidatas detached no mesmoHEAD e refs removidas comCAS, arquivos/índices preservados; programas de pares continuam em seus snapshots. Branch local do checkout principal só será removida após merge protegido e preservação final dos avanços concorrentes.
 - `next_action`: MAIN-CONSOLIDATION-20261018:QUALIFY-REPAIRED — executar provas físicas completas e revisão fresca do delta, depois nova CI/cobertura aplicável. O certify local antigo foi interrompido como superseded após FAIL conclusivo da CI, sem certificado. A CI hospedada mantém todos gates e certify completo; provas físicas locais têm denominador próprio. Sem produção.
+
+# CONT-20261018-D9EF — continuidade das três frentes (Claude Code) — 18/10/2026
+
+- `status: IN_PROGRESS`. Claude Code assumiu HISO-005/B6, Claude100 e Codex100 a pedido do usuário ("continuar até me entrega tudo pronto e resolvido"). [Claim](08_runtime/agent_coordination.md). O integrador único rumo à `main` é a MAIN-CONSOLIDATION-20261018 (Codex); esta sessão só acrescenta evidências e decisões na branch arquivada.
+- `last_completed_action`:
+  - Núcleo/CI: o PR #3 ficou verde depois de três correções: `ae5538cf` (emit do harness sem `__tests__`), `95950d0c` (links 0379/0380) e `4eeb47e8` (bubblewrap e AppArmor no runner, aprovado pelo usuário). O Codex integrou como `b9f48a77`. PAR-G01 `DONE` (`c8ff057f`).
+  - HISO-005: BUILD0240 qualificado (R2 APPROVE, 16 gates) e promovido em `fb4a723e`. B6 segue `INCOMPLETE`: 1.118 diagnósticos e 0 provas. SPEC0241 aprovada pelo usuário (`6e9323ef`). Deltas: [BUILD0240](04_audit/evidence/HISO005-P2-BUILD-0240-20261018/ledger-delta-cont-d9ef.md), [recon](04_audit/evidence/HISO005-P2-NEXT-RECON-20261018/ledger-delta-cont-d9ef.md).
+  - Claude100: journal0225 J07 6/6 com R2 APPROVE (`219061a3`). A integração da fundação (`951c22ad`) e a portabilidade dos testes (`b8eab238`) já estão na seleção da consolidação. SPEC0238:
+    - r1 `INCOMPATIBLE`, pela query `?beta=true`;
+    - delta r4 aprovado pelo usuário (`834a37a1`);
+    - run2: TEXT `CAPTURED`; READ `INCOMPATIBLE`, porque o cliente anuncia só Read (`750e4a86`).
+
+    Deltas: [journal0225](04_audit/evidence/CLAUDE100-EXEC-20261017/journal0225-build/ledger-delta-cont-d9ef.md), [integração](04_audit/evidence/CLAUDE100-EXEC-20261017/root-integration-20261018/ledger-delta-cont-d9ef.md), [portabilidade](04_audit/evidence/ROOT-TEST-PORTABILITY-20261018/ledger-delta-cont-d9ef.md), [captura r1](04_audit/evidence/CLAUDE100-EXEC-20261017/ref-capture-build/ledger-delta-cont-d9ef.md), [captura r4](04_audit/evidence/CLAUDE100-EXEC-20261017/ref-capture-build/r4-run/ledger-delta-cont-d9ef-r4.md).
+
+  - Codex100: os drivers e a admissão do perfil SDK do DX100-G02 estão `COMPLETED_LOCAL` (`e6ba0e46`, `ff823afe`). Foram 19 casos `PASS_CLIENT_OBSERVATION`, sem crédito de paridade. A SPEC0239 foi aprovada; o BUILD depende de 0029 → 0030 → 0031. Deltas: [drivers](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-observation-drivers/ledger-delta-cont-d9ef.md), [admissão](04_audit/evidence/CODEX100-EXEC-20261017/g02/sdk-admission/ledger-delta-cont-d9ef.md).
+
+- `next_action`:
+  1. HISO005-P2-BUILD-0241 em andamento, numa candidata própria a partir de `af63ba60`.
+  2. O delta r5 da SPEC0238 (inventário de tools no READ e negação nativa de Write) está em revisão e depois vai à T3 do usuário. Os 28 caminhos de `d6f869e5` vão à `main` num único PR depois dessa decisão.
+  3. DX100-G02:BIND-SDK-OBSERVATIONS-TO-COVERAGE, unidade documental.
+
+  Pendente com o usuário: decidir se fixa no `.gitleaksignore` os 21 achados triados como não-segredo.
 
 # MAIN-CONSOLIDATION — seleção das melhorias qualificáveis — 18/10/2026
 

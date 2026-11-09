@@ -1,5 +1,7 @@
 # 0302 — Backlog Master
 
+> Carteira da remediação 0626 em execução: [quinze apontamentos e três condições](0626_remediation_execution_plan.md#carteira-e-critérios-de-aceite), com [estado por item](../04_audit/evidence/AUD0626-REMEDIATION/backlog.json), derivada do [relatório](../04_audit/0626_full_functional_audit_2026-10-30.md). Os itens do produto e de isolamento referenciam PISO/HISO existentes. Status `IN_PROGRESS`; aceite exige evidência atual e integração pertinente. Produção `NO_GO`.
+
 > Ciclo corrente AUD51: [0346](0346_aud29_roadmap.md), [0347](0347_aud29_backlog.md), [0348](0348_next_stage_c1_decision.md), [pedido C1L](../04_audit/evidence/AUD-20260924/M07-S1-C1L/approval-request.md), [resultado C1J](../04_audit/evidence/AUD-20260924/M07-S1-C1J/final-gate-result.md). Candidate C1J `e884796fd90192409230b0991524168186a9f65c824156a943102dcfacc98e1b`; C1L aguarda aprovação para matriz local limitada. M07-S1 `FAIL / OPEN`; produção `NO_GO`.
 
 > Estado C1F em 24/09/2026: candidate `89e4d30ce8b2fd1d102a200bc729249a99ebc47499e4d04a79cd7f6633890f1a`, inventory completo com 11 findings e matriz local verde. O gate ficou `FAIL / OPEN` por C1F-05 parcial e I1 indisponível; Final Critic separado também não foi obtido. C1G é uma proposta nova, ainda sem aprovação ou candidate. M05 espera M07 aceita; produção `NO_GO`.

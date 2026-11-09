@@ -1,3 +1,152 @@
+# Inventário técnico de dados — revisão de 23/10/2026
+
+Estado: `TECHNICAL_INVENTORY_UPDATED / CONTROLLER_DPO_REVIEW_PENDING`.
+Task `UP91-030-DATA-INVENTORY-20261023`, preparação documental T1.
+Baseline: [main `2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b`][di-main], observada
+no GitHub nesta rodada. O checkout local `3704` e as candidatas dos pares não
+substituem essa baseline. São categorias possíveis por código/schema, sem
+consulta a banco, leitura de volume operacional ou atestado de dados reais.
+Código publicado não comprova implantação, configuração ou aceite de risco.
+
+Esta revisão sucede as descrições factuais antigas, preservadas integralmente
+ao final. Mantém os IDs DB-01 a DB-09 e LEG-01/LEG-02 para rastreabilidade e acrescenta
+DB-10 a DB-12, FS-01 a FS-06 e atualizaçõesFLOW. Decisões de finalidade, titulares,
+hipótese legal, responsáveis, região e retenção permanecem com o
+controlador e os responsáveis aplicáveis no [template de RIPD](10-ripd-template.md).
+Esse template continua vazio; esta revisão não o aprova nem o preenche.
+UP91-030, dependências 007/008 e produção continuam abertos.
+
+## PostgreSQL: famílias atuais e limites de implantação
+
+O censo estático abrange32 arquivos SQL e57 declarações CREATE TABLE, agrupadas
+abaixo. Isso não significa57 tabelas criadas num ambiente. O [runner][di-runner]
+inclui 0027/0029 no conjunto default, deixa 0028 opt-in em schema dedicado e
+o [runner auth][di-auth-runner] trata templates de autenticação separadamente.
+RLS/ACL/funções no SQL são desenho publicado, sem prova operacional nesta
+revisão. IDs opacos, digests e vínculos entre registros podem ser correlacionáveis;
+JSON/texto livre não oferece minimização pelo tipo.
+
+| ID     | Tabelas/família                                                                                                                                                                                                                                  | Categorias possíveis e fronteira                                                                                                                                                                                    | Fonte publicada e pendência                                                                                                                                                                                                                             |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DB-01  | platform_agents, platform_agent_versions, platform_test_suites, platform_test_suite_runs, platform_test_runs, platform_execution_traces                                                                                                          | Autor, nome/descrição/configuração, casos/resultados e traces livres; operadores ou pessoas citadas em inputs.                                                                                                      | SQL 0000/0003 no [manifest][di-manifest]. Minimizar e determinar retenção por tenant/artefato; teste sintético não permite dado real.                                                                                                                   |
+| DB-02  | platform_capability_approvals, runtime_approvals, operational_executions, operational_execution_events, operational_execution_steps, operational_execution_checkpoints, operational_execution_outbox, operational_effect_journal, effect_journal | Ator, aprovador, emissor, decisão/motivo, proposal/request/result/failure/resume e evidências potencialmente vinculáveis.                                                                                           | SQL 0002/0013/0015–0019/0021/0024 no [manifest][di-manifest]. Reconciliar aprovação/auditoria/journal e versões; registro/audit link não é aceite de retenção.                                                                                          |
+| DB-03  | cvg_conversation_sessions, cvg_conversation_messages, cvg_conversation_turns, cvg_conversation_execution_claims, cvg_conversation_deliveries                                                                                                     | Mensagens, memória, interpretação/resposta, identidade de conversa/sessão e resultados/evidências do fluxo genérico.                                                                                                | SQL 0020/0022 no [manifest][di-manifest]. Separar finalidade do consumidor e links DB-12; não confundir com eventos DB-11.                                                                                                                              |
+| DB-04  | platform_knowledge_sources, platform_plugin_catalog                                                                                                                                                                                              | Autor/aprovador e metadados/manifestos livres de fonte/plugin. O catálogo de fonte não é inventário do conteúdo institucional em outros storages.                                                                   | SQL 0004/0005 no [manifest][di-manifest]. Identificar origem, versão, publicação/revogação e cópias do conteúdo efetivo por consumidor; sem fonte institucional aprovada, handoff.                                                                      |
+| DB-05  | outbox_events, outbox_effects, outbox_attempts, outbox_quarantine, audit_events, audit_evidence_checkpoints, platform_release_candidates, channel_effect_journal                                                                                 | Payload/resultados/erros, ator, IDs de entrega, hashes e evidência de execução/artefato; dados de plataforma e de consumidor podem chegar por payload.                                                              | SQL 0000/0006/0007/0010–0012 no [manifest][di-manifest]. Redação histórica de outbox não certifica minimização de todos os sinks, backups ou linhas existentes.                                                                                         |
+| DB-06  | rate_limit_buckets, webhook_replay_events, idempotency                                                                                                                                                                                           | Digest de rate-limit, IDs/chaves externas de replay/idempotência, expiração/status, lease_generation/lease_token de fencing. Chave de replay não é inbox de mensagens.                                              | SQL 0000/0002/0023/0025/0026 no [manifest][di-manifest]. Migração0026 remove key antiga; confirmar aplicação, acesso e eliminação. Não presumir RLS por tenant para replay/rate-limit.                                                                  |
+| DB-07  | tenant_isolation_quarantine                                                                                                                                                                                                                      | Nome de tabela, row_id e motivo podem reconstruir vínculo com a origem; isolamento de migration não elimina o dado.                                                                                                 | SQL 0001 no [manifest][di-manifest]. ACL/owner e descarte por ambiente a comprovar; não presumir linhas presentes.                                                                                                                                      |
+| DB-08  | schema_migrations                                                                                                                                                                                                                                | Metadados/checksum e baseline_actor/baseline_reference, potencialmente ligados a operador ou incidente.                                                                                                             | [Runner][di-runner] e SQL 0000/0001. Revisar grant e conteúdo de referência no ambiente; digest não anonimiza o contexto.                                                                                                                               |
+| DB-09  | operator_sessions, operator_session_families, oidc_login_states, no schema privado auth                                                                                                                                                          | Digest de cookie/state, tenant/operator/role, criação/expiração/revogação e linhagem. Não confundir duração de credencial válida com prazo de guarda posterior.                                                     | [Auth 0000][di-auth]/[state 0001][di-state], [store][di-session-store] e [rotas OIDC][di-oidc]. Implementação publicada, sem atestado IdP/MFA ou DB implantados. Purga 0149 e decisões DP-01 a DP-06 continuam pendentes.                               |
+| DB-10  | worker_heartbeats, kernel_pause_switches                                                                                                                                                                                                         | tenant/worker_id, horários/progresso/contadores; motivo da pausa e updated_by identificável ou livre.                                                                                                               | [SQL 0027][di-worker]. Estado operacional também exige inventário/acesso/retorno após restore; não tratá-lo como ausência de potencial vínculo pessoal.                                                                                                 |
+| DB-11  | session_streams, session_events                                                                                                                                                                                                                  | tenant/session/event IDs, sequência, tipo, schema_fingerprint/input_digest e record JSON: mensagens, requisições/resultados de modelo/ferramenta e compactação conforme evento.                                     | [SQL 0028][di-events] e [eventos][di-event-contract]. Opt-in; trigger rejeita UPDATE/DELETE/TRUNCATE de session_events. Reconciliação com retenção/eliminação exige contrato próprio; não afirmar purga por expiração ou implantar0028 pelo inventário. |
+| DB-12  | case_principals, case_roots, case_assignments, case_execution_links, case_audit_links                                                                                                                                                            | Operador/role/active/revision, identity_source/authority_version/proof_digest, associações caso→conversa/execução/auditoria, changed_by e horários. Relações revelam acesso e atribuição mesmo sem copiar mensagem. | [SQL 0029][di-cases]. Histórico e revogação/acesso precisam política e prova; proposta0262 e PRs de pares não são aceitos por este inventário.                                                                                                          |
+| LEG-01 | conversations, messages, sessions, agent_runs, tool_calls, approval_requests, tasks                                                                                                                                                              | Referência de remetente, corpo/ID externo, input/output/erro, resumo/decisor, título/descrição. audit_events compartilhada consta em DB-05; vínculo legado permanece possível.                                      | SQL 0000/0001 no [manifest][di-manifest]. Famílias legadas não se tornam núcleo genérico só por coexistirem em migration; consumidor declara finalidade e retenção.                                                                                     |
+| LEG-02 | journey_owner_drafts, journey_patient_drafts, journey_appointment_drafts                                                                                                                                                                         | Nome/telefone do tutor, dados de paciente animal, IDs/horário candidato e rascunhos. Não é consulta confirmada nem prontuário definitivo.                                                                           | SQL 0014 no [manifest][di-manifest]. Estado expired não é exclusão física; relação com pessoa humana e conteúdo livre requer análise do consumidor, sem pressupor categoria jurídica de toda linha.                                                     |
+
+## Persistência e cópias fora do PostgreSQL
+
+Pela [ADR-010](../architecture/adrs/ADR-010-harness-product-isolation.md),
+o Assistente de Plantão é consumidor com domínio/dados/processo próprios.
+As superfícies abaixo integram seu inventário e os componentes compartilhados
+nomeados; não provam que um volume existe no destino. São categorias de
+artefato, não caminhos reais de operação coletados nesta rodada.
+
+| ID    | Local lógico                                                                  | Dados e cópias a considerar                                                                                                                                                                                                               | Evidência e pendência                                                                                                                                                                                                                                         |
+| ----- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FS-01 | FileChannelEffectJournal.directory                                            | Um JSON por operação: tenant/channel/operation/idempotencyKey, payloadHash/hashVersion, estado/attempt, leaseOwner e prazos, result/error/revision; temporários e lock têm ciclo próprio.                                                 | [Journal em arquivo][di-channel-file] e [registro][di-channel-record]. Nome de arquivo derivado não apaga identidade/result; estado EXPIRED não comprova purga física.                                                                                        |
+| FS-02 | SHIFT_DATA_DIR: journal.json, segmentosJSONL, events.jsonl legado e recovery/ | Inbound messages, telefone/ID do provider, texto/transcrição/notas/tarefas e eventos; recovery guarda original, tail.bin e metadata de prefixo. Confirmação/supersessão pode manter versões antigas.                                      | [Store][di-product-store] e [domínio][di-product-domain]. Mapear segmentos selados/ativos e cópias isoladas ao decidir a eliminação; integridade/replay não minimizam conteúdo.                                                                               |
+| FS-03 | SHIFT_DATA_DIR/media                                                          | Arquivos de mídia baixados para notas, nomes/referências e conteúdo binário, potencialmente associado ao autor e às pessoas mencionadas.                                                                                                  | [Store][di-product-store] e [composição][di-product-compose]. Classificar áudio/imagem/texto do produto, intermediários de transcrição e destinatários; não ler mídia real para preencher inventário.                                                         |
+| FS-04 | Backup do consumidor: data/, inventory.json, projection.json, receipt.json    | Cópia de journal/recovery/media, tamanhos/hashes e resultado; projeção troca telefone/messageId por referências hash e conserva metadados, não é anonimização demonstrada.                                                                | [Backup][di-product-backup] e comentário StoreProjection no [store][di-product-store]. Proteção/acesso, prazo de cópias e reexpurgo após restore dependem de decisão/prova próprias.                                                                          |
+| FS-05 | Statefile do monitor e diretório de recibos do consumidor                     | Episódios, fila/tentativas/horários, alertId, digest de candidata, instanceOpaqueId, reasonCode/severity/state; recibo guarda receivedAt/payloadSha256/payload. A forma é restrita, mas metadados podem correlacionar operação/instância. | [Monitor/receiver][di-product-monitor]. Não confundir com novo monitor externo U13 ainda em candidata de outro holder; retenção e acesso dos recibos exigem definição.                                                                                        |
+| FS-06 | CVG_BACKUP_DIR, CVG_BACKUP_ANCHOR_DIR e mirror opcional                       | harness.dump, anchors.json, manifest.json e SHA256SUMS; cópias independentes, staging e arquivos de drill podem replicar ou referenciar dadosSQL/auditoria.                                                                               | [Backup harness][di-harness-backup]/[restore drill][di-harness-restore]. O script contém retenção configurável por idade de conjuntos, sem comprovar política aprovada, execução ou eliminação do banco/PITR. Hash/anchor não prova criptografia ou descarte. |
+
+## Fluxos e estados que mudaram desde o registro histórico
+
+- **FLOW-01/02/03/04:** API/webhook, auditoria/telemetria, modelo e ferramentas
+  conservam potencial de cópia de identidade/payload/erro. A existência de
+  journal ou redação num sink não certifica todos os outros destinos. Código
+  de integração é condicional à configuração e ao gate; nada autoriza dados
+  reais ou ação clínica/financeira/de agenda por esta revisão.
+- **FLOW-05:** logs de teste, evidência, CI, screenshot/trace/vídeo e artefatos
+  continuam no inventário do ciclo de engenharia. Esta rodada não executou
+  testes nem capturou tráfego. Retenção/acesso de evidência dependem do dono;
+  digest sozinho não protege conteúdo nem identidade do arquivo de origem.
+- **FLOW-06:** backup deixou de ser apenas proposta de script: há código
+  publicado para conjuntos/anchors/drill e backup do produto. Isso não prova
+  localização, criptografia, restauração realizada, PITR ou descarte no destino.
+  O catálogo DB-04 continua distinto do conteúdo institucional efetivo.
+- **FLOW-07:** [rotas OIDC][di-oidc], [transação de login][di-login] e stores
+  duráveis de sessão/state estão publicados. Navegador, cookies de sessão/
+  transação, identidade/claims do IdP e endpoint de tokens são superfícies do
+  fluxo. Não deduzir armazenamento de token bruto nas tabelas DB-09: essas
+  tabelas guardam os campos descritos acima. Não deduzir tampouco ausência
+  universal de token/PII em todos os sinks por ler apenas esse schema.
+  HTTPS em três hosts/PR29 e a configuração corporativa no destino mantêm
+  qualificação própria; código publicado não é IdP/MFA implantado.
+- **FLOW-08 — Configuração de membros (`SHIFT_MEMBERS`):** telefone, nome e
+  indicação de gestor, interpretados por `parseMembers` no [domínio][di-product-domain]
+  e carregados pela [configuração][di-product-config] na [composição do consumidor][di-product-compose].
+  Inventariar a origem da configuração e suas eventuais cópias no perfil de
+  implantação, sem presumir arquivo, armazenamento ou dados reais presentes.
+  Finalidade, acesso, responsáveis e retenção permanecem pendentes.
+
+## Decisões e responsabilidade ainda abertas
+
+As decisões [DP-01 a DP-06 de 0149](../02_spec/0149_operator_auth_purge.md) têm
+escopo de autenticação OIDC. Permanecem pendentes nesta entrega; seus prazos
+não viram retenção universal de journals, mensagens, backups ou mídia.
+
+| Decisão | Insumo técnico atual                                                                        | Decisor e efeito desta revisão                                                  |
+| ------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| DP-01   | state expira para uso; isso não define guarda após expiração.                               | Controlador/DPO e responsáveis aplicáveis: PENDENTE; nenhum prazo escolhido.    |
+| DP-02   | Sessões têm família/revogação; último vencimento e referências antigas importam.            | PENDENTE; inventário não executa DELETE nem implementa0149.                     |
+| DP-03   | oidc_login_states não possui tenant_id; schema auth não é a família de eventos DB-11.       | PENDENTE; política por tenant exige reconciliação contratual própria.           |
+| DP-04   | Cópias FS-04/FS-06 e restauração podem reintroduzir registros; PITR não foi observado.      | PENDENTE; script de retenção não é aceite da política nem prova de reexpurgo.   |
+| DP-05   | Finalidade/necessidade de linhas revogadas e revisão periódica não são inferidas do schema. | Controlador/dono/DPO: PENDENTE; não nomear pessoa ou base jurídica pelo agente. |
+| DP-06   | Continuidade/troca da família e eventual limite máximo exigem contrato e prova próprios.    | PENDENTE; não presumir retenção infinita, adotar 0262 ou aprovar risco.         |
+
+Para cada família/volume, falta vincular produto/tenant/ambiente, finalidade,
+necessidade, categoria de titular, donos reais, destinatários/região, regras
+de acesso e tratamento de exclusão/backup à política aprovada e versionada.
+Em especial, DB-11 é append-only no contrato publicado; nenhum texto deste
+inventário muda triggers ou fornece dispensa para descarte. G08 e gates de
+capacidade/implantação seguem pendentes; não há certificação jurídica.
+
+Evidências desta revisão: [manifesto de 64 fontes][di-manifest],
+[censo SQL][di-census] e [task/contrato][di-task]. Cobertura do censo significa
+mapeamento destas declarações no código capturado; não inventário físico de
+todos os bancos/volumes, tabelas criadas fora das migrations, extensões,
+IdP, CI ou sistemas de terceiros. Novos stores/consumidores precisam entrada
+própria e comprovação no seu perfil.
+
+[di-main]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/commit/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b
+[di-manifest]: ../04_audit/evidence/IDLE-CLOSURE-20261023/up91-030-data-inventory/source-manifest.json
+[di-census]: ../04_audit/evidence/IDLE-CLOSURE-20261023/up91-030-data-inventory/sql-table-census.json
+[di-task]: ../04_audit/evidence/IDLE-CLOSURE-20261023/up91-030-data-inventory/SPEC.md
+[di-runner]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/src/postgres-migrations.ts
+[di-auth-runner]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/src/operator-session-migrations.ts
+[di-auth]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/migrations/operator-session/0000_auth.sql
+[di-state]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/migrations/operator-session/0001_oidc_state.sql
+[di-session-store]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/apps/api/src/operator-session-postgres.ts
+[di-oidc]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/apps/api/src/oidc-routes.ts
+[di-login]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/apps/api/src/oidc-login-transaction.ts
+[di-worker]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/migrations/0027_worker_operations.sql
+[di-events]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/migrations/0028_session_events.sql
+[di-event-contract]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/harness/src/session/events.ts
+[di-cases]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/persistence/migrations/0029_case_assignment_authorization.sql
+[di-channel-file]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/channel-gateway/src/effect-journal-file.ts
+[di-channel-record]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/packages/channel-gateway/src/effect-journal.ts
+[di-product-store]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/products/shift-assistant/src/store.ts
+[di-product-domain]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/products/shift-assistant/src/domain.ts
+[di-product-compose]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/products/shift-assistant/src/compose.ts
+[di-product-config]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/products/shift-assistant/src/config.ts
+[di-product-backup]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/products/shift-assistant/src/backup.ts
+[di-product-monitor]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/products/shift-assistant/src/monitor.ts
+[di-harness-backup]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/deploy/harness/backup/backup.sh
+[di-harness-restore]: https://github.com/ricardoakinaga-dev/cvg-operational-harness/blob/2e5a64def639ddfebb3f0b81ccc8b8fcf3419d7b/deploy/harness/backup/restore-drill.sh
+
+## Registro histórico — PR-401 e DB-09, 27/09/2026
+
 # PR-401 — inventário técnico de categorias de dados pessoais
 
 - Estado: `DRAFT_TECHNICAL / DPO_REVIEW_PENDING` em 27/09/2026.

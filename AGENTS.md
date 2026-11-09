@@ -43,3 +43,22 @@ diretório e no mesmo `main`. Antes de alterar qualquer arquivo, leia e siga
   claim próprio; push só com autorização do usuário.
 
 Fonte operacional completa: `docs/07_agents/AGENTS.md`.
+
+## Coordenação pelo GBrain — orientação de 23/10/2026
+
+O usuário informou que há outros três agentes neste projeto. Para cada etapa:
+
+- Antes de iniciar, consulte o GBrain e leia os registros recentes de
+  `projects/cvg-operational-harness`, além dos claims locais, para identificar
+  avanços, bloqueios, responsáveis e caminhos já reservados.
+- Ao concluir, registre no GBrain agente/task, etapa, resultado real,
+  revisão/caminhos, evidências, bloqueios e próxima ação. Diferencie
+  implementação, revisão e aceite; uma etapa concluída não libera produção.
+- Acrescente registros à timeline existente com identificador idempotente;
+  não substitua a página compartilhada nem os relatos de outros agentes.
+- Se a consulta ou gravação falhar, registre a pendência local e informe a
+  limitação; não afirme sincronização que não ocorreu. Antes de assumir um
+  caminho potencialmente concorrente, reconcilie o claim com o responsável.
+
+O GBrain complementa a coordenação. As carteiras, os gates e os ledgers do
+repositório continuam canônicos; não grave segredos ou dados reais no GBrain.
