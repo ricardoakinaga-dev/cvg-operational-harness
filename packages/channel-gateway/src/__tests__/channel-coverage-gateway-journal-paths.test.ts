@@ -34,6 +34,7 @@ import {
   type ChannelEffectTransition
 } from '../effect-journal.ts'
 import { ChannelGateway, type ChannelEvent } from '../gateway.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000104'
 const CORRELATION = 'corr_00000000-0000-4000-8000-000000000104'
@@ -252,6 +253,7 @@ describe('identity isolation between channels', () => {
     }
     const whatsappAdapter = new GateAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [whatsappAdapter, webAdapter],
       effectJournal: new FileChannelEffectJournal({
         directory: gatewayDirectory
@@ -517,6 +519,7 @@ describe('gateway in-flight replay terminal paths', () => {
     )
     const events: ChannelEvent[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [new GateAdapter()],
       effectJournal: journal,
       onEvent: (event) => events.push(event)
@@ -538,6 +541,7 @@ describe('gateway in-flight replay terminal paths', () => {
     )
     const events: ChannelEvent[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [new GateAdapter()],
       effectJournal: journal,
       onEvent: (event) => events.push(event)
@@ -557,6 +561,7 @@ describe('gateway in-flight replay terminal paths', () => {
       effectRecord(identityOf(parsed), { state: 'PENDING' })
     )
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [new GateAdapter()],
       effectJournal: journal
     })
@@ -577,6 +582,7 @@ describe('gateway heartbeat and lost-settlement failure paths', () => {
     const adapter = new GateAdapter()
     adapter.gate = gate
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal,
       leaseMs: 40,
@@ -596,6 +602,7 @@ describe('gateway heartbeat and lost-settlement failure paths', () => {
     journal.markUncertainThrows = true
     const adapter = new GateAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })
@@ -613,6 +620,7 @@ describe('gateway heartbeat and lost-settlement failure paths', () => {
       effectUnknown: true
     })
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: journal
     })

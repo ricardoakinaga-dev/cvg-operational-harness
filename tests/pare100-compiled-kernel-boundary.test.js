@@ -173,6 +173,9 @@ function copiedAuditor(f, { repin = [], changeGroup } = {}) {
   )
   const file = path.join(directory, 'check-product-boundary.mjs')
   fs.writeFileSync(file, source)
+  // O filho é o sistema sob teste: não deve emitir cobertura do runner.
+  const childEnv = { ...process.env }
+  delete childEnv.NODE_V8_COVERAGE
   return (options = {}) => {
     const run = spawnSync(
       process.execPath,
@@ -184,7 +187,12 @@ function copiedAuditor(f, { repin = [], changeGroup } = {}) {
         f.root,
         JSON.stringify(options)
       ],
-      { encoding: 'utf8', timeout: 30000, maxBuffer: 4 * 1024 * 1024 }
+      {
+        encoding: 'utf8',
+        timeout: 30000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: childEnv
+      }
     )
     expect(run.status, run.stderr).toBe(0)
     return JSON.parse(run.stdout)

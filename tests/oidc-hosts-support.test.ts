@@ -260,6 +260,17 @@ describe('SPEC0259 §4.10 — synthetic IdP login page and shared CA', () => {
     expect(refused.status).toBe(400)
   })
 
+  it('never echoes request text into the login page', async () => {
+    const idp = issuer()
+    const url = new URL(authorizeUrl())
+    url.searchParams.set('state', `"><script>alert('s')</script>`)
+    const page = await idp.fetch(url.href, { method: 'GET' })
+    expect(page.status).toBe(200)
+    const html = await page.text()
+    expect(html).not.toMatch(/<script|alert\('/i)
+    expect(html).toContain('state=%22%3E%3Cscript%3Ealert')
+  })
+
   it('answers a wrong TOTP with the page and no code', async () => {
     const idp = issuer()
     const user = idp.addUser({ groups: ['synthetic-a-operator'] })

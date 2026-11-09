@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * SPEC0259 §4.8 (todos os perfis) — um painel com 403 diz "sem permissão" e
  * continua distinto de "indisponível". Perfil atual (caminhos relativos).

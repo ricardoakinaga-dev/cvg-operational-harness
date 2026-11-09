@@ -7,6 +7,7 @@
 import { DomainError } from '@cvg/shared'
 import {
   ApprovalError,
+  assertRequesterDecision,
   type ApprovalEvent,
   type ApprovalRecord
 } from '@cvg/approval-engine'
@@ -105,6 +106,13 @@ export class PostgresRuntimeApprovalDecision {
         ) {
           throw new DomainError('not_found', 'Approval not found')
         }
+        // SPEC 0317 G1: both records, before the intermediate submit.
+        assertRequesterDecision({
+          submittedBy: execution.submittedBy,
+          approval,
+          verdict: command.verdict,
+          actorId: command.actorId
+        })
         if (
           execution.state !== 'WAITING_APPROVAL' &&
           (approval.status === 'PENDING' || approval.status === 'REQUESTED')
@@ -221,7 +229,8 @@ export class PostgresRuntimeApprovalDecision {
             nextState: resolved.state,
             payloadHash: approval.payloadHash,
             commandKey: persistedCommandKey,
-            operationKey: approval.operationKey ?? null
+            operationKey: approval.operationKey ?? null,
+            requestedBy: approval.requestedBy ?? { kind: 'unknown' }
           }
         })
         return {

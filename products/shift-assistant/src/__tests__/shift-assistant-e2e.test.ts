@@ -10,6 +10,7 @@ import {
   startSandboxServices,
   type SandboxServices
 } from '../sandbox/services.ts'
+import { syntheticWebhook } from '../sandbox/webhook.ts'
 
 // End to end over real HTTP: production composition and adapters against
 // loopback stand-ins for WhatsApp and Whisper. Synthetic data only.
@@ -20,7 +21,6 @@ import {
 // author answers "ok".
 const ANA = '5511900000001'
 const GESTOR = '5511900000009'
-const SECRET = 'segredo-sintetico-de-teste-123456'
 
 let services: SandboxServices | undefined
 let app: ShiftApp | undefined
@@ -34,10 +34,11 @@ afterEach(async () => {
 
 async function boot(provider: 'waha' | 'evolution', clock: () => Date) {
   services = await startSandboxServices()
+  const signer = syntheticWebhook(provider)
   const config = loadShiftConfig({
     SHIFT_PROVIDER: provider,
     SHIFT_MEMBERS: `${ANA}=Dra Ana;${GESTOR}=Gestor*`,
-    SHIFT_WEBHOOK_SECRET: SECRET,
+    ...signer.env,
     SHIFT_DATA_DIR: mkdtempSync(join(tmpdir(), 'shift-e2e-')),
     SHIFT_PORT: '0',
     SHIFT_HOST: '127.0.0.1',
@@ -55,16 +56,10 @@ async function boot(provider: 'waha' | 'evolution', clock: () => Date) {
   app = composeShiftApp(config, { clock, organizer: sandboxOrganizer })
   const port = await app.start()
   const webhook = async (payload: unknown) => {
+    const body = JSON.stringify(payload)
     const response = await fetch(
       `http://127.0.0.1:${port}/webhooks/${provider}`,
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-cvg-webhook-secret': SECRET
-        },
-        body: JSON.stringify(payload)
-      }
+      { method: 'POST', headers: signer.headers(body, clock()), body }
     )
     await app!.assistant.idle()
     return (await response.json()) as { accepted: boolean }

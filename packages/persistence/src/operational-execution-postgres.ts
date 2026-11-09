@@ -24,13 +24,15 @@ import type {
   ExecutionTransitionInput,
   ExecutionCancellationInput
 } from '@cvg/harness'
-import type { AuditEvent } from '@cvg/harness-contracts'
+import type { AuditEvent, ExecutionPrincipal } from '@cvg/harness-contracts'
 import {
   OperationalExecutionError,
   computeExecutionRequestHash,
   DEFAULT_MAX_EXECUTION_ATTEMPTS,
   isExecutionTransitionAllowed,
   parseExecutionSubmission,
+  resolveSubmittedBy,
+  sameExecutionPrincipal,
   validateExecutionTransitionPayload
 } from '@cvg/harness'
 import type { TenantId } from '@cvg/platform'
@@ -54,6 +56,8 @@ export interface PostgresOperationalExecutionStoreOptions {
   readonly clock?: () => Date
   /** Deterministic seam for synthetic tests; defaults to node:crypto UUIDs. */
   readonly executionIdFactory?: OperationalExecutionIdFactory
+  /** SPEC 0317 G1: the only `system` principals this composition accepts. */
+  readonly systemPrincipals?: readonly string[]
 }
 
 export type OperationalExecutionIdFactory = () => string
@@ -75,6 +79,9 @@ interface ExecutionRow extends QueryResultRow {
   created_at: Date | string
   updated_at: Date | string
   completed_at: Date | string | null
+  submitted_by_kind: 'human' | 'system' | 'unknown'
+  submitted_by_id: string | null
+  submitted_by_tenant_id: string | null
 }
 
 interface EventRow extends QueryResultRow {
@@ -121,12 +128,14 @@ interface EffectRow extends QueryResultRow {
 const executionColumns = `
   tenant_id, id, idempotency_key, request_hash, request, state, attempt,
   lease_owner, lease_until, result, failure, approval_id, resume,
-  created_at, updated_at, completed_at`
+  created_at, updated_at, completed_at, submitted_by_kind, submitted_by_id,
+  submitted_by_tenant_id`
 
 const executionColumnsFromJoin = `
   e.tenant_id, e.id, e.idempotency_key, e.request_hash, e.request, e.state,
   e.attempt, e.lease_owner, e.lease_until, e.result, e.failure,
-  e.approval_id, e.resume, e.created_at, e.updated_at, e.completed_at`
+  e.approval_id, e.resume, e.created_at, e.updated_at, e.completed_at,
+  e.submitted_by_kind, e.submitted_by_id, e.submitted_by_tenant_id`
 
 const effectColumns = `
   tenant_id, operation_key, proposal_hash, state, attempt_id, result, error,
@@ -236,6 +245,15 @@ function retryExhaustedFailure(maxAttempts: number): ExecutionFailure {
   }
 }
 
+function mapSubmittedBy(row: ExecutionRow): ExecutionPrincipal {
+  if (row.submitted_by_kind === 'unknown') return { kind: 'unknown' }
+  return {
+    kind: row.submitted_by_kind,
+    id: row.submitted_by_id as string,
+    tenantId: row.submitted_by_tenant_id as string
+  }
+}
+
 function mapRecord(row: ExecutionRow): ExecutionRecord {
   const request = jsonValue(row.request) as ExecutionSubmission
   return {
@@ -251,6 +269,7 @@ function mapRecord(row: ExecutionRow): ExecutionRecord {
         }
       : {}),
     request,
+    submittedBy: mapSubmittedBy(row),
     state: row.state,
     attempt: row.attempt,
     leaseOwner: row.lease_owner,
@@ -324,6 +343,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
   private readonly maxAttempts: number
   private readonly clock: () => Date
   private readonly executionIdFactory: OperationalExecutionIdFactory
+  private readonly systemPrincipals: readonly string[]
 
   public constructor(
     private readonly connection: OperationalExecutionPostgresConnection,
@@ -340,6 +360,7 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
     )
     this.clock = options.clock ?? (() => new Date())
     this.executionIdFactory = options.executionIdFactory ?? randomUUID
+    this.systemPrincipals = options.systemPrincipals ?? []
   }
 
   public submit(
@@ -369,7 +390,13 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
     hook?: OperationalExecutionSubmitHook
   ): Promise<SubmitResult> {
     const tenant = TenantIdSchema.parse(input.tenantId)
-    const normalized = parseExecutionSubmission(input, tenant)
+    const { submittedBy: rawPrincipal, ...submission } = input
+    const normalized = parseExecutionSubmission(submission, tenant)
+    const submittedBy = resolveSubmittedBy(
+      rawPrincipal,
+      tenant,
+      this.systemPrincipals
+    )
     const now = rawNow ?? this.clock()
     const requestHash = computeExecutionRequestHash(normalized)
     const id = createOperationalExecutionId(this.executionIdFactory)
@@ -384,7 +411,10 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
         )
         if (existing.rows[0]) {
           const record = mapRecord(existing.rows[0])
-          if (record.requestHash !== requestHash) {
+          if (
+            record.requestHash !== requestHash ||
+            !sameExecutionPrincipal(record.submittedBy, submittedBy)
+          ) {
             throw new OperationalExecutionError(
               'conflict',
               'Idempotency key is already bound to a different request'
@@ -398,9 +428,10 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
           `INSERT INTO operational_executions
              (tenant_id, id, idempotency_key, request_hash, request, state,
               attempt, lease_owner, lease_until, result, failure,
-              approval_id, resume, created_at, updated_at, completed_at)
+              approval_id, resume, created_at, updated_at, completed_at,
+              submitted_by_kind, submitted_by_id, submitted_by_tenant_id)
            VALUES ($1, $2, $3, $4, $5::jsonb, 'RECEIVED', 0, NULL, NULL,
-                   NULL, NULL, NULL, NULL, $6, $6, NULL)
+                   NULL, NULL, NULL, NULL, $6, $6, NULL, $7, $8, $9)
            ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
            RETURNING ${executionColumns}`,
           [
@@ -409,7 +440,10 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
             normalized.idempotencyKey,
             requestHash,
             jsonText(normalized, 'Execution request'),
-            now
+            now,
+            submittedBy.kind,
+            submittedBy.kind === 'unknown' ? null : submittedBy.id,
+            submittedBy.kind === 'unknown' ? null : submittedBy.tenantId
           ]
         )
         if (!inserted.rows[0]) {
@@ -427,7 +461,10 @@ export class PostgresOperationalExecutionStore implements OperationalExecutionSt
             )
           }
           const record = mapRecord(winner.rows[0])
-          if (record.requestHash !== requestHash) {
+          if (
+            record.requestHash !== requestHash ||
+            !sameExecutionPrincipal(record.submittedBy, submittedBy)
+          ) {
             throw new OperationalExecutionError(
               'conflict',
               'Idempotency key is already bound to a different request'

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * AUD0621 F12 (SPEC0250 P8, SPEC0144 invariant 3) — the shipped trusted
  * bootstrap restores the operator session from the cookie when no bootstrap

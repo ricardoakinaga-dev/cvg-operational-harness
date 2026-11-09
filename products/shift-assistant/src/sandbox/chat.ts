@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline'
 import { composeShiftApp } from '../compose.ts'
 import { loadShiftConfig } from '../config.ts'
 import { startSandboxServices } from './services.ts'
+import { syntheticWebhook } from './webhook.ts'
 
 /**
  * Interactive test of the assistant in the terminal: type as if you were on
@@ -18,7 +19,6 @@ import { startSandboxServices } from './services.ts'
  */
 const ME = '5511900000001'
 const MANAGER = '5511900000009'
-const SECRET = 'segredo-sintetico-do-modo-conversa'
 
 const HELP = `
 Digite como se fosse no WhatsApp. Exemplos:
@@ -43,10 +43,11 @@ async function main(): Promise<void> {
   )
   const dataDir = mkdtempSync(join(tmpdir(), 'cvg-shift-chat-'))
   let now = new Date()
+  const webhook = syntheticWebhook()
   const config = loadShiftConfig({
     SHIFT_PROVIDER: 'waha',
     SHIFT_MEMBERS: `${ME}=Você (teste);${MANAGER}=Gestor (teste)*`,
-    SHIFT_WEBHOOK_SECRET: SECRET,
+    ...webhook.env,
     SHIFT_DATA_DIR: dataDir,
     SHIFT_PORT: '0',
     SHIFT_HOST: '127.0.0.1',
@@ -82,22 +83,20 @@ async function main(): Promise<void> {
 
   const send = async (from: string, payload: Record<string, unknown>) => {
     counter += 1
+    const body = JSON.stringify({
+      event: 'message',
+      payload: {
+        id: `chat-${counter}`,
+        from: `${from}@c.us`,
+        fromMe: false,
+        body: '',
+        ...payload
+      }
+    })
     await fetch(`http://127.0.0.1:${port}/webhooks/waha`, {
       method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-cvg-webhook-secret': SECRET
-      },
-      body: JSON.stringify({
-        event: 'message',
-        payload: {
-          id: `chat-${counter}`,
-          from: `${from}@c.us`,
-          fromMe: false,
-          body: '',
-          ...payload
-        }
-      })
+      headers: webhook.headers(body, now),
+      body
     })
     await app.assistant.idle()
     flush()

@@ -18,7 +18,9 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import os from 'node:os'
+import { beforeAll } from 'vitest'
 import { pinnedToolchainLocation } from '../scripts/boundary-installed-identity.mjs'
 import { ownedRunParent } from './support/owned-run-parent.mjs'
 
@@ -162,13 +164,94 @@ function physical(fx) {
     compiled: { status: 'UNAVAILABLE', files: [] }
   }
 }
+// K3 (BUILD0420, option A): the same clean caller, the same requests and the
+// same assertions; only the plumbing moves. One pinned-Node process per shard
+// computes its share of the catalog up front, in beforeAll, with K shards in
+// parallel (K = min(4, cores), 1 when the core count is unavailable; B6_SHARDS
+// forces K for measurement); every it() reads its own entry, and a missing
+// entry falls back to the original per-request call.
+const BATCH_CODE =
+  'const fs=require("node:fs"); const e=require(process.argv[1]); const r=JSON.parse(fs.readFileSync(0,"utf8")); const out=[]; for (const q of r.requests) { out.push(q.census ? e.analyzeSemanticBoundary(q.input,{refusalCensus:true}) : e.runSemanticBoundary(q.input)); } process.stdout.write(JSON.stringify(out));'
+// Tempo do lote (beforeAll) medido neste worktree em 08/11/2026, 16 núcleos
+// com load 15–31 de outras cargas: K=4 ≈ 87–101 s (236 pedidos, duas
+// medições); K=1 (serial) ≈ 332 s; o arquivo original gastava 386 s em 165
+// testes. hookTimeout = max(60 s, 3 × lote K=4 ≈ 304 s), arredondado para
+// 360 s, acima também do lote serial, para cobrir um runner de 1 núcleo. O
+// limite por chamada do motor (limits.timeoutMs = 300 s) não muda.
+const BATCH_HOOK_TIMEOUT = 360000
+const SHARDS = Math.max(
+  1,
+  Math.min(
+    Number(process.env.B6_SHARDS) || 4,
+    typeof os.availableParallelism === 'function'
+      ? os.availableParallelism()
+      : 1
+  )
+)
+function cleanBatch(requests) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pinnedNode, ['-e', BATCH_CODE, enginePath], {
+      timeout: BATCH_HOOK_TIMEOUT,
+      env: {
+        PATH: path.dirname(pinnedNode) + ':/usr/bin:/bin',
+        LANG: 'C',
+        TZ: 'UTC'
+      }
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', (d) => (stdout += d))
+    child.stderr.setEncoding('utf8').on('data', (d) => (stderr += d))
+    child.on('error', reject)
+    child.on('close', (status, signal) => {
+      if (status !== 0)
+        reject(Error('clean caller failed: ' + (stderr || signal)))
+      else resolve(JSON.parse(stdout))
+    })
+    child.stdin.end(JSON.stringify({ requests }))
+  })
+}
+// items: { store, key, request }, request in the shape cleanCall receives.
+async function runBatches(items) {
+  const shards = Array.from({ length: SHARDS }, () => [])
+  items.forEach((q, i) => shards[i % SHARDS].push(q))
+  const live = shards.filter((s) => s.length)
+  const outputs = await Promise.all(
+    live.map((s) => cleanBatch(s.map((q) => q.request)))
+  )
+  live.forEach((s, i) => s.forEach((q, j) => q.store.set(q.key, outputs[i][j])))
+}
 const results = new Map()
+const censuses = new Map()
+const prologues = new Map()
+beforeAll(
+  () =>
+    runBatches([
+      ...FIXTURES.map((fx) => ({
+        store: results,
+        key: fx.id,
+        request: { input: physical(fx) }
+      })),
+      ...FIXTURES.map((fx) => ({
+        store: censuses,
+        key: fx.id,
+        request: { input: physical(fx), census: true }
+      })),
+      ...prologueRows.map(([name, row]) => ({
+        store: prologues,
+        key: name,
+        request: prologueRequest(row)
+      }))
+    ]),
+  BATCH_HOOK_TIMEOUT
+)
 function result(fx) {
   if (!results.has(fx.id))
     results.set(fx.id, cleanCall({ input: physical(fx) }))
   return results.get(fx.id)
 }
-const census = (fx) => cleanCall({ input: physical(fx), census: true })
+const census = (fx) =>
+  censuses.get(fx.id) ?? cleanCall({ input: physical(fx), census: true })
 const byId = (id) => {
   const fx = FIXTURES.find((f) => f.id === id)
   if (!fx) throw Error('unknown fixture ' + id)
@@ -2420,6 +2503,18 @@ const prologueRows = Object.entries(LEVELS).flatMap(([level, text]) =>
   })
 )
 
+const prologueRequest = (row) => ({
+  input: physical({
+    files: {
+      'package.json': '{}',
+      'entry.js': ENTRY,
+      'm.js': row.m,
+      'products/x.js': 'module.exports = 1\n'
+    },
+    start: 'entry.js'
+  })
+})
+
 describe('SPEC0252 §5.2 — directive prologue table, file and function-body levels', () => {
   it('has the rows of the table', () => {
     expect(prologueRows).toHaveLength(24 * 2 + 6 * 2)
@@ -2427,17 +2522,7 @@ describe('SPEC0252 §5.2 — directive prologue table, file and function-body le
   it.each(prologueRows)(
     '%s',
     (name, row) => {
-      const out = cleanCall({
-        input: physical({
-          files: {
-            'package.json': '{}',
-            'entry.js': ENTRY,
-            'm.js': row.m,
-            'products/x.js': 'module.exports = 1\n'
-          },
-          start: 'entry.js'
-        })
-      })
+      const out = prologues.get(name) ?? cleanCall(prologueRequest(row))
       expect(out.validation, name).toEqual({ valid: true })
       if (row.strict) {
         expect(annexb(out), name).toEqual([])

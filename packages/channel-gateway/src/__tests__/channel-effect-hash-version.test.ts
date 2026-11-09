@@ -21,6 +21,7 @@ import {
   type ChannelEffectRecord
 } from '../effect-journal.ts'
 import { ChannelGateway } from '../gateway.ts'
+import { syntheticComposition } from './fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-0000000000d1'
 const CORRELATION = 'corr_00000000-0000-4000-8000-0000000000d1'
@@ -195,10 +196,12 @@ describe('AAA-12 hash canonicalization and versioning', () => {
     const adapterA = new CountingAdapter()
     const adapterB = new CountingAdapter()
     const gatewayA = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterA],
       effectJournal: new FileChannelEffectJournal({ directory })
     })
     const gatewayB = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapterB],
       effectJournal: new FileChannelEffectJournal({ directory })
     })
@@ -233,6 +236,7 @@ describe('AAA-12 hash canonicalization and versioning', () => {
 
     const adapter = new CountingAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: new FileChannelEffectJournal({ directory })
     })
@@ -268,6 +272,7 @@ describe('AAA-12 hash canonicalization and versioning', () => {
 
     const adapter = new CountingAdapter()
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       outboundAdapters: [adapter],
       effectJournal: new FileChannelEffectJournal({ directory })
     })

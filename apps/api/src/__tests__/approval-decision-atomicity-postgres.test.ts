@@ -41,6 +41,12 @@ if (pgRequired && !pgEnabled) {
 const itWithPostgres = pgEnabled ? it : it.skip
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000711'
+// SPEC 0317 G1: an approval needs a known author, distinct from whoever decides.
+const syntheticRequester = {
+  kind: 'human',
+  id: 'human.submitter.synthetic',
+  tenantId: tenantA
+} as const
 
 function runtimeInput() {
   return {
@@ -108,6 +114,7 @@ async function waitingFixture(
   const runtime = runtimeInput()
   const accepted = await store.submit({
     tenantId: tenantA,
+    submittedBy: syntheticRequester,
     idempotencyKey: key,
     runtime
   })
@@ -132,6 +139,7 @@ async function waitingFixture(
     correlationId: 'correlation_atomic_pg_synthetic',
     operationKey: `operation.atomic.pg.${key}`,
     executionRef: accepted.record.id,
+    requestedBy: syntheticRequester,
     singleUse: true,
     reason: 'synthetic PG atomicity',
     proposalPayload: { synthetic: true }

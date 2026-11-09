@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * SPEC 0257 §7 / AC06 — the export-approval request keeps ONE Idempotency-Key
  * across timeout, 500, reload and double click; a known resolution is followed

@@ -69,7 +69,11 @@ const persistedColumns = [
   'proposal_payload',
   'operation_key',
   'origin_conversation_id',
-  'origin_session_id'
+  'origin_session_id',
+  'requested_by_kind',
+  'requested_by_id',
+  'requested_by_tenant_id',
+  'requester_binding'
 ] as const
 
 type FakeRow = RuntimeApprovalRow
@@ -554,6 +558,10 @@ describe('synthetic PostgreSQL runtime approval authority', () => {
       operation_key: null,
       origin_conversation_id: null,
       origin_session_id: null,
+      requested_by_kind: 'unknown',
+      requested_by_id: null,
+      requested_by_tenant_id: null,
+      requester_binding: null,
       revision: 1,
       created_at: baseNow,
       updated_at: baseNow

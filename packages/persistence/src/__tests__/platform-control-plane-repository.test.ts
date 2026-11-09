@@ -39,6 +39,7 @@ describe('Postgres control plane repository', () => {
       versionId,
       input: { message: 'teste fictício', historySize: 0 },
       intent: { name: 'unknown', confidence: 0.2 },
+      risk: { level: 'low' as const, reason: 'controlled_low_risk_request' },
       policy: [],
       knowledge: { status: 'not_requested' },
       tools: [],
@@ -141,6 +142,7 @@ describe('Postgres control plane repository', () => {
       versionId,
       input: { message: 'fixture', historySize: 0 },
       intent: { name: 'unknown', confidence: 0.2 },
+      risk: { level: 'low' as const, reason: 'controlled_low_risk_request' },
       policy: [],
       knowledge: { status: 'not_requested' },
       tools: [],
@@ -178,6 +180,7 @@ describe('Postgres control plane repository', () => {
       versionId,
       input: { message: 'fixture', historySize: 0 },
       intent: { name: 'unknown', confidence: 0.2 },
+      risk: { level: 'low' as const, reason: 'controlled_low_risk_request' },
       policy: [],
       knowledge: { status: 'not_requested' },
       tools: [],
@@ -471,6 +474,7 @@ describe('Postgres control plane repository', () => {
       versionId,
       input: { message: 'cross-tenant', historySize: 0 },
       intent: { name: 'unknown', confidence: 0.1 },
+      risk: { level: 'low' as const, reason: 'controlled_low_risk_request' },
       policy: [],
       knowledge: { status: 'not_requested' },
       tools: [],
@@ -518,12 +522,7 @@ describe('Postgres control plane repository', () => {
             id: 'redacted-case',
             message: 'Email ana@example.com e +5511999999999',
             history: ['Contato joao@example.com'],
-            expectedResponseMode: 'clarify',
-            approvedKnowledge: {
-              version: 'knowledge-v1',
-              answer: 'Ligue +5511888888888',
-              source: 'controlled://institutional'
-            }
+            expectedResponseMode: 'clarify'
           }
         ]
       },
@@ -531,8 +530,7 @@ describe('Postgres control plane repository', () => {
     )
     expect(suite.cases[0]).toMatchObject({
       message: 'Email [redacted-email] e [redacted-phone]',
-      history: ['Contato [redacted-email]'],
-      approvedKnowledge: { answer: 'Ligue [redacted-phone]' }
+      history: ['Contato [redacted-email]']
     })
 
     const clone = await repository.cloneTestSuite(
@@ -566,6 +564,7 @@ describe('Postgres control plane repository', () => {
       versionId: version.id,
       input: { message: 'Email trace@example.com', historySize: 0 },
       intent: { name: 'unknown', confidence: 0.2 },
+      risk: { level: 'low' as const, reason: 'controlled_low_risk_request' },
       policy: [],
       knowledge: { status: 'not_requested' },
       tools: [],

@@ -4,6 +4,7 @@ import {
   type PublishedAgentJobDependencies
 } from '@cvg/agent-core'
 import { TenantIdSchema } from '@cvg/platform'
+import { createRealCapabilityGuards } from '@cvg/shared'
 import {
   CONTINUOUS_WORKER_RUN_MODE,
   parseContinuousWorkerSettings
@@ -27,6 +28,7 @@ export interface WorkerStartupFailure {
     | 'continuous_durable_adapter_required'
     | 'continuous_settings_invalid'
     | 'phase2_fault_point_invalid'
+    | 'real_capability_config_invalid'
   message: string
 }
 
@@ -48,9 +50,6 @@ export async function processAgentTurnJob(
     versionId: input.versionId,
     message: input.message,
     history: input.history,
-    ...(input.approvedKnowledge
-      ? { approvedKnowledge: input.approvedKnowledge }
-      : {}),
     ...(dependencies.resolveApprovedKnowledge
       ? { resolveApprovedKnowledge: dependencies.resolveApprovedKnowledge }
       : {}),
@@ -61,6 +60,15 @@ export async function processAgentTurnJob(
 export function getWorkerStartupFailure(
   env: NodeJS.ProcessEnv = process.env
 ): WorkerStartupFailure | null {
+  try {
+    createRealCapabilityGuards({ env })
+  } catch (error) {
+    return {
+      code: 'real_capability_config_invalid',
+      message:
+        error instanceof Error ? error.message : 'Real capability flags refused'
+    }
+  }
   const runMode = env.CVG_WORKER_RUN_MODE?.trim()
   const operationalHarness =
     env.CVG_WORKER_RUNTIME?.trim() === 'operational-harness'

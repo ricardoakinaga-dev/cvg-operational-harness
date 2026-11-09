@@ -16,6 +16,7 @@ import {
   createExamDownloadTool,
   createExamUploadTool
 } from '../index.ts'
+import { realChannelGuard } from './fixtures/channel-composition.ts'
 
 // AUD0625 F03c / SPEC 0281: exam.upload must not send the content of a file
 // that has another name (nlink > 1), e.g. a hard link inside the workspace to
@@ -52,6 +53,7 @@ function layout() {
 function uploader(root: string, sent: string[]) {
   const journal = new InMemoryChannelEffectJournal()
   const tool = createExamUploadTool({
+    realCapabilityGuard: realChannelGuard,
     effectJournal: journal,
     workspaceRoot: root,
     urlGuard: { allowedHosts: ['exams.example.com'] },
@@ -148,6 +150,7 @@ describe('F03c: exam.upload and hard links (SPEC 0281)', () => {
     const { root, secret } = layout()
     linkSync(secret, join(root, 'report.pdf'))
     const tool = createExamDownloadTool({
+      realCapabilityGuard: realChannelGuard,
       effectJournal: new InMemoryChannelEffectJournal(),
       workspaceRoot: root,
       urlGuard: { allowedHosts: ['exams.example.com'] },

@@ -66,8 +66,8 @@
 
 - Caso de uso: criar approval request numa sessão.
 - Payload: sessionId, proposedAction, summary, riskLevel.
-- Autorização: `approval:view`; `audit_evidence_export_review` exige também `audit:view_full`.
-- Escopo por caso (SPEC0251): Operator/Approver só na sessão de caso atribuído; Supervisor/Admin no tenant ativo.
+- Autorização ([SPEC 0317 G5](0317_security_guardrails.md), 06/11/2026): `approval:create`, permissão separada de `approval:view`, `approval:decide` e `approval:execute`; `audit_evidence_export_review` exige também `audit:view_full`. Operator, Approver e Supervisor têm `approval:create`; Admin não, e recebe 403 antes de qualquer escrita, mantendo a leitura por `approval:view`. **Mudança pública:** antes bastava `approval:view`. Concessão externa de view não vira create: o cliente que dependia disso passa a receber 403. Criar não concede decisão nem efeito.
+- Escopo por caso (SPEC0251): Operator/Approver só na sessão de caso atribuído; Supervisor no tenant ativo.
 - Erros: 404 `not_found` para recurso, sessão ou execução ausente, de outro tenant ou de caso não atribuído a Operator/Approver; 503 quando a autoridade de caso não está disponível. Respostas com `cache-control: no-store`.
 - Sessão e principal ([SPEC0262](0262_case_mutation_session_revocation.md), 29/10/2026): o cookie operacional fica ligado à `case_principals.revision` com que foi emitido (campo interno, nunca no DTO nem em header). Em modo `trusted`, toda rota classificada como de operador (todas, exceto probes `/health`, `/live`, `/ready`, `/health/metrics`, o webhook, o bootstrap OIDC, `GET/HEAD /v1/session` e o logout) exige principal atual antes da validação e da matriz de roles: 401 `unauthorized` (limpa o cookie) quando a revisão, a role, o estado ativo ou a versão não conferem; 503 `configuration_error` quando o principal não pode ser lido ou a autoridade não está configurada. Task/aprovação/status/decisão/runtime/journey task rodam a política de caso na mesma unidade da escrita. A invalidação global é uma operação local (`scripts/revoke-operator-sessions.ts`), nunca uma rota HTTP.
 - Criação atômica ([SPEC0257](0257_atomic_case_resource_creation.md), 28/10/2026): exige um único header `Idempotency-Key` (8–200 caracteres `[A-Za-z0-9._:-]`; ausente, duplicado, com vírgula/espaço ou fora do formato: 400 `validation_failed` antes de qualquer escrita). Aprovação, evento de criação e recibo são confirmados juntos (PostgreSQL: uma transação; falha antes do COMMIT deixa zero dos três). A mesma chave com o mesmo pedido devolve 200 com o mesmo `id` e o estado atual; a mesma chave com pedido, ator ou sessão diferentes devolve 409 `conflict`. Composição PostgreSQL sem pool transacional exclusiva devolve 503 `configuration_error` antes de escrever. Aprovações anteriores ao corte não têm chave e não são deduplicadas. O console guarda a chave da operação lógica em `sessionStorage` e a reutiliza em retry/recarga.
@@ -88,6 +88,12 @@
 - Resposta: 202 para `APPROVED`, 200 para `REJECTED`, com a execução projetada para quem chama.
 - Escopo por caso (SPEC0251): Approver só em execução vinculada a caso atribuído; Supervisor no tenant ativo.
 - Erros: 404 `not_found` para recurso, sessão ou execução ausente, de outro tenant ou de caso não atribuído a Operator/Approver; 503 quando a autoridade de caso não está disponível; 403 de self-approval e 409 de conflito inalterados. Respostas com `cache-control: no-store`.
+- Autoria ([SPEC 0317 G1](0317_security_guardrails.md), 06/11/2026): a execução guarda `submittedBy` imutável (`human` ou `system`, ID e tenant), vindo só da identidade autenticada; a approval guarda o mesmo principal e um vínculo versionado com execução e revisão da proposta. Aprovar a própria execução devolve 403 `forbidden`, inclusive para Supervisor, sem efeito, evento ou resume; rejeitar continua permitido. Approval sem origem confiável (registros anteriores à migration `0039`, origem `unknown`) devolve 409 `conflict` ao aprovar e só pode ser rejeitada e recriada, ou encaminhada a handoff. Registros de execução e approval que divergem devolvem 404 `not_found`.
+
+### `POST /v1/executions`
+
+- Caso de uso: submeter uma execução.
+- Autoria ([SPEC 0317 G1](0317_security_guardrails.md), 06/11/2026): `submittedBy` no corpo ou em `runtime` é recusado com 400 `validation_failed`; o autor vem da identidade autenticada. **Mudança pública:** a mesma `idempotencyKey` usada por outro principal devolve 409 `conflict`, sem revelar o registro nem trocar a autoria. Sem identidade autenticada (só `NODE_ENV=test`, simulação), a origem fica `unknown` e nenhuma approval dessa execução pode ser aprovada.
 
 ### `GET /v1/tasks`
 

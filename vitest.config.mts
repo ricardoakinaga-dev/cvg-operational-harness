@@ -82,7 +82,9 @@ export default defineConfig({
     __CVG_API_ORIGIN__: JSON.stringify('')
   },
   test: {
-    environment: 'jsdom',
+    // Ambiente padrão node; o DOM (jsdom) é habilitado por arquivo pelos testes
+    // de apps/web via pragma `@vitest-environment jsdom`.
+    environment: 'node',
     testTimeout: 15000,
     fileParallelism: !isCoverageRun,
     include: [

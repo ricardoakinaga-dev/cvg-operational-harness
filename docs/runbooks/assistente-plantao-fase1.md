@@ -17,18 +17,19 @@ Código: `apps/worker/src/shift-assistant/`.
 
 ## Configuração
 
-| Variável                                                   | Exemplo                                       | Observação                                                   |
-| ---------------------------------------------------------- | --------------------------------------------- | ------------------------------------------------------------ |
-| `SHIFT_PROVIDER`                                           | `waha` ou `evolution`                         | Canal escolhido (D1)                                         |
-| `SHIFT_MEMBERS`                                            | `5511900000001=Dra Ana;5511900000009=Gestor*` | Só estes números falam com o assistente; `*` marca o gestor  |
-| `SHIFT_WEBHOOK_SECRET`                                     | 24+ caracteres aleatórios                     | Enviado pelo WAHA/Evolution no header `x-cvg-webhook-secret` |
-| `SHIFT_DATA_DIR`                                           | `/var/lib/cvg-shift`                          | Registro de eventos e mídias; documentos (D4)                |
-| `SHIFT_PORT`, `SHIFT_HOST`                                 | `3400`, `0.0.0.0`                             |                                                              |
-| `SHIFT_TICK_SECONDS`                                       | `60`                                          | Frequência de verificação de lembretes                       |
-| `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION`                 | `http://waha:3000`, chave, `default`          | Quando `SHIFT_PROVIDER=waha`                                 |
-| `EVOLUTION_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE` | `http://evolution:8080`, chave, `cvg`         | Quando `SHIFT_PROVIDER=evolution`                            |
-| `WHISPER_URL`, `WHISPER_MODEL`                             | `http://whisper:8000`, `large-v3`             | Transcrição local (D2)                                       |
-| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`                 | `https://.../v1`, chave, modelo               | Organização do texto (D2)                                    |
+| Variável                                                   | Exemplo                                       | Observação                                                                  |
+| ---------------------------------------------------------- | --------------------------------------------- | --------------------------------------------------------------------------- |
+| `SHIFT_PROVIDER`                                           | `waha` ou `evolution`                         | Canal escolhido (D1)                                                        |
+| `SHIFT_MEMBERS`                                            | `5511900000001=Dra Ana;5511900000009=Gestor*` | Só estes números falam com o assistente; `*` marca o gestor                 |
+| `SHIFT_CHANNEL_MODE`                                       | `synthetic`                                   | `real` é recusado até existir o ingresso assinante                          |
+| `SHIFT_WEBHOOK_TENANT`, `SHIFT_WEBHOOK_KEYS`               | tenant, lista JSON de chaves                  | [Webhook assinado](../../products/shift-assistant/docs/webhook-assinado.md) |
+| `SHIFT_DATA_DIR`                                           | `/var/lib/cvg-shift`                          | Registro de eventos e mídias; documentos (D4)                               |
+| `SHIFT_PORT`, `SHIFT_HOST`                                 | `3400`, `0.0.0.0`                             |                                                                             |
+| `SHIFT_TICK_SECONDS`                                       | `60`                                          | Frequência de verificação de lembretes                                      |
+| `WAHA_URL`, `WAHA_API_KEY`, `WAHA_SESSION`                 | `http://waha:3000`, chave, `default`          | Quando `SHIFT_PROVIDER=waha`                                                |
+| `EVOLUTION_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE` | `http://evolution:8080`, chave, `cvg`         | Quando `SHIFT_PROVIDER=evolution`                                           |
+| `WHISPER_URL`, `WHISPER_MODEL`                             | `http://whisper:8000`, `large-v3`             | Transcrição local (D2)                                                      |
+| `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`                 | `https://.../v1`, chave, modelo               | Organização do texto (D2)                                                   |
 
 Sem qualquer variável obrigatória, o processo **não sobe** e diz qual falta,
 sem mostrar valores.
@@ -97,10 +98,8 @@ A imagem tem só o Node e um arquivo JavaScript; roda sem root, com disco
 somente leitura e sem capacidades extras. O volume `shift-data` guarda o
 registro de eventos e as mídias (documentos, D4) e deve entrar no backup.
 
-O `compose.yaml` publica a porta só em `127.0.0.1`. Se o WAHA ou a Evolution
-rodarem em outro container, coloque os dois na mesma rede Docker e use o nome do
-serviço na URL do webhook; se rodarem em outra máquina, publique a porta na
-interface da rede interna, nunca na internet.
+O `compose.yaml` não publica porta no host. A porta do webhook é para o ingresso
+assinante, nunca para a internet nem para o provider direto.
 
 ## Subir sem Docker
 
@@ -110,13 +109,16 @@ npx tsx apps/worker/src/shift-assistant/main.ts   # com as variáveis acima no a
 
 ## Ligar o WhatsApp ao assistente
 
-- **WAHA:** webhook da sessão para `http://<assistente>:3400/webhooks/waha`,
-  evento `message`, header customizado `x-cvg-webhook-secret: <segredo>`.
-- **Evolution:** webhook da instância para
-  `http://<assistente>:3400/webhooks/evolution`, evento `MESSAGES_UPSERT`,
-  header `x-cvg-webhook-secret: <segredo>`. Com `webhook_base64` ligado, áudios
-  chegam no próprio webhook; sem ele, o assistente baixa pelo id da mensagem.
-- Se o provedor não aceitar header customizado, use `?secret=<segredo>` na URL.
+O canal real está **bloqueado**. WAHA e Evolution não produzem o
+[envelope assinado](../../products/shift-assistant/docs/webhook-assinado.md) e
+não podem chamar o assistente diretamente; não há segredo em header estático nem
+na URL. É preciso um ingresso dedicado, que autentique o provider, assine o
+envelope e seja o único caminho de rede até a porta do webhook, além do gate do
+canal. Os requisitos estão naquele documento.
+
+Quando essa composição existir, o provider entrega ao ingresso o evento `message`
+(WAHA) ou `MESSAGES_UPSERT` (Evolution). Com `webhook_base64` ligado, áudios
+chegam no próprio webhook; sem ele, o assistente baixa pelo id da mensagem.
 
 Só mensagens diretas são tratadas; grupos são ignorados nesta fase.
 

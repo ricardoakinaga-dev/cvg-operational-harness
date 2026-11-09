@@ -514,6 +514,10 @@ export function approvalsControl(
           correlationId: input.correlationId,
           executionRef,
           operatorId: input.agent.id,
+          ...(input.submittedBy !== undefined &&
+          input.submittedBy.kind !== 'unknown'
+            ? { requestedBy: input.submittedBy }
+            : {}),
           agentVersion: input.agent.version,
           action: 'tool.execute',
           resource: { type: 'tool', id: tool.id },

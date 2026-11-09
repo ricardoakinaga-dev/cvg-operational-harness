@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * AUD0621 F22/F23 (SPEC0250 §3.6) — the console asks for bounded, filtered
  * pages (pending approvals, active tasks), pages through them and opens the

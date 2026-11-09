@@ -408,12 +408,18 @@ describe('canonical execution HTTP boundary', () => {
     }
     const app = buildServer({
       operationalExecution: store,
-      operationalApprovalAuthority: approvalAuthority
+      operationalApprovalAuthority: approvalAuthority,
+      requireAuthenticatedMutations: true
     })
     const accepted = await app.inject({
       method: 'POST',
       url: '/v1/executions',
-      headers: { 'x-tenant-id': tenantA },
+      // SPEC 0317 G1: an anonymous submission could never be approved.
+      headers: {
+        'x-tenant-id': tenantA,
+        'x-operator-id': 'submitter.synthetic',
+        'x-operator-role': 'Operator'
+      },
       payload: {
         idempotencyKey: 'approval-restart-1',
         runtime: runtime(tenantA, ['synthetic.approval.tool'])
@@ -523,9 +529,15 @@ describe('canonical execution HTTP boundary', () => {
     const store = createInMemoryOperationalExecutionStore()
     const approvalAuthority = new DurableApprovalEngine()
     const runtimeInput = runtime(tenantA)
+    const requester = {
+      kind: 'human',
+      id: 'submitter.synthetic',
+      tenantId: tenantA
+    } as const
     const accepted = await store.submit({
       tenantId: tenantA,
       idempotencyKey: 'approval-requested-recovery-1',
+      submittedBy: requester,
       runtime: runtimeInput
     })
     const claimed = await store.claimNext(tenantA, 'worker-requested-recovery')
@@ -552,6 +564,7 @@ describe('canonical execution HTTP boundary', () => {
       executionRef: accepted.record.id,
       singleUse: true,
       reason: 'synthetic requested recovery',
+      requestedBy: requester,
       proposalPayload: { synthetic: true }
     }
     const requested = await approvalAuthority.request(request)

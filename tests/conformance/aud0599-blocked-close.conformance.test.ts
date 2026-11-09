@@ -33,7 +33,13 @@ import { DurableApprovalEngineAdapter } from '../../packages/persistence/src/ope
  * §11.3/§11.4). Aprovação e adaptador reais, em memória; dados sintéticos.
  */
 
-const input = phase3RuntimeInput()
+// SPEC 0317 G1: the worker hands the kernel the author of the execution.
+const requester = {
+  kind: 'human',
+  id: 'human.submitter.synthetic',
+  tenantId: phase3RuntimeInput().tenantId
+} as const
+const input = { ...phase3RuntimeInput(), submittedBy: requester }
 const executionId = input.executionId!
 const DENIAL = 'synthetic-denial-marker'
 const callTool = {
@@ -327,6 +333,7 @@ describe('AUD-0599 F01 — single-pass preserva o motivo após reserva e log per
         summary: tool.description,
         correlationId: input.correlationId,
         executionRef: executionId,
+        requestedBy: requester,
         operatorId: input.agent.id,
         agentVersion: input.agent.version,
         action: 'tool.execute',
@@ -523,6 +530,7 @@ describe('AUD-0600 F01 — log inteiro indisponível não apaga a negação', ()
       summary: tool.description,
       correlationId: input.correlationId,
       executionRef: executionId,
+      requestedBy: requester,
       operatorId: input.agent.id,
       agentVersion: input.agent.version,
       action: 'tool.execute',

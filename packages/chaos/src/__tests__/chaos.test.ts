@@ -17,6 +17,7 @@ import {
 import { PolicyEngine, REFERENCE_POLICY_PROFILE } from '@cvg/policy-engine'
 import { InMemoryDatabase, OutboxRepository } from '@cvg/persistence'
 import { ChaosLedger } from '../faults.ts'
+import { syntheticComposition } from '../../../channel-gateway/src/__tests__/fixtures/channel-composition.ts'
 
 const TENANT = 'tenant_00000000-0000-4000-8000-000000000001'
 const OTHER_TENANT = 'tenant_00000000-0000-4000-8000-000000000002'
@@ -341,6 +342,7 @@ describe('chaos: channels and idempotency', () => {
   it('CHAOS-09 duplicate webhook produces a single inbound event', () => {
     const events: string[] = []
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       inboundAdapters: [new ControlledFakeChannelAdapter({ clock: () => NOW })],
       onEvent: (event) => events.push(event.type)
     })
@@ -365,6 +367,7 @@ describe('chaos: channels and idempotency', () => {
 
   it('CHAOS-10 out-of-order webhooks are all accepted without loss', () => {
     const gateway = new ChannelGateway({
+      composition: syntheticComposition,
       inboundAdapters: [new ControlledFakeChannelAdapter({ clock: () => NOW })]
     })
     const context = {
@@ -405,7 +408,10 @@ describe('chaos: channels and idempotency', () => {
 
   it('CHAOS-16 channel provider outage: retry sends exactly once', async () => {
     const adapter = new ControlledFakeChannelAdapter({ clock: () => NOW })
-    const gateway = new ChannelGateway({ outboundAdapters: [adapter] })
+    const gateway = new ChannelGateway({
+      composition: syntheticComposition,
+      outboundAdapters: [adapter]
+    })
     const message = {
       messageId: 'msg_chaos_16',
       tenantId: TENANT,

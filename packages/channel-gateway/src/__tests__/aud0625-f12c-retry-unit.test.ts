@@ -20,6 +20,10 @@ import {
 } from '../effect-journal.ts'
 import { FileChannelEffectJournal } from '../effect-journal-file.ts'
 import { ChannelGateway } from '../gateway.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 // SPEC 0282: Retry-After parsing, the journal rules at their boundaries, both
 // adapters end to end, and the gateway options. Synthetic data only.
@@ -254,17 +258,20 @@ describe.each(['evolution', 'chatwoot'] as const)('%s adapter', (name) => {
     const adapter =
       name === 'evolution'
         ? new EvolutionChannelAdapter({
+            realCapabilityGuard: realChannelGuard,
             ...common,
             baseUrl: 'https://evolution.example.com',
             instance: 'cvg'
           })
         : new ChatwootChannelAdapter({
+            realCapabilityGuard: realChannelGuard,
             ...common,
             baseUrl: 'https://chatwoot.example.com',
             accountId: '1'
           })
     const journal = new InMemoryChannelEffectJournal({ clock: () => now })
     const gateway = new ChannelGateway({
+      composition: realComposition,
       outboundAdapters: [adapter],
       effectJournal: journal,
       ...(maxRetryAfterMs !== undefined ? { maxRetryAfterMs } : {}),

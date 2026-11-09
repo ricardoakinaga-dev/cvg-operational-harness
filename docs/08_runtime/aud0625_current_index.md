@@ -1,5 +1,7 @@
 # Índice corrente do programa AUD0625 — 29/10/2026
 
+> **Superado em 04/11/2026.** As ondas 2–7 e a consolidação (#33–#38 e #40) já estão na `main` (`362dc043c`); as seções abaixo refletem 29/10/2026 e são histórico. Estado vigente: [`99_runtime_state.md`](../99_runtime_state.md). Produção continua `NO_GO`.
+
 Índice derivado e conciliado à mão (F20 da [auditoria 0625](../04_audit/0625_repository_score_audit_2026-10-28.md)).
 Não substitui os ledgers: o histórico em [`99_runtime_state.md`](../99_runtime_state.md),
 [`20_master_execution_log.md`](../20_master_execution_log.md),

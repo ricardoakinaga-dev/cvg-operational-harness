@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  createSyntheticKnowledgeResolver,
   AgentConfigSchema,
   InMemoryControlPlaneStore,
   type TenantScope,
   type TestRunTrace
 } from '@cvg/platform'
 import { buildServer } from '../server.ts'
+import { createSyntheticTestLabComposition } from '../test-lab-composition.ts'
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000011'
 const tenantB = 'tenant_00000000-0000-4000-8000-000000000012'
@@ -434,7 +436,15 @@ describe('platform control plane API', () => {
   })
 
   it('runs Test Lab with a controlled source and no external dispatch', async () => {
-    const app = buildServer()
+    const app = buildServer({
+      testLab: createSyntheticTestLabComposition({
+        resolveApprovedKnowledge: createSyntheticKnowledgeResolver({
+          version: 'controlled-v1',
+          answer: 'Horário fictício.',
+          source: 'controlled://hours'
+        })
+      })
+    })
     const created = await app.inject({
       method: 'POST',
       url: '/v1/admin/agents',
@@ -462,12 +472,7 @@ describe('platform control plane API', () => {
         agentId,
         versionId,
         message: 'Qual o horário de funcionamento?',
-        history: [],
-        approvedKnowledge: {
-          version: 'controlled-v1',
-          answer: 'Horário fictício.',
-          source: 'controlled://hours'
-        }
+        history: []
       }
     })
     const evaluation = await app.inject({
@@ -483,12 +488,7 @@ describe('platform control plane API', () => {
             message: 'Qual o horário de funcionamento?',
             history: [],
             expectedPolicyDecision: 'allowed',
-            expectedResponseMode: 'answer',
-            approvedKnowledge: {
-              version: 'controlled-v1',
-              answer: 'Horário fictício.',
-              source: 'controlled://hours'
-            }
+            expectedResponseMode: 'answer'
           },
           {
             id: 'hard-safety',
@@ -519,7 +519,7 @@ describe('platform control plane API', () => {
   })
 
   it('lists persisted Test Lab and runtime traces only inside the tenant scope', async () => {
-    const app = buildServer()
+    const app = buildServer({ testLab: createSyntheticTestLabComposition() })
     const created = await app.inject({
       method: 'POST',
       url: '/v1/admin/agents',

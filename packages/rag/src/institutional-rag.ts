@@ -1,5 +1,10 @@
 import { createDomainId, DomainError, redactSensitiveText } from '@cvg/shared'
-import { TenantIdSchema, type TenantId } from '@cvg/platform'
+import {
+  knowledgeExcerptSha256,
+  TenantIdSchema,
+  type ApprovedKnowledgeResolution,
+  type TenantId
+} from '@cvg/platform'
 
 export interface ApprovedInstitutionalSource {
   version: string
@@ -77,8 +82,47 @@ export class VersionedKnowledgeCatalog {
     question: string
   ): ReturnType<typeof answerFromInstitutionalSource> {
     const tenantId = TenantIdSchema.parse(rawTenantId)
+    const record = this.latestPublished(tenantId, question)
+    if (!record) return { status: 'handoff', reason: 'approved_source_missing' }
+    return answerFromInstitutionalSource(question, {
+      version: record.version,
+      answer: record.answer,
+      source: record.source
+    })
+  }
+
+  /**
+   * SPEC 0317 G3: the resolver contract. Only a published record of this
+   * tenant answers, with the provenance the runtime verifies.
+   */
+  resolveApproved(
+    rawTenantId: TenantId,
+    question: string
+  ): ApprovedKnowledgeResolution | null {
+    const tenantId = TenantIdSchema.parse(rawTenantId)
+    if (this.answer(tenantId, question).status !== 'answered') return null
+    const record = this.latestPublished(tenantId, question)!
+    return {
+      tenantId,
+      version: record.version,
+      answer: record.answer,
+      source: record.source,
+      provenance: {
+        recordId: record.id,
+        status: 'approved',
+        approvedAt: new Date(record.publishedAt!),
+        validUntil: null,
+        excerptSha256: knowledgeExcerptSha256(record.answer)
+      }
+    }
+  }
+
+  private latestPublished(
+    tenantId: TenantId,
+    question: string
+  ): KnowledgeSourceVersion | undefined {
     const normalized = bounded(question, 'question', 240).toLocaleLowerCase()
-    const record = this.records
+    return this.records
       .filter(
         (item) => item.tenantId === tenantId && item.status === 'published'
       )
@@ -91,12 +135,6 @@ export class VersionedKnowledgeCatalog {
           normalized.includes(item.question.toLocaleLowerCase()) ||
           item.question.toLocaleLowerCase().includes(normalized)
       )
-    if (!record) return { status: 'handoff', reason: 'approved_source_missing' }
-    return answerFromInstitutionalSource(question, {
-      version: record.version,
-      answer: record.answer,
-      source: record.source
-    })
   }
 
   list(rawTenantId: TenantId): KnowledgeSourceVersion[] {

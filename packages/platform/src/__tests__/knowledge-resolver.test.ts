@@ -4,8 +4,8 @@ import {
   AgentConfigSchema,
   executeConfiguredAgent,
   InMemoryControlPlaneStore,
-  createControlledAgentConfig,
-  type ApprovedKnowledgeResolver
+  composeSyntheticKnowledgeResolver,
+  createControlledAgentConfig
 } from '../index.ts'
 
 const tenantId = 'tenant_00000000-0000-0000-0000-000000000611' as const
@@ -44,22 +44,13 @@ describe('controlled knowledge resolver', () => {
       version: 'fixture-v1',
       question: 'horário de funcionamento',
       answer: 'Atendimento fictício das 9h às 17h.',
-      source: 'fixture-manual'
+      source: 'controlled://institutional-hours'
     })
     await catalog.publish(tenantId, source.id)
-    const resolveApprovedKnowledge: ApprovedKnowledgeResolver = ({
-      tenantId: scope,
-      question
-    }) => {
-      const answer = catalog.answer(scope, question)
-      return answer.status === 'answered' && answer.version && answer.answer
-        ? {
-            source: 'controlled://institutional-hours',
-            version: answer.version,
-            answer: answer.answer
-          }
-        : undefined
-    }
+    const resolveApprovedKnowledge = composeSyntheticKnowledgeResolver(
+      ({ tenantId: scope, question }) =>
+        catalog.resolveApproved(scope, question)
+    )
 
     const answered = await executeConfiguredAgent({
       store,

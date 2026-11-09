@@ -1,5 +1,13 @@
 # Backlog do Assistente de Plantão
 
+## SEC-SHIFT-WEBHOOK-20261105 — Autenticidade do webhook
+
+- Estado: `READY_FOR_NEXT_STEP`; prioridade P1, trilha T3. BUILD local concluído em 06/11/2026, sem push, por decisão do usuário de 05/11/2026 (protocolo próprio). Falta revisão e integração; o canal real segue **bloqueado**. Item próprio do produto, separado dos dez cartões PISO históricos; nenhum status PISO mudou e nenhum piloto foi aceito.
+- Recon: servidor aceitava segredo na query sem assinatura do corpo; HTTP sintético reproduziu 401 sem segredo e 200 com query para dois corpos distintos, sem admissão ou efeito externo. [SPEC 0317 §7](../../../docs/02_spec/0317_security_guardrails.md#7-g6--webhook-autenticado-do-assistente-de-plantão-p1-produto) reúne regras, evidência, negativos e critério de pronto.
+- Entregue: [contrato do webhook assinado](webhook-assinado.md). HMAC-SHA256 sobre envelope `cvg-shift-webhook-v1`, timestamp, ID de entrega e corpo bruto antes do parse; chave por provider/tenant com rotação de até 7 dias e revogação; comparação constante; janela de 5 minutos pelo relógio do servidor; reserva durável `webhook_delivery_reserved` no journal antes do parse. `?secret=` e `SHIFT_WEBHOOK_SECRET` removidos do contrato e dos exemplos; query é recusada sem registro, e o segredo antigo impede a partida. `SHIFT_CHANNEL_MODE=real` termina em `CHANNEL_REAL_BLOCKED`.
+- Aceite: negativos HTTP de query/header estático, assinatura/corpo/tempo/tenant/provider incorretos e chave revogada em `src/__tests__/webhook-auth.test.ts`, com zero parse, admissão, journal ou chamada externa; assinatura válida como controle positivo; replay concorrente e após restart sem duplicar. [Recibo com SIGKILL sobre o bundle](../../../docs/04_audit/evidence/SEC-SHIFT-WEBHOOK-20261105/replay-receipt.json) de `scripts/webhook-replay-proof.mjs`.
+- Pendente: revisão do protocolo no fechamento do item; `infra-egress-proof.mjs` alterado e `NOT_RUN` por falta de acesso ao Docker; ingresso assinante, rede sem bypass e gate T4 antes de qualquer canal real, conforme o contrato. Núcleo/hosts genéricos não importam o produto. Gates e release próprios do consumidor.
+
 ## Autoridade documental — 17/10/2026
 
 Este arquivo continua sendo a única fonte de status dos dez cartões PISO. A

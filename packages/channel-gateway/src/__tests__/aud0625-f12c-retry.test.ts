@@ -11,6 +11,10 @@ import {
 } from '../effect-journal.ts'
 import { FileChannelEffectJournal } from '../effect-journal-file.ts'
 import { ChannelGateway } from '../gateway.ts'
+import {
+  realChannelGuard,
+  realComposition
+} from './fixtures/channel-composition.ts'
 
 // AUD0625 F12c / SPEC 0282: a 429 honours Retry-After and attempts have a
 // ceiling. The three target cases were `it.fails` in phase 1 and are plain
@@ -53,6 +57,7 @@ function world(kind: 'memory' | 'file', script: Script) {
     journal = new FileChannelEffectJournal({ directory, clock })
   }
   const adapter = new EvolutionChannelAdapter({
+    realCapabilityGuard: realChannelGuard,
     enabled: true,
     apiKey: 'secret',
     baseUrl: 'https://evolution.example.com',
@@ -65,6 +70,7 @@ function world(kind: 'memory' | 'file', script: Script) {
     }
   })
   const gateway = new ChannelGateway({
+    composition: realComposition,
     outboundAdapters: [adapter],
     effectJournal: journal,
     clock

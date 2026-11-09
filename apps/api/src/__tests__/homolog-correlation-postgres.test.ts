@@ -33,6 +33,12 @@ if (pgRequired && !pgEnabled) {
 const itWithPostgres = pgEnabled ? it : it.skip
 
 const tenantA = 'tenant_00000000-0000-4000-8000-000000000341'
+// SPEC 0317 G1: an approval needs a known author, distinct from whoever decides.
+const syntheticRequester = {
+  kind: 'human',
+  id: 'human.submitter.synthetic',
+  tenantId: tenantA
+} as const
 
 function runtimeInput() {
   return {
@@ -90,6 +96,7 @@ describe('durable correlation without PII (AUD19-009)', () => {
         )
         const accepted = await store.submit({
           tenantId: tenantA,
+          submittedBy: syntheticRequester,
           idempotencyKey: `correlation-${Date.now()}`,
           runtime: runtimeInput()
         })
@@ -114,6 +121,7 @@ describe('durable correlation without PII (AUD19-009)', () => {
           correlationId: 'correlation_submission_synthetic',
           operationKey: `operation.correlation.${Date.now()}`,
           executionRef: accepted.record.id,
+          requestedBy: syntheticRequester,
           singleUse: true,
           reason: 'correlation proof',
           proposalPayload: { synthetic: true }

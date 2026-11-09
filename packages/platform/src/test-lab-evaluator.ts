@@ -6,11 +6,8 @@ import {
   type TestLabSuiteResult
 } from './contracts.ts'
 import type { AgentId, AgentVersionId, TenantId } from './ids.ts'
-import {
-  runTestLab,
-  type ApprovedKnowledgeResolver,
-  type TestLabInput
-} from './test-lab.ts'
+import type { ApprovedKnowledgeResolver } from './knowledge-authority.ts'
+import { runTestLab, type TestLabInput } from './test-lab.ts'
 
 export async function evaluateTestLabCase(input: {
   store: ControlPlaneStore
@@ -28,9 +25,6 @@ export async function evaluateTestLabCase(input: {
     versionId: input.versionId,
     message: testCase.message,
     history: testCase.history,
-    ...(testCase.approvedKnowledge
-      ? { approvedKnowledge: testCase.approvedKnowledge }
-      : {}),
     ...(input.resolveApprovedKnowledge
       ? { resolveApprovedKnowledge: input.resolveApprovedKnowledge }
       : {})

@@ -577,12 +577,24 @@ export async function submitExecutionWithCase(
     classification.kind === 'core'
       ? { kind: 'core', conversationId, sessionId }
       : { kind: 'independent', conversationId, sessionId }
+  // SPEC 0317 G1: the author is the authenticated identity and nothing else;
+  // without one the record stays `unknown`, which authorizes no approval.
+  const attributed: ExecutionSubmission = identity
+    ? {
+        ...submission,
+        submittedBy: {
+          kind: 'human',
+          id: identity.operatorId,
+          tenantId
+        }
+      }
+    : submission
   const store = deps.operationalExecution
   if (
     deps.caseAuthority.kind === 'postgres' &&
     store instanceof PostgresOperationalExecutionStore
   ) {
-    return store.submitWith(submission, (client, record, created, now) =>
+    return store.submitWith(attributed, (client, record, created, now) =>
       applyExecutionCaseLinkInTransaction(
         client,
         tenantId,
@@ -593,7 +605,7 @@ export async function submitExecutionWithCase(
       )
     )
   }
-  const result = await store.submit(submission)
+  const result = await store.submit(attributed)
   await deps.caseAuthority.registerExecutionLink(
     tenantId,
     result.record.id,

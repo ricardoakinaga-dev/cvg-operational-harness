@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { InMemoryCapabilityApprovalAuthority } from '@cvg/platform'
+import {
+  composeSyntheticKnowledgeResolver,
+  InMemoryCapabilityApprovalAuthority
+} from '@cvg/platform'
 import { buildServer } from '../server.ts'
 import { createInMemoryOperatorSessionStore } from '../operator-session.ts'
 import { grantCase } from './case-authorization-fixtures.ts'
@@ -407,7 +410,7 @@ describe('server boundary envelopes', () => {
         }
       },
       capabilityApprovalAuthority: new InMemoryCapabilityApprovalAuthority(),
-      resolveApprovedKnowledge: () => null,
+      resolveApprovedKnowledge: composeSyntheticKnowledgeResolver(() => null),
       agentRuntime: { resolveAgentId: () => null }
     })
     const health = await app.inject({ method: 'GET', url: '/health' })

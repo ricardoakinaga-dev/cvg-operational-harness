@@ -77,7 +77,11 @@ async function submit(
   const accepted = await app.inject({
     method: 'POST',
     url: '/v1/executions',
-    headers: { 'x-tenant-id': tenantId },
+    headers: {
+      'x-tenant-id': tenantId,
+      'x-operator-id': 'submitter.phase3',
+      'x-operator-role': 'Operator'
+    },
     payload: { idempotencyKey: key, runtime: runtime(profile) }
   })
   if (accepted.statusCode !== 202) {
@@ -239,6 +243,8 @@ describe('P3-WORKER — iterative governed loop through the durable spine', () =
     const app = buildServer({
       operationalExecution: workerRuntime.store,
       operationalApprovalAuthority: workerRuntime.approvalAuthority,
+      // SPEC 0317 G1: only an authenticated author can be approved.
+      requireAuthenticatedMutations: true,
       ...(workerRuntime.stepStore
         ? { executionSteps: workerRuntime.stepStore }
         : {})

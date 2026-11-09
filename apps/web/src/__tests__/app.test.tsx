@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import {
   act,
   cleanup,
@@ -1126,6 +1127,12 @@ describe('web console', () => {
       expect(await screen.findByText('Sem despacho externo')).toBeTruthy()
       expect(await screen.findByText(/Dados reais bloqueados/)).toBeTruthy()
       expect(await screen.findByText('approval_decision')).toBeTruthy()
+      // SPEC 0317 G5: Admin reviews evidence but does not hold approval:create.
+      expect(
+        screen.queryByRole('button', {
+          name: 'Solicitar export controlado'
+        }) !== null
+      ).toBe(role === 'Supervisor')
       expect(
         await screen.findByText('corr_00000000-0000-4000-8000-000000000001')
       ).toBeTruthy()

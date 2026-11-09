@@ -4,7 +4,7 @@ import {
   isLoopbackHostname,
   withoutTrailingSlashes
 } from '@cvg/shared'
-import type { EgressDns } from '@cvg/shared'
+import type { EgressDns, RealCapabilityGuard } from '@cvg/shared'
 import {
   CanonicalEnvelopeSchema,
   canonicalIdempotencyKey,
@@ -26,9 +26,15 @@ import {
   raceSignal
 } from './bounded-body.ts'
 import { fetchWithResolvedAddress } from './ssrf-node.ts'
+import {
+  assertChannelGuardOpen,
+  markRealChannelAdapter
+} from '../real-composition.ts'
 
 export interface ChatwootAdapterOptions {
   enabled?: boolean
+  /** SPEC 0317 G4: required when enabled; issued by the composition. */
+  realCapabilityGuard?: RealCapabilityGuard
   baseUrl?: string
   apiKey?: string
   accountId?: string
@@ -90,13 +96,18 @@ export class ChatwootChannelAdapter
   readonly #dnsLookup: EgressDns['lookup'] | undefined
   readonly #boundFetch: typeof fetchWithResolvedAddress | undefined
 
+  readonly #guard: RealCapabilityGuard | undefined
+
   constructor(options: ChatwootAdapterOptions = {}) {
     this.enabled = options.enabled ?? false
     this.#clock = options.clock ?? (() => new Date())
     this.#maxResponseBytes =
       options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
     this.#timeoutMs = channelSendTimeoutMs(options.timeoutMs, 'Chatwoot')
+    this.#guard = options.realCapabilityGuard
     if (this.enabled) {
+      assertChannelGuardOpen(this.#guard)
+      markRealChannelAdapter(this)
       const baseUrl = withoutTrailingSlashes(options.baseUrl?.trim() ?? '')
       if (!baseUrl || !options.apiKey || !options.accountId) {
         throw new ChannelError(
@@ -206,6 +217,7 @@ export class ChatwootChannelAdapter
 
   async send(message: CanonicalOutboundMessage): Promise<OutboundResult> {
     this.#assertEnabled()
+    assertChannelGuardOpen(this.#guard)
     const endpoint = `${this.#baseUrl}/api/v1/accounts/${this.#accountId}/conversations/${message.conversationId}/messages`
     // AUD21-REM21-004 — validate every hop and bind the default Node socket
     // to the addresses returned by that same validation.

@@ -1,3 +1,4 @@
+import { KNOWLEDGE_BLOCK_REASONS } from './knowledge-authority.ts'
 import { z } from 'zod'
 import { DomainError, redactSensitiveText } from '@cvg/shared'
 import {
@@ -17,6 +18,7 @@ import {
 import {
   CONTROLLED_SAFE_OUTPUTS,
   enforceControlledOutput,
+  resolveEffectiveRisk,
   type ControlledOutputDecision,
   type ControlledOutputMode,
   type ControlledOutputReason,
@@ -147,7 +149,15 @@ const TraceSchema = z
           .max(200)
           .regex(/^controlled:\/\//)
           .optional(),
-        version: ShortTraceStringSchema.optional()
+        version: ShortTraceStringSchema.optional(),
+        reason: z.enum(KNOWLEDGE_BLOCK_REASONS).optional(),
+        provenance: z
+          .object({
+            recordId: ShortTraceStringSchema,
+            excerptSha256: z.string().regex(/^[0-9a-f]{64}$/)
+          })
+          .strip()
+          .optional()
       })
       .strip(),
     tools: z
@@ -246,6 +256,23 @@ const TraceSchema = z
   .strip()
 
 export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
+  return canonicalizeTrace(trace, 'write')
+}
+
+/**
+ * The same checks for a trace that is already stored. An output policy that
+ * got stricter after the write cannot make history unreadable, and it cannot
+ * show the text either: the row comes back with the controlled template. Any
+ * structural defect still throws, because that is not a policy change.
+ */
+export function sanitizePersistedTrace(trace: unknown): TestRunTrace {
+  return canonicalizeTrace(trace, 'read')
+}
+
+function canonicalizeTrace(
+  trace: unknown,
+  access: 'write' | 'read'
+): TestRunTrace {
   const parsed = TraceSchema.safeParse(trace)
   if (!parsed.success) throw invalidTrace()
 
@@ -290,17 +317,40 @@ export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
   const output = enforceControlledOutput({
     text: canonical.response.text,
     mode: canonical.response.mode,
-    riskLevel: canonical.risk?.level ?? 'low'
+    riskLevel: resolveEffectiveRisk(
+      canonical.risk?.level,
+      canonical.input.message
+    )
   })
-  if (output.decision === 'rewritten') throw invalidTrace()
+  if (output.decision === 'rewritten' && access === 'write') {
+    throw invalidTrace()
+  }
 
   const inputMessage = redactSensitiveText(canonical.input.message)
   if (inputMessage.length > TRACE_TEXT_MAX_CHARS) throw invalidTrace()
+
+  if (output.decision === 'rewritten') {
+    return {
+      ...canonical,
+      input: {
+        message: inputMessage,
+        historySize: canonical.input.historySize
+      },
+      response: { text: output.text, mode: output.mode },
+      outputPolicy: {
+        decision: output.decision,
+        reason: output.reason,
+        mode: output.mode,
+        redacted: output.redacted
+      }
+    } as TestRunTrace
+  }
 
   const outputPolicy = canonical.outputPolicy
     ? normalizeOutputPolicy(canonical.outputPolicy, output, canonical.response)
     : undefined
   if (
+    access === 'write' &&
     outputPolicy?.decision === 'rewritten' &&
     outputPolicy.mode === 'handoff' &&
     !canonical.handoff.requested
@@ -320,7 +370,8 @@ export function sanitizeTraceForPersistence(trace: unknown): TestRunTrace {
 }
 
 export function sanitizeTestSuiteRunTraces(
-  rawRun: unknown
+  rawRun: unknown,
+  sanitizeTrace: (trace: unknown) => TestRunTrace = sanitizeTraceForPersistence
 ): TestSuiteRunRecord {
   if (
     !isRecord(rawRun) ||
@@ -367,7 +418,7 @@ export function sanitizeTestSuiteRunTraces(
         caseId: rawResult.caseId.trim(),
         passed: rawResult.passed,
         failures: rawResult.failures.map((failure) => failure.trim()),
-        trace: sanitizeTraceForPersistence(rawResult.trace)
+        trace: sanitizeTrace(rawResult.trace)
       }
     })
     return {

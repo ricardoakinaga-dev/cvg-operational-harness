@@ -10,6 +10,8 @@ import type {
 } from './effect-journal.ts'
 import type {
   AuditEvent,
+  ExecutionPrincipal,
+  KnownExecutionPrincipal,
   RuntimeInput,
   RuntimeResult,
   TelemetryEvent
@@ -60,6 +62,12 @@ export interface ExecutionSubmission {
   readonly idempotencyKey: string
   /** Optional immutable binding for a capability-backed execution. */
   readonly capabilityFingerprint?: string
+  /**
+   * SPEC 0317 G1: the author, supplied only by the composition (the API takes
+   * it from the authenticated identity). The public parser refuses it, and it
+   * stays out of `request` and `requestHash`. Absent means `unknown`.
+   */
+  readonly submittedBy?: KnownExecutionPrincipal
   readonly runtime: RuntimeInput
 }
 
@@ -101,6 +109,8 @@ export interface ExecutionRecord {
   readonly requestHash: string
   readonly capabilityFingerprint?: string
   readonly request: ExecutionSubmission
+  /** SPEC 0317 G1: immutable; `unknown` on records older than the migration. */
+  readonly submittedBy: ExecutionPrincipal
   readonly state: ExecutionState
   readonly attempt: number
   readonly leaseOwner: string | null
@@ -231,6 +241,8 @@ export interface OperationalExecutionStore {
 }
 
 export interface InMemoryOperationalExecutionStoreOptions {
+  /** See {@link resolveSubmittedBy}: the only `system` principals accepted. */
+  readonly systemPrincipals?: readonly string[]
   readonly leaseMs?: number
   readonly retryDelayMs?: number
   readonly maxAttempts?: number
@@ -470,6 +482,57 @@ export function validateExecutionTransitionPayload(input: {
   }
 }
 
+/**
+ * SPEC 0317 G1: the principal to persist. A `system` principal counts only when
+ * the composition declared its id; anything malformed, or from another tenant,
+ * is refused rather than stored as `unknown`.
+ */
+export function resolveSubmittedBy(
+  raw: unknown,
+  tenantId: string,
+  systemPrincipals: readonly string[] = []
+): ExecutionPrincipal {
+  if (raw === undefined) return { kind: 'unknown' }
+  const principal = raw as Partial<KnownExecutionPrincipal> | null
+  if (principal?.kind !== 'human' && principal?.kind !== 'system') {
+    throw new OperationalExecutionError(
+      'validation_failed',
+      'submittedBy must be a human or system principal'
+    )
+  }
+  const id = assertText(principal.id, 'submittedBy.id', 120)
+  if (
+    assertText(principal.tenantId, 'submittedBy.tenantId', 120) !== tenantId
+  ) {
+    throw new OperationalExecutionError(
+      'validation_failed',
+      'submittedBy must belong to the execution tenant'
+    )
+  }
+  if (principal.kind === 'system' && !systemPrincipals.includes(id)) {
+    throw new OperationalExecutionError(
+      'validation_failed',
+      'System principal is not declared by this composition'
+    )
+  }
+  return { kind: principal.kind, id, tenantId }
+}
+
+/** Two principals are the same author only when every field matches. */
+export function sameExecutionPrincipal(
+  left: ExecutionPrincipal,
+  right: ExecutionPrincipal
+): boolean {
+  if (left.kind === 'unknown' || right.kind === 'unknown') {
+    return left.kind === right.kind
+  }
+  return (
+    left.kind === right.kind &&
+    left.id === right.id &&
+    left.tenantId === right.tenantId
+  )
+}
+
 function validateSubmission(input: ExecutionSubmission): ExecutionSubmission {
   const tenantId = assertText(input?.tenantId, 'tenantId', 120)
   const idempotencyKey = assertText(
@@ -484,6 +547,12 @@ function validateSubmission(input: ExecutionSubmission): ExecutionSubmission {
     )
   }
   const runtime = input.runtime
+  if ('submittedBy' in runtime) {
+    throw new OperationalExecutionError(
+      'validation_failed',
+      'submittedBy is set by the authenticated composition'
+    )
+  }
   const capabilityFingerprint =
     input.capabilityFingerprint !== undefined
       ? assertText(input.capabilityFingerprint, 'capabilityFingerprint', 160)
@@ -539,6 +608,13 @@ export function parseExecutionSubmission(
     )
   }
   const body = raw as Record<string, unknown>
+  // SPEC 0317 G1: authorship comes from the authenticated identity alone.
+  if ('submittedBy' in body) {
+    throw new OperationalExecutionError(
+      'validation_failed',
+      'submittedBy is set by the authenticated composition'
+    )
+  }
   const bodyTenant = body.tenantId
   if (bodyTenant !== undefined && typeof bodyTenant !== 'string') {
     throw new OperationalExecutionError(
@@ -648,8 +724,10 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
   private readonly maxAttempts: number
   private readonly maxFailureMessageLength: number
   private readonly clock: () => Date
+  private readonly systemPrincipals: readonly string[]
 
   public constructor(options: InMemoryOperationalExecutionStoreOptions = {}) {
+    this.systemPrincipals = options.systemPrincipals ?? []
     this.leaseMs = positiveInt(options.leaseMs ?? 30_000, 'leaseMs')
     this.retryDelayMs = positiveInt(
       options.retryDelayMs ?? 1_000,
@@ -670,7 +748,14 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
     rawInput: ExecutionSubmission,
     rawNow?: Date
   ): Promise<SubmitResult> {
-    const input = validateSubmission(rawInput)
+    const { submittedBy: rawPrincipal, ...submission } =
+      rawInput ?? ({} as ExecutionSubmission)
+    const input = validateSubmission(submission)
+    const submittedBy = resolveSubmittedBy(
+      rawPrincipal,
+      input.tenantId,
+      this.systemPrincipals
+    )
     const now = assertDate(rawNow ?? this.clock(), 'now')
     const requestHash = computeExecutionRequestHash(input)
     const idempotencyIndex = this.idempotencyKey(
@@ -688,7 +773,10 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
         )
       }
       /* v8 ignore stop */
-      if (existing.requestHash !== requestHash) {
+      if (
+        existing.requestHash !== requestHash ||
+        !sameExecutionPrincipal(existing.submittedBy, submittedBy)
+      ) {
         throw new OperationalExecutionError(
           'conflict',
           'Idempotency key is already bound to a different request'
@@ -703,6 +791,7 @@ export class InMemoryOperationalExecutionStore implements OperationalExecutionSt
       tenantId: input.tenantId,
       idempotencyKey: input.idempotencyKey,
       request: input,
+      submittedBy,
       requestHash,
       ...(input.capabilityFingerprint
         ? { capabilityFingerprint: input.capabilityFingerprint }
@@ -1416,6 +1505,7 @@ export class OperationalExecutionWorker {
       result = await harness.execute({
         ...running.request.runtime,
         executionId: running.id,
+        submittedBy: running.submittedBy,
         ...(running.capabilityFingerprint
           ? { capabilityFingerprint: running.capabilityFingerprint }
           : {}),

@@ -21,7 +21,7 @@
 // Optional `--name-prefix <p>` (default `cvg-shift-aud0621`) and
 // `--label <key=value>` name and label every container, network and volume.
 import { spawnSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 
 const args = process.argv.slice(2)
 const selfTest = args.includes('--self-test-non-internal')
@@ -54,7 +54,9 @@ const names = {
   product: `${run}-product`,
   volume: `${run}-data`
 }
-const SECRET = 'segredo-sintetico-da-prova-de-egress'
+const WEBHOOK_TENANT = 'synthetic-proof'
+const WEBHOOK_KEY_ID = 'proof-key-1'
+const WEBHOOK_KEY = randomBytes(32)
 const ANA = '5511900000001'
 
 function docker(args, options = {}) {
@@ -244,7 +246,20 @@ try {
     '-e',
     `SHIFT_MEMBERS=${ANA}=Plantonista Sintetica;5511900000009=Gestor Sintetico*`,
     '-e',
-    `SHIFT_WEBHOOK_SECRET=${SECRET}`,
+    'SHIFT_CHANNEL_MODE=synthetic',
+    '-e',
+    `SHIFT_WEBHOOK_TENANT=${WEBHOOK_TENANT}`,
+    '-e',
+    `SHIFT_WEBHOOK_KEYS=${JSON.stringify([
+      {
+        provider: 'waha',
+        tenant: WEBHOOK_TENANT,
+        keyId: WEBHOOK_KEY_ID,
+        secret: WEBHOOK_KEY.toString('base64url'),
+        notBefore: '2020-01-01T00:00:00Z',
+        notAfter: '2100-01-01T00:00:00Z'
+      }
+    ])}`,
     '-e',
     'WAHA_URL=http://waha:8080',
     '-e',
@@ -343,9 +358,34 @@ try {
   // The functional path still works inside the backend network: a webhook
   // from the channel stand-in gets a reply through the allowed receiver.
   const before = count(names.allowed)
+  const webhookBody = JSON.stringify({
+    event: 'message',
+    payload: {
+      id: 'egress-h1',
+      from: `${ANA}@c.us`,
+      fromMe: false,
+      body: 'ajuda'
+    }
+  })
+  const timestamp = String(Math.floor(Date.now() / 1000))
+  const deliveryId = 'proof-egress-h1'
+  const signature = createHmac('sha256', WEBHOOK_KEY)
+    .update(
+      `cvg-shift-webhook-v1\nwaha\n${WEBHOOK_TENANT}\n${WEBHOOK_KEY_ID}\n${timestamp}\n${deliveryId}\n`
+    )
+    .update(webhookBody)
+    .digest('hex')
+  const webhookHeaders = {
+    'content-type': 'application/json',
+    'x-cvg-webhook-tenant': WEBHOOK_TENANT,
+    'x-cvg-webhook-key-id': WEBHOOK_KEY_ID,
+    'x-cvg-webhook-timestamp': timestamp,
+    'x-cvg-webhook-delivery-id': deliveryId,
+    'x-cvg-webhook-signature': `v1=${signature}`
+  }
   const webhook = nodeIn(
     names.allowed,
-    `fetch('http://shift:3400/webhooks/waha', { method: 'POST', headers: { 'content-type': 'application/json', 'x-cvg-webhook-secret': ${JSON.stringify(SECRET)} }, body: JSON.stringify({ event: 'message', payload: { id: 'egress-h1', from: '${ANA}@c.us', fromMe: false, body: 'ajuda' } }) }).then(async (r) => console.log(JSON.stringify({ status: r.status, body: await r.json() }))).catch((e) => console.log(JSON.stringify({ error: e.name })))`
+    `fetch('http://shift:3400/webhooks/waha', { method: 'POST', headers: ${JSON.stringify(webhookHeaders)}, body: ${JSON.stringify(webhookBody)} }).then(async (r) => console.log(JSON.stringify({ status: r.status, body: await r.json() }))).catch((e) => console.log(JSON.stringify({ error: e.name })))`
   )
   check(
     'webhook accepted over the backend network',
